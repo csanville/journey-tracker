@@ -9,7 +9,8 @@
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "build:win": "./tools/build-win.sh"
   },
   "dependencies": {
     "dexie": "^4.4.4",
