@@ -1,57 +1,57 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { send } from '../lib/client'
 import type { StatusReport } from '../lib/messages'
 import { requestPersistence } from '../lib/persistence'
-
-type Probe =
-  | { phase: 'checking' }
-  | { phase: 'ok'; status: StatusReport }
-  | { phase: 'failed'; error: string }
+import type { Posting } from '../lib/types'
+import { PostingForm } from './PostingForm'
+import { RecentPostings } from './RecentPostings'
 
 /**
- * Still the diagnostic panel, not the product UI — the form arrives in phase 3.
+ * The panel proper: file a posting, see what has been filed.
  *
- * It talks to the service worker over the real message layer rather than
- * touching storage directly, so opening the panel exercises the whole path the
- * extension actually depends on: worker wakes, database opens, migrations run,
- * request round-trips.
+ * Everything still goes through the message layer rather than touching storage
+ * directly, so the worker stays the only writer (decision 4). The diagnostics
+ * that used to be the whole panel are folded away at the bottom — they are worth
+ * keeping, since a storage or migration problem is otherwise invisible, but they
+ * are not what this is for any more.
  */
 export function App() {
-  const [probe, setProbe] = useState<Probe>({ phase: 'checking' })
+  const [status, setStatus] = useState<StatusReport | null>(null)
+  const [postings, setPostings] = useState<Posting[]>([])
+  const [failure, setFailure] = useState<string | null>(null)
   const version = chrome.runtime.getManifest().version
 
-  useEffect(() => {
-    let cancelled = false
-
-    void (async () => {
-      try {
-        const status = await send('status', {})
-        if (!cancelled) setProbe({ phase: 'ok', status })
-
-        // `persist()` is exposed to Window contexts only, so this panel is the
-        // one place in the extension that can ask — the worker can merely read
-        // the answer. Only worth asking when `unlimitedStorage` did not already
-        // cover us, since either defence alone is sufficient.
-        if (!status.evictionSafe) {
-          await requestPersistence()
-          const rechecked = await send('storage/reassess', {})
-          if (!cancelled) setProbe({ phase: 'ok', status: rechecked })
-        }
-      } catch (error) {
-        console.error('[JourneyTracker] status request failed', error)
-        if (!cancelled) {
-          setProbe({
-            phase: 'failed',
-            error: error instanceof Error ? error.message : String(error),
-          })
-        }
-      }
-    })()
-
-    return () => {
-      cancelled = true
+  const refresh = useCallback(async (): Promise<StatusReport | null> => {
+    try {
+      const [nextStatus, nextPostings] = await Promise.all([
+        send('status', {}),
+        send('posting/list', {}),
+      ])
+      setStatus(nextStatus)
+      setPostings(nextPostings)
+      setFailure(null)
+      return nextStatus
+    } catch (error) {
+      console.error('[JourneyTracker] could not reach the service worker', error)
+      setFailure(error instanceof Error ? error.message : String(error))
+      return null
     }
   }, [])
+
+  useEffect(() => {
+    void (async () => {
+      const first = await refresh()
+
+      // `persist()` is exposed to Window contexts only, so this panel is the
+      // one place in the extension that can ask — the worker can merely read
+      // the answer. Only worth asking when `unlimitedStorage` did not already
+      // cover us, since either defence alone is sufficient.
+      if (first && !first.evictionSafe) {
+        await requestPersistence()
+        setStatus(await send('storage/reassess', {}))
+      }
+    })()
+  }, [refresh])
 
   return (
     <div className="panel">
@@ -62,69 +62,67 @@ export function App() {
         <span className="version">v{version}</span>
       </header>
 
-      <div className="stack">
-        <p className="lede">
-          The application form lands in phase 3. This panel checks that the
-          service worker, the database and the message layer between them are
-          all working.
+      {failure && (
+        <p className="notice notice--bad" role="alert">
+          Could not reach the extension's service worker — {failure}
         </p>
+      )}
 
-        <dl className="probes">
-          <Row label="Service worker" state={probe.phase === 'ok' ? 'ok' : probe.phase}>
-            {probe.phase === 'checking' && 'checking…'}
-            {probe.phase === 'ok' && 'responding'}
-            {probe.phase === 'failed' && probe.error}
-          </Row>
+      {status && !status.evictionSafe && (
+        <p className="notice" role="status">
+          Chrome may evict this extension's data if the disk runs low. Exporting a
+          backup will matter more than usual until that changes.
+        </p>
+      )}
 
-          {probe.phase === 'ok' && (
-            <>
-              <Row label="Schema" state="ok">
-                v{probe.status.schemaVersion}
-                {probe.status.dataVersion !== probe.status.schemaVersion &&
-                  ` · data at v${probe.status.dataVersion}`}
-              </Row>
+      <PostingForm onSaved={() => void refresh()} />
 
-              <Row label="Storage" state={probe.status.evictionSafe ? 'ok' : 'warn'}>
-                {probe.status.evictionSafe
-                  ? probe.status.storageUnlimited
-                    ? 'protected · unlimitedStorage'
-                    : 'protected · persisted'
-                  : 'evictable — records may be cleared'}
-              </Row>
-
-              <Row label="Postings" state="ok">
-                {probe.status.postingCount}
-              </Row>
-            </>
+      <section className="section">
+        <h2 className="section__head">
+          Recent
+          {status && status.postingCount > 0 && (
+            <span className="section__count">{status.postingCount}</span>
           )}
+        </h2>
+        <RecentPostings postings={postings} />
+      </section>
+
+      <details className="diagnostics">
+        <summary>Diagnostics</summary>
+        <dl className="probes">
+          <Row label="Service worker">{status ? 'responding' : 'no answer'}</Row>
+          <Row label="Schema">
+            {status
+              ? `v${status.schemaVersion}${
+                  status.dataVersion === status.schemaVersion
+                    ? ''
+                    : ` · data at v${status.dataVersion}`
+                }`
+              : '—'}
+          </Row>
+          <Row label="Storage">
+            {!status
+              ? '—'
+              : status.evictionSafe
+                ? status.storageUnlimited
+                  ? 'protected · unlimitedStorage'
+                  : 'protected · persisted'
+                : 'evictable'}
+          </Row>
+          <Row label="Postings">{status ? String(status.postingCount) : '—'}</Row>
         </dl>
+      </details>
 
-        {probe.phase === 'ok' && !probe.status.evictionSafe && (
-          <p className="notice">
-            Chrome may evict this extension's data if the disk runs low. Exporting
-            a backup will matter more than usual until that changes.
-          </p>
-        )}
-      </div>
-
-      <footer className="panel__foot">Phase 1 · schema and storage</footer>
+      <footer className="panel__foot">Phase 3 · the form</footer>
     </div>
   )
 }
 
-function Row({
-  label,
-  state,
-  children,
-}: {
-  label: string
-  state: 'checking' | 'ok' | 'warn' | 'failed'
-  children: React.ReactNode
-}) {
+function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="probe">
       <dt>{label}</dt>
-      <dd className={`probe__value probe__value--${state}`}>{children}</dd>
+      <dd className="probe__value">{children}</dd>
     </div>
   )
 }

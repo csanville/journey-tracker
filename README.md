@@ -8,11 +8,10 @@ There is no server and no account. Nothing is transmitted anywhere.
 
 ## Status
 
-**Phase 2 — normalization and join keys.** The storage layer is in place and
-every record now derives its own dedupe keys on the way in: normalized company,
-canonical URL, and the ATS requisition id read out of Greenhouse, Lever, Ashby
-and Workday URLs. The panel is still a diagnostic readout rather than the
-product UI — the application form arrives in phase 3.
+**Phase 3 — the form.** The side panel files a job application by hand: a full
+form with dirty tracking, a duplicate check before saving, and a save that clears
+the form for the next one. Records carry the join keys derived in phase 2.
+Auto-filling from the page you are looking at arrives in phases 4 and 5.
 See `docs/ROADMAP.md` for the phase plan and `docs/DECISIONS.md` for the
 architecture decisions behind it.
 
