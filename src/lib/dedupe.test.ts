@@ -87,7 +87,7 @@ describe('findDuplicate', () => {
       }),
     )
 
-    expect(found?.id).toBe('a')
+    expect(found?.posting.id).toBe('a')
   })
 
   it('matches across routes that never converge on a URL', async () => {
@@ -109,7 +109,7 @@ describe('findDuplicate', () => {
       }),
     )
 
-    expect(found?.id).toBe('a')
+    expect(found?.posting.id).toBe('a')
   })
 
   it('matches when the board reworded its own title', async () => {
@@ -135,7 +135,7 @@ describe('findDuplicate', () => {
     )
 
     // Title is not in the key precisely so this still matches.
-    expect(found?.id).toBe('a')
+    expect(found?.posting.id).toBe('a')
   })
 
   it('does not report a record as its own duplicate', async () => {
@@ -155,15 +155,133 @@ describe('findDuplicate', () => {
     // Reachable by design: this reports duplicates without merging them, so the
     // form may well keep both. Taking the first index hit and discarding it for
     // being the record itself made `findDuplicate(a)` claim `a` was unique.
-    expect((await findDuplicate(db, posting({ id: 'a', url })))?.id).toBe('b')
-    expect((await findDuplicate(db, posting({ id: 'b', url })))?.id).toBe('a')
+    expect((await findDuplicate(db, posting({ id: 'a', url })))?.posting.id).toBe('b')
+    expect((await findDuplicate(db, posting({ id: 'b', url })))?.posting.id).toBe('a')
   })
 
   it('returns null when there is nothing to match', async () => {
     const db = await freshDb()
-    await upsertPosting(db, posting({ id: 'a', url: 'https://acme.com/jobs/1' }))
+    await upsertPosting(
+      db,
+      posting({ id: 'a', company: 'Acme', jobTitle: 'Engineer', url: 'https://acme.com/jobs/1' }),
+    )
 
-    expect(await findDuplicate(db, posting({ id: 'b', url: 'https://other.com/jobs/9' }))).toBeNull()
+    const found = await findDuplicate(
+      db,
+      posting({ id: 'b', company: 'Globex', jobTitle: 'Designer', url: 'https://other.com/9' }),
+    )
+
+    expect(found).toBeNull()
+  })
+})
+
+describe('findDuplicate on company and title', () => {
+  it('catches the same role entered twice by hand, with no URL or requisition', async () => {
+    const db = await freshDb()
+    // The case that started this: a posting filed in detail, then filed again
+    // later without realising. Neither has a URL or a requisition, so the two
+    // identity keys have nothing to work with.
+    await upsertPosting(
+      db,
+      posting({
+        id: 'a',
+        company: 'Roadrunner',
+        jobTitle: 'Staff Engineer',
+        url: '',
+        notes: 'lots of detail',
+      }),
+    )
+
+    const found = await findDuplicate(
+      db,
+      posting({ id: 'b', company: 'Roadrunner', jobTitle: 'Staff Engineer', url: '' }),
+    )
+
+    expect(found?.posting.id).toBe('a')
+    // Reported as a resemblance, so the UI can ask rather than assert.
+    expect(found?.matchedOn).toBe('title')
+  })
+
+  it('sees through case and punctuation in the title', async () => {
+    const db = await freshDb()
+    await upsertPosting(
+      db,
+      posting({ id: 'a', company: 'Roadrunner', jobTitle: 'Senior Software Engineer', url: '' }),
+    )
+
+    const found = await findDuplicate(
+      db,
+      posting({ id: 'b', company: 'Roadrunner', jobTitle: '  senior software  engineer ', url: '' }),
+    )
+
+    expect(found?.posting.id).toBe('a')
+  })
+
+  it('reports the strongest key that matched, not the weakest', async () => {
+    const db = await freshDb()
+    const url = 'https://boards.greenhouse.io/roadrunner/jobs/4012345'
+    await upsertPosting(db, posting({ id: 'a', company: 'Roadrunner', url }))
+
+    // Same URL, same company, same title — all three keys would match.
+    expect((await findDuplicate(db, posting({ id: 'b', company: 'Roadrunner', url })))?.matchedOn)
+      .toBe('url')
+  })
+
+  it('does not fire when two known requisitions differ', async () => {
+    const db = await freshDb()
+    // A large employer posting one role for two teams. The requisitions are the
+    // ATS's own identities and they disagree, which settles it whatever the
+    // title says.
+    await upsertPosting(
+      db,
+      posting({
+        id: 'a',
+        company: 'Roadrunner',
+        jobTitle: 'Software Engineer',
+        url: 'https://boards.greenhouse.io/roadrunner/jobs/4012345',
+      }),
+    )
+
+    const found = await findDuplicate(
+      db,
+      posting({
+        id: 'b',
+        company: 'Roadrunner',
+        jobTitle: 'Software Engineer',
+        url: 'https://boards.greenhouse.io/roadrunner/jobs/4012346',
+      }),
+    )
+
+    expect(found).toBeNull()
+  })
+
+  it('does not fire on the same title at a different employer', async () => {
+    const db = await freshDb()
+    await upsertPosting(
+      db,
+      posting({ id: 'a', company: 'Roadrunner', jobTitle: 'Staff Engineer', url: '' }),
+    )
+
+    const found = await findDuplicate(
+      db,
+      posting({ id: 'b', company: 'Globex', jobTitle: 'Staff Engineer', url: '' }),
+    )
+
+    expect(found).toBeNull()
+  })
+
+  it('does not fire when the title is unknown', async () => {
+    const db = await freshDb()
+    await upsertPosting(db, posting({ id: 'a', company: 'Roadrunner', jobTitle: '', url: '' }))
+
+    const found = await findDuplicate(
+      db,
+      posting({ id: 'b', company: 'Roadrunner', jobTitle: '', url: '' }),
+    )
+
+    // An empty title would otherwise match every untitled posting at the
+    // employer, the same way an empty company or URL would.
+    expect(found).toBeNull()
   })
 })
 
@@ -208,18 +326,28 @@ describe('findDuplicate does not merge', () => {
     expect(found).toBeNull()
   })
 
-  it('two postings at one company when neither has a requisition id', async () => {
+  it('two different roles at one company when neither has a requisition id', async () => {
     const db = await freshDb()
-    // The dangerous case. With no requisition, the fallback key would be
-    // company alone, and every posting at this employer would collapse.
+    // The dangerous case. With no requisition and no URL match, a key of company
+    // alone would collapse every posting at this employer.
     await upsertPosting(
       db,
-      posting({ id: 'a', company: 'Acme', url: 'https://acme.com/careers/engineer' }),
+      posting({
+        id: 'a',
+        company: 'Acme',
+        jobTitle: 'Staff Engineer',
+        url: 'https://acme.com/careers/engineer',
+      }),
     )
 
     const found = await findDuplicate(
       db,
-      posting({ id: 'b', company: 'Acme', url: 'https://acme.com/careers/designer' }),
+      posting({
+        id: 'b',
+        company: 'Acme',
+        jobTitle: 'Product Designer',
+        url: 'https://acme.com/careers/designer',
+      }),
     )
 
     expect(found).toBeNull()

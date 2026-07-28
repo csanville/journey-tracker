@@ -290,6 +290,24 @@ Schema version 2 carries the backfill: version 1 stored these fields as the
 caller sent them, and a change in the *meaning* of a persisted field is the kind
 that ships silently (decision 9).
 
+**Amended — a third key, because reporting is not merging.** The two identity
+keys answer "is this the same record". A user asked why two hand-entered
+applications to one employer for one role sailed past each other, and the answer
+exposed a flaw in how the asymmetry above had been applied: it is an argument
+about *silent collapse*, and `findDuplicate` collapses nothing. It shows a
+prompt. A false positive there costs one dismissible click.
+
+So there is now a third key — normalized company plus normalized title — used
+only for the prompt, and the match carries which key found it so the UI can say
+"you already saved this one" for an identity match and "this looks like one you
+already saved" for a resemblance. It is suppressed when both records carry
+requisition ids that differ, since the ATS's own identities settle the question
+whatever the title says.
+
+The general lesson: **conservatism has to be calibrated to the consequence.** The
+same rule that is right for a key that merges records is too strict for a key
+that asks a question.
+
 **Revisit when.** The external tracker settles into a real schema worth
 integrating with, or is retired. The keys remain useful for in-extension dedupe
 regardless.

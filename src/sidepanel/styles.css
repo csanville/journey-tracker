@@ -413,3 +413,8 @@ body {
   font-size: 0.7rem;
   color: var(--ink-faint);
 }
+
+.notice__detail {
+  color: var(--ink-faint);
+  font-size: 0.75rem;
+}

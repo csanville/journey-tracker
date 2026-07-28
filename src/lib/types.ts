@@ -98,6 +98,21 @@ export type PostingInput = Omit<
   canonicalUrl?: string
 }
 
+/**
+ * Which key matched, and therefore how much to trust it.
+ *
+ * `url` and `requisition` are identity: the same posting, definitively. `title`
+ * is a resemblance — same employer, same words in the title — which is often the
+ * same posting and sometimes two different teams hiring for the same role. The
+ * UI words itself differently for each, and none of them merges anything.
+ */
+export type DuplicateConfidence = 'url' | 'requisition' | 'title'
+
+export interface DuplicateMatch {
+  posting: Posting
+  matchedOn: DuplicateConfidence
+}
+
 /** A `PostingInput` after the repository has filled in the derived join keys. */
 export type NormalizedPostingInput = PostingInput & {
   companyNormalized: string

@@ -1,7 +1,7 @@
 import { useEffect, useId, useMemo, useState } from 'react'
 import { send } from '../lib/client'
 import { newId } from '../lib/ids'
-import type { Posting } from '../lib/types'
+import type { DuplicateMatch } from '../lib/types'
 import {
   EMPTY_DRAFT,
   draftErrors,
@@ -23,8 +23,8 @@ const WIPE_MS = 380
 type Phase =
   | { name: 'editing' }
   | { name: 'checking' }
-  /** A record for this posting already exists; saving would be a second copy. */
-  | { name: 'duplicate'; existing: Posting }
+  /** Something already stored looks like this posting; saving would add a copy. */
+  | { name: 'duplicate'; match: DuplicateMatch }
   | { name: 'saving' }
   | { name: 'wiping' }
   | { name: 'failed'; message: string }
@@ -86,9 +86,9 @@ export function PostingForm({ onSaved }: { onSaved: () => void }) {
     try {
       if (!force) {
         setPhase({ name: 'checking' })
-        const existing = await send('posting/find-duplicate', { posting })
-        if (existing) {
-          setPhase({ name: 'duplicate', existing })
+        const match = await send('posting/find-duplicate', { posting })
+        if (match) {
+          setPhase({ name: 'duplicate', match })
           return
         }
       }
@@ -206,20 +206,11 @@ export function PostingForm({ onSaved }: { onSaved: () => void }) {
       <Textarea label="Notes" value={draft.notes} onChange={(v) => field('notes', v)} />
 
       {phase.name === 'duplicate' && (
-        <div className="notice" role="alert">
-          <p className="notice__title">You already saved this one.</p>
-          <p>
-            {phase.existing.company} — {phase.existing.jobTitle}
-          </p>
-          <div className="notice__actions">
-            <button type="button" className="button button--quiet" onClick={reset}>
-              Discard this
-            </button>
-            <button type="button" className="button" onClick={() => void save(true)}>
-              Save anyway
-            </button>
-          </div>
-        </div>
+        <DuplicateNotice
+          match={phase.match}
+          onDiscard={reset}
+          onSaveAnyway={() => void save(true)}
+        />
       )}
 
       {phase.name === 'failed' && (
@@ -243,6 +234,61 @@ export function PostingForm({ onSaved }: { onSaved: () => void }) {
       </div>
     </form>
   )
+}
+
+/**
+ * Says which key matched rather than asserting a duplicate flatly.
+ *
+ * A URL or requisition match is identity and can be stated as fact. A title
+ * match is a resemblance — the same employer hiring for the same role twice is
+ * ordinary — so it asks instead, and shows enough of the stored record that the
+ * question can be answered by looking rather than by guessing.
+ */
+function DuplicateNotice({
+  match,
+  onDiscard,
+  onSaveAnyway,
+}: {
+  match: DuplicateMatch
+  onDiscard: () => void
+  onSaveAnyway: () => void
+}) {
+  const certain = match.matchedOn !== 'title'
+  const { posting } = match
+
+  return (
+    <div className="notice" role="alert">
+      <p className="notice__title">
+        {certain ? 'You already saved this one.' : 'This looks like one you already saved.'}
+      </p>
+      <p>
+        {posting.company} — {posting.jobTitle}
+      </p>
+      <p className="notice__detail">
+        {posting.state === 'applied' && posting.appliedAt
+          ? `Applied ${new Date(posting.appliedAt).toLocaleDateString()}`
+          : `Saved ${new Date(posting.createdAt).toLocaleDateString()}`}
+        {posting.canonicalUrl && ` · ${hostOf(posting.canonicalUrl)}`}
+        {match.matchedOn === 'requisition' && posting.atsReqId && ` · req ${posting.atsReqId}`}
+      </p>
+      <div className="notice__actions">
+        <button type="button" className="button button--quiet" onClick={onDiscard}>
+          Discard this
+        </button>
+        <button type="button" className="button" onClick={onSaveAnyway}>
+          {certain ? 'Save anyway' : 'Save as separate'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).hostname
+  } catch {
+    return url
+  }
 }
 
 function Text({
