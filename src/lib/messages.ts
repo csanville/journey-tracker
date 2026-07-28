@@ -19,6 +19,12 @@ export interface RequestMap {
   'snapshot/put': { payload: { snapshot: Snapshot }; result: { postingId: string } }
   'snapshot/get': { payload: { postingId: string }; result: Snapshot | null }
   'status': { payload: NoPayload; result: StatusReport }
+  /**
+   * Re-reads storage protection and records the answer. The panel sends this
+   * after calling `persist()`, which only a Window context can do — the worker
+   * would otherwise keep reporting the state it read before the request.
+   */
+  'storage/reassess': { payload: NoPayload; result: StatusReport }
 }
 
 export type RequestKind = keyof RequestMap

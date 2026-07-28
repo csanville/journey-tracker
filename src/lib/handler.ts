@@ -1,5 +1,6 @@
 import type { JourneyTrackerDb } from './db'
 import type { Request, RequestKind, Response, Result, StatusReport } from './messages'
+import { recordStorageProtection } from './persistence'
 import * as repo from './repository'
 import { readSettings } from './settings'
 import { SCHEMA_VERSION } from './types'
@@ -42,6 +43,9 @@ async function dispatch(db: JourneyTrackerDb, request: Request): Promise<unknown
     case 'snapshot/get':
       return repo.getSnapshot(db, request.postingId)
     case 'status':
+      return status(db)
+    case 'storage/reassess':
+      await recordStorageProtection()
       return status(db)
     default: {
       // Exhaustiveness: adding a request kind without a case fails the build.

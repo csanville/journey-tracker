@@ -63,6 +63,22 @@ export async function runPendingMigrations(
   const { migrations = MIGRATIONS, targetVersion = SCHEMA_VERSION } = options
   const { dataVersion } = await readSettings()
 
+  // Data written by a newer build than this one. Refuse rather than carry on:
+  // the version stamp is the only record of what has actually been applied, and
+  // the paths below would overwrite it with a lower number while leaving the
+  // records in their newer shape. Everything after that is silent corruption —
+  // the old build writes its own `schemaVersion` over newer records, and
+  // returning to the newer build replays migrations across a mix of both.
+  //
+  // Not hypothetical: `Load unpacked` is the whole development workflow here,
+  // so loading a previous build is an ordinary thing to do.
+  if (dataVersion > targetVersion) {
+    throw new Error(
+      `stored data is at version ${dataVersion} but this build only understands ` +
+        `${targetVersion}. Refusing to open it — load the newer build instead.`,
+    )
+  }
+
   // A zero version with an empty database is a fresh install: stamp it as
   // current rather than replaying history against nothing. A zero version with
   // records means the settings were lost, and replaying is the safe answer —

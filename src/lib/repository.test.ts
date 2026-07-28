@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { aPosting, freshDb } from '../test/factories'
 import {
   countPostings,
@@ -10,6 +10,10 @@ import {
   upsertPosting,
 } from './repository'
 import { SCHEMA_VERSION } from './types'
+
+afterEach(() => {
+  vi.useRealTimers()
+})
 
 describe('postings', () => {
   it('round-trips a record through storage unchanged', async () => {
@@ -34,15 +38,21 @@ describe('postings', () => {
 
   it('lists newest first', async () => {
     const db = await freshDb()
+    // Two writes inside one millisecond tie on `updatedAt`, which leaves the
+    // order undefined and the assertion meaningless. Hold the clock still and
+    // step it deliberately instead. Only `Date` is faked — faking timers
+    // outright would stall the IndexedDB event loop these writes run on.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(1_000)
     const older = await upsertPosting(db, aPosting({ jobTitle: 'Older' }))
+    vi.setSystemTime(2_000)
     const newer = await upsertPosting(db, aPosting({ jobTitle: 'Newer' }))
-    // The clock can tie inside a single millisecond; force the ordering that
-    // the assertion is actually about.
-    await upsertPosting(db, { ...aPosting({ id: newer.id }), jobTitle: 'Newer' })
 
     const listed = await listPostings(db)
+
     expect(listed).toHaveLength(2)
-    expect(listed.map((p) => p.id)).toContain(older.id)
+    expect(listed[0]?.id).toBe(newer.id)
+    expect(listed[1]?.id).toBe(older.id)
   })
 
   describe('idempotency', () => {

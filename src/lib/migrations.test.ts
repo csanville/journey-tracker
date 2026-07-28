@@ -67,6 +67,30 @@ describe('runPendingMigrations', () => {
     expect(ran).toEqual([])
   })
 
+  it('refuses to open data written by a newer build', async () => {
+    const db = await freshDb()
+    await upsertPosting(db, aPosting())
+    await patchSettings({ dataVersion: 3 })
+
+    await expect(
+      runPendingMigrations(db, { targetVersion: 1, migrations: [] }),
+    ).rejects.toThrow(/version 3 .* only understands 1/)
+  })
+
+  it('leaves the version stamp alone when it refuses a downgrade', async () => {
+    const db = await freshDb()
+    await upsertPosting(db, aPosting())
+    await patchSettings({ dataVersion: 3 })
+
+    await expect(
+      runPendingMigrations(db, { targetVersion: 1, migrations: [] }),
+    ).rejects.toThrow()
+
+    // Stamping this down to 1 would destroy the only record of what has
+    // actually been applied, and the records would still be in v3 shape.
+    expect((await readSettings()).dataVersion).toBe(3)
+  })
+
   it('resumes from the last completed migration after a worker dies mid-run', async () => {
     const db = await freshDb()
     await upsertPosting(db, aPosting())

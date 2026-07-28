@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { send } from '../lib/client'
 import type { StatusReport } from '../lib/messages'
+import { requestPersistence } from '../lib/persistence'
 
 type Probe =
   | { phase: 'checking' }
@@ -26,6 +27,16 @@ export function App() {
       try {
         const status = await send('status', {})
         if (!cancelled) setProbe({ phase: 'ok', status })
+
+        // `persist()` is exposed to Window contexts only, so this panel is the
+        // one place in the extension that can ask — the worker can merely read
+        // the answer. Only worth asking when `unlimitedStorage` did not already
+        // cover us, since either defence alone is sufficient.
+        if (!status.evictionSafe) {
+          await requestPersistence()
+          const rechecked = await send('storage/reassess', {})
+          if (!cancelled) setProbe({ phase: 'ok', status: rechecked })
+        }
       } catch (error) {
         console.error('[JourneyTracker] status request failed', error)
         if (!cancelled) {
