@@ -9,7 +9,7 @@ import { openDb, type JourneyTrackerDb } from '../lib/db'
 import { handleRequest } from '../lib/handler'
 import { isRequest } from '../lib/messages'
 import { runPendingMigrations } from '../lib/migrations'
-import { ensurePersistentStorage } from '../lib/persistence'
+import { assessStorageProtection } from '../lib/persistence'
 import { patchSettings } from '../lib/settings'
 
 let readyPromise: Promise<JourneyTrackerDb> | null = null
@@ -25,6 +25,10 @@ function ready(): Promise<JourneyTrackerDb> {
   readyPromise ??= (async () => {
     const db = await openDb()
     await runPendingMigrations(db)
+    // Assessed once per worker lifetime rather than only at install, so the
+    // reported value cannot go stale after a permission change or a Chrome
+    // decision that went the other way.
+    await recordStorageProtection()
     return db
   })().catch((error: unknown) => {
     // Do not cache a failed start, or the worker stays broken until Chrome
@@ -41,12 +45,12 @@ function ready(): Promise<JourneyTrackerDb> {
  * that would ever reveal the loss — so ask, and record the answer where the UI
  * can warn about it (decision 3).
  */
-async function recordStoragePersistence(): Promise<void> {
-  const persisted = await ensurePersistentStorage()
-  await patchSettings({ storagePersisted: persisted })
-  if (!persisted) {
+async function recordStorageProtection(): Promise<void> {
+  const { unlimited, persisted, evictionSafe } = await assessStorageProtection()
+  await patchSettings({ storagePersisted: persisted, storageUnlimited: unlimited })
+  if (!evictionSafe) {
     console.warn(
-      '[JourneyTracker] persistent storage was not granted — records are evictable',
+      '[JourneyTracker] storage is neither unlimited nor persisted — records are evictable',
     )
   }
 }
@@ -57,7 +61,6 @@ chrome.runtime.onInstalled.addListener(() => {
       // Without this the toolbar button does nothing and the panel can only be
       // reached from Chrome's own side-panel menu.
       await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true })
-      await recordStoragePersistence()
       await ready()
     } catch (error) {
       console.error('[JourneyTracker] install failed', error)

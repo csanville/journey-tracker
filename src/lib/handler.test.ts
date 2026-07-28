@@ -39,7 +39,11 @@ describe('handleRequest', () => {
 
   it('reports status including whether storage is evictable', async () => {
     const db = await freshDb()
-    await patchSettings({ dataVersion: SCHEMA_VERSION, storagePersisted: false })
+    await patchSettings({
+      dataVersion: SCHEMA_VERSION,
+      storagePersisted: false,
+      storageUnlimited: false,
+    })
     await handleRequest(db, { kind: 'posting/upsert', posting: aPosting() })
 
     const response = await handleRequest(db, { kind: 'status' })
@@ -48,8 +52,21 @@ describe('handleRequest', () => {
     if (!response.ok) return
     expect(response.data.postingCount).toBe(1)
     expect(response.data.schemaVersion).toBe(SCHEMA_VERSION)
-    // The value the UI needs in order to warn that records can be evicted.
-    expect(response.data.storagePersisted).toBe(false)
+    // The value the UI acts on. Both defences down means a real warning.
+    expect(response.data.evictionSafe).toBe(false)
+  })
+
+  it('reports eviction-safe when unlimitedStorage alone is granted', async () => {
+    const db = await freshDb()
+    await patchSettings({ storagePersisted: false, storageUnlimited: true })
+
+    const response = await handleRequest(db, { kind: 'status' })
+
+    expect(response.ok).toBe(true)
+    if (!response.ok) return
+    // Warning on storagePersisted alone here would cry wolf on every fresh
+    // install, which is how a real warning gets ignored later.
+    expect(response.data.evictionSafe).toBe(true)
   })
 
   it('deletes through the same path', async () => {

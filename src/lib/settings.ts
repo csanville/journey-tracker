@@ -14,9 +14,12 @@ export interface Settings {
   migrationInProgress: boolean
   /**
    * Result of `navigator.storage.persist()`. `null` means not yet asked.
-   * `false` means records sit in evictable storage and the user needs telling.
+   * Routinely `false` on a freshly installed extension — Chrome judges this on
+   * engagement heuristics — which is why it is not the only defence.
    */
   storagePersisted: boolean | null
+  /** Whether `unlimitedStorage` is granted, which alone exempts from eviction. */
+  storageUnlimited: boolean | null
   lastBackupAt: number | null
 }
 
@@ -26,6 +29,7 @@ export const DEFAULT_SETTINGS: Settings = {
   dataVersion: 0,
   migrationInProgress: false,
   storagePersisted: null,
+  storageUnlimited: null,
   lastBackupAt: null,
 }
 

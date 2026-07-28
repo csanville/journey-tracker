@@ -58,6 +58,8 @@ async function status(db: JourneyTrackerDb): Promise<StatusReport> {
     dataVersion: settings.dataVersion,
     migrationInProgress: settings.migrationInProgress,
     storagePersisted: settings.storagePersisted,
+    storageUnlimited: settings.storageUnlimited,
+    evictionSafe: Boolean(settings.storageUnlimited || settings.storagePersisted),
     postingCount: await repo.countPostings(db),
   }
 }

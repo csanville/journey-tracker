@@ -73,12 +73,11 @@ export function App() {
                   ` · data at v${probe.status.dataVersion}`}
               </Row>
 
-              <Row
-                label="Storage"
-                state={probe.status.storagePersisted ? 'ok' : 'warn'}
-              >
-                {probe.status.storagePersisted
-                  ? 'persistent'
+              <Row label="Storage" state={probe.status.evictionSafe ? 'ok' : 'warn'}>
+                {probe.status.evictionSafe
+                  ? probe.status.storageUnlimited
+                    ? 'protected · unlimitedStorage'
+                    : 'protected · persisted'
                   : 'evictable — records may be cleared'}
               </Row>
 
@@ -89,11 +88,10 @@ export function App() {
           )}
         </dl>
 
-        {probe.phase === 'ok' && probe.status.storagePersisted === false && (
+        {probe.phase === 'ok' && !probe.status.evictionSafe && (
           <p className="notice">
-            Chrome did not grant persistent storage, so it may evict this
-            extension's data if the disk runs low. Exporting a backup will matter
-            more than usual until that changes.
+            Chrome may evict this extension's data if the disk runs low. Exporting
+            a backup will matter more than usual until that changes.
           </p>
         )}
       </div>

@@ -43,8 +43,13 @@ export interface StatusReport {
   schemaVersion: number
   dataVersion: number
   migrationInProgress: boolean
-  /** `false` means records are in evictable storage — worth warning about. */
   storagePersisted: boolean | null
+  storageUnlimited: boolean | null
+  /**
+   * The one the UI should act on. Either defence alone is enough, so warning on
+   * `storagePersisted` by itself would cry wolf on every fresh install.
+   */
+  evictionSafe: boolean
   postingCount: number
 }
 
