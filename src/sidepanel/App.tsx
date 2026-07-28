@@ -1,15 +1,22 @@
 import { useEffect, useState } from 'react'
+import { send } from '../lib/client'
+import type { StatusReport } from '../lib/messages'
 
-type ProbeState = 'checking' | 'ok' | 'failed'
+type Probe =
+  | { phase: 'checking' }
+  | { phase: 'ok'; status: StatusReport }
+  | { phase: 'failed'; error: string }
 
 /**
- * Phase 0 is a walking skeleton: it exists to prove the toolchain reaches
- * Chrome at all. Rather than render a static placeholder, the panel actually
- * exercises the two APIs everything later depends on — the manifest and
- * chrome.storage — so a green panel means the boundary really works.
+ * Still the diagnostic panel, not the product UI — the form arrives in phase 3.
+ *
+ * It talks to the service worker over the real message layer rather than
+ * touching storage directly, so opening the panel exercises the whole path the
+ * extension actually depends on: worker wakes, database opens, migrations run,
+ * request round-trips.
  */
 export function App() {
-  const [storage, setStorage] = useState<ProbeState>('checking')
+  const [probe, setProbe] = useState<Probe>({ phase: 'checking' })
   const version = chrome.runtime.getManifest().version
 
   useEffect(() => {
@@ -17,13 +24,16 @@ export function App() {
 
     void (async () => {
       try {
-        await chrome.storage.local.set({ 'jt:probe': Date.now() })
-        const read = await chrome.storage.local.get('jt:probe')
-        await chrome.storage.local.remove('jt:probe')
-        if (!cancelled) setStorage(read['jt:probe'] ? 'ok' : 'failed')
+        const status = await send('status', {})
+        if (!cancelled) setProbe({ phase: 'ok', status })
       } catch (error) {
-        console.error('[JourneyTracker] storage probe failed', error)
-        if (!cancelled) setStorage('failed')
+        console.error('[JourneyTracker] status request failed', error)
+        if (!cancelled) {
+          setProbe({
+            phase: 'failed',
+            error: error instanceof Error ? error.message : String(error),
+          })
+        }
       }
     })()
 
@@ -43,29 +53,69 @@ export function App() {
 
       <div className="stack">
         <p className="lede">
-          The application form lands in phase 2. This panel is here to prove the
-          extension loads, renders and can reach browser storage.
+          The application form lands in phase 3. This panel checks that the
+          service worker, the database and the message layer between them are
+          all working.
         </p>
 
         <dl className="probes">
-          <div className="probe">
-            <dt>Side panel</dt>
-            <dd className="probe__value probe__value--ok">rendering</dd>
-          </div>
-          <div className="probe">
-            <dt>Extension storage</dt>
-            <dd className={`probe__value probe__value--${storage}`}>
-              {storage === 'checking'
-                ? 'checking…'
-                : storage === 'ok'
-                  ? 'read and write confirmed'
-                  : 'unreachable — see console'}
-            </dd>
-          </div>
+          <Row label="Service worker" state={probe.phase === 'ok' ? 'ok' : probe.phase}>
+            {probe.phase === 'checking' && 'checking…'}
+            {probe.phase === 'ok' && 'responding'}
+            {probe.phase === 'failed' && probe.error}
+          </Row>
+
+          {probe.phase === 'ok' && (
+            <>
+              <Row label="Schema" state="ok">
+                v{probe.status.schemaVersion}
+                {probe.status.dataVersion !== probe.status.schemaVersion &&
+                  ` · data at v${probe.status.dataVersion}`}
+              </Row>
+
+              <Row
+                label="Storage"
+                state={probe.status.storagePersisted ? 'ok' : 'warn'}
+              >
+                {probe.status.storagePersisted
+                  ? 'persistent'
+                  : 'evictable — records may be cleared'}
+              </Row>
+
+              <Row label="Postings" state="ok">
+                {probe.status.postingCount}
+              </Row>
+            </>
+          )}
         </dl>
+
+        {probe.phase === 'ok' && probe.status.storagePersisted === false && (
+          <p className="notice">
+            Chrome did not grant persistent storage, so it may evict this
+            extension's data if the disk runs low. Exporting a backup will matter
+            more than usual until that changes.
+          </p>
+        )}
       </div>
 
-      <footer className="panel__foot">Phase 0 · walking skeleton</footer>
+      <footer className="panel__foot">Phase 1 · schema and storage</footer>
+    </div>
+  )
+}
+
+function Row({
+  label,
+  state,
+  children,
+}: {
+  label: string
+  state: 'checking' | 'ok' | 'warn' | 'failed'
+  children: React.ReactNode
+}) {
+  return (
+    <div className="probe">
+      <dt>{label}</dt>
+      <dd className={`probe__value probe__value--${state}`}>{children}</dd>
     </div>
   )
 }
