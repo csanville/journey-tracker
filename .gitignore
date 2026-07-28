@@ -3,6 +3,10 @@ dist/
 *.local
 .DS_Store
 
+# WSL surfaces NTFS alternate data streams as real files for anything
+# downloaded on the Windows side.
+*:Zone.Identifier
+
 # Vite / CRXJS scratch output
 .vite/
 stats.html
