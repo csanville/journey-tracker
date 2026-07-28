@@ -100,13 +100,31 @@ decision trades away durability, which the original entry did not note:
 - IndexedDB defaults to **best-effort** storage, which Chrome evicts by LRU under
   disk pressure — the whole origin's data, not merely the excess.
 - `unlimitedStorage` grants unlimited quota for `chrome.storage.local`,
-  IndexedDB, Cache Storage and OPFS, but quota and eviction are separate
-  concerns; the permission documentation makes no eviction guarantee.
+  IndexedDB, Cache Storage and OPFS, **and exempts extensions from eviction**.
 
-So the extension must call `navigator.storage.persist()` and check the returned
-boolean, surfacing a warning if persistence is denied. Losing a job-search
-history to a silent LRU eviction, on a build with no telemetry to notice it, is
-the worst failure this project has.
+So the extension declares `unlimitedStorage` and also calls
+`navigator.storage.persist()`, treating either one as sufficient. Losing a
+job-search history to a silent LRU eviction, on a build with no telemetry to
+notice it, is the worst failure this project has.
+
+**Corrected.** An earlier draft of this amendment claimed `unlimitedStorage`
+lifted the quota while promising nothing about eviction. That was wrong. It came
+from the permissions reference, which is simply silent on the subject; Chrome's
+storage guide is explicit — "Request the `unlimitedStorage` permission, which
+affects both extension and web storage APIs and exempts extensions from both
+quota restrictions and eviction." The two defences are not equivalent for an
+extension: `unlimitedStorage` is granted at install, whereas `persist()` is
+judged against engagement heuristics and was observed returning `false` on a
+real install of this extension. The UI therefore warns on neither-defence-holds
+rather than on `persist()` alone, since a warning shown on every fresh install
+is one that gets ignored when it finally matters.
+
+The cost is an extra permission, against a decision-2 posture of asking for as
+little as possible. Worth it: the permission is narrow, needs no host access, and
+buys the one guarantee this project cannot do without. Whether it adds a
+user-visible install warning is unconfirmed — the documentation does not say, and
+sources disagree — so check before the first store submission (decision 2's
+warning-count argument is what would be affected, not this decision).
 
 **Consequences.** Fetching a snapshot is a second lookup by posting id. That is
 fine — snapshots are only read during re-parse and debugging, never during
