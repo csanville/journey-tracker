@@ -79,6 +79,7 @@ src/sidepanel/             the panel UI
 tools/make-icons.py        regenerates public/icons/*.png
 tools/build-win.sh         builds to the Windows filesystem, for WSL
 docs/ROADMAP.md            the phase plan
+docs/DECISIONS.md          architecture decisions and their revisit conditions
 ```
 
 ## Privacy
@@ -97,3 +98,8 @@ domains rather than all sites, and anywhere else capture will be click-initiated
 through `activeTab`, which needs no host permission at all.
 
 Nothing is sent off the machine, and there is no analytics of any kind.
+
+Captured records stay in IndexedDB on your device. Exports are the only way data
+leaves, they are initiated by you, and the `lean` variant omits the raw page
+snapshots so a backup can be shared without carrying anything scraped from a
+logged-in session.
