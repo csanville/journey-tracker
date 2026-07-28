@@ -16,6 +16,8 @@ export interface RequestMap {
   'posting/list': { payload: NoPayload; result: Posting[] }
   'posting/count': { payload: NoPayload; result: number }
   'posting/delete': { payload: { id: string }; result: { deleted: string } }
+  /** Reports an existing record for the same posting. Reports only — never merges. */
+  'posting/find-duplicate': { payload: { posting: PostingInput }; result: Posting | null }
   'snapshot/put': { payload: { snapshot: Snapshot }; result: { postingId: string } }
   'snapshot/get': { payload: { postingId: string }; result: Snapshot | null }
   'status': { payload: NoPayload; result: StatusReport }

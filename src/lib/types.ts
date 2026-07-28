@@ -36,7 +36,7 @@ export interface Posting {
   updatedAt: number
 
   company: string
-  /** Dedupe key. Populated by the normalizer in phase 2; `company` verbatim until then. */
+  /** Dedupe key, derived by `normalizeCompany`. Never set by the caller. */
   companyNormalized: string
   jobTitle: string
   location: string | null
@@ -46,7 +46,7 @@ export interface Posting {
   salary: Salary | null
 
   url: string
-  /** Dedupe key. Tracking parameters stripped. Phase 2 does the stripping. */
+  /** Dedupe key, derived by `canonicalizeUrl`. Never set by the caller. */
   canonicalUrl: string
 
   /** Adapter that produced this record: `manual`, `jsonld`, `greenhouse`, … */

@@ -251,6 +251,23 @@ suffixes, common aliases) rather than a trim. URL canonicalization must strip
 tracking parameters consistently, since the same posting is reachable via many
 parameterized URLs.
 
+**Amended — the fallback key is company plus requisition, without the title.**
+The original plan keyed the fallback on `companyNormalized + jobTitle +
+atsReqId`. Implementing it made the title look wrong: a requisition id is
+already unique within an ATS tenant, so the title adds no power to distinguish
+two records, while giving the match a way to fail whenever a board rewords its
+own listing between visits. Every field in a join key is another chance to miss.
+The fallback now fires only when *both* remaining parts are present — falling
+back to company alone would merge every posting at that employer.
+
+The governing asymmetry across this whole layer: **a missed merge is visible and
+recoverable, a wrong merge is neither.** A duplicate record is something the user
+can see and fix; two employers silently collapsed into one corrupts every count
+downstream with no symptom. So normalization strips only what is unambiguously a
+legal form, URL canonicalization removes only named tracking parameters rather
+than trusting an allowlist, and an unrecognised ATS URL yields no id rather than
+a guessed one.
+
 **Revisit when.** The external tracker settles into a real schema worth
 integrating with, or is retired. The keys remain useful for in-extension dedupe
 regardless.

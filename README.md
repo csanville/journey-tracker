@@ -8,10 +8,11 @@ There is no server and no account. Nothing is transmitted anywhere.
 
 ## Status
 
-**Phase 1 — schema and storage.** The extension loads, and the side panel talks
-to the service worker over the real message layer: database open, migrations,
-storage-protection check, request round-trip. The panel is still a diagnostic
-readout rather than the product UI — the application form arrives in phase 3.
+**Phase 2 — normalization and join keys.** The storage layer is in place and
+every record now derives its own dedupe keys on the way in: normalized company,
+canonical URL, and the ATS requisition id read out of Greenhouse, Lever, Ashby
+and Workday URLs. The panel is still a diagnostic readout rather than the
+product UI — the application form arrives in phase 3.
 See `docs/ROADMAP.md` for the phase plan and `docs/DECISIONS.md` for the
 architecture decisions behind it.
 
@@ -76,6 +77,8 @@ manifest.json              MV3 manifest — permissions live here, keep them nar
 vite.config.ts             Vite + CRXJS
 src/background/            service worker
 src/sidepanel/             the panel UI
+src/lib/                   schema, storage, message layer
+src/lib/normalize/         join-key derivation — company, URL, ATS req id
 tools/make-icons.py        regenerates public/icons/*.png
 tools/build-win.sh         builds to the Windows filesystem, for WSL
 docs/ROADMAP.md            the phase plan

@@ -58,8 +58,11 @@ dedupe quality lives here.
 - **URL canonicalization** — strip tracking parameters consistently so the same
   posting reached by different links collapses to one record.
 - **`atsReqId` extraction** from Greenhouse, Lever, Ashby and Workday URL shapes.
-- **Dedupe** on canonical URL, falling back to
-  `companyNormalized + jobTitle + atsReqId`.
+- **Dedupe** on canonical URL, falling back to `companyNormalized + atsReqId`.
+  `jobTitle` was dropped from the fallback key during implementation: a
+  requisition id is already unique within a company, so the title added no
+  discriminating power and only gave the match a way to fail when a board
+  rewords its own listing (decision 7).
 
 **Done when** a fixture set of messy real-world URLs and company strings collapses
 to the expected records, including the near-miss cases that should *not* merge.
