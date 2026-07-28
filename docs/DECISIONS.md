@@ -251,6 +251,45 @@ suffixes, common aliases) rather than a trim. URL canonicalization must strip
 tracking parameters consistently, since the same posting is reachable via many
 parameterized URLs.
 
+**Amended — the fallback key is company plus requisition, without the title.**
+The original plan keyed the fallback on `companyNormalized + jobTitle +
+atsReqId`. Implementing it made the title look wrong: a requisition id is
+already unique within an ATS tenant, so the title adds no power to distinguish
+two records, while giving the match a way to fail whenever a board rewords its
+own listing between visits. Every field in a join key is another chance to miss.
+The fallback now fires only when *both* remaining parts are present — falling
+back to company alone would merge every posting at that employer.
+
+The governing asymmetry across this whole layer: **a missed merge is visible and
+recoverable, a wrong merge is neither.** A duplicate record is something the user
+can see and fix; two employers silently collapsed into one corrupts every count
+downstream with no symptom. So normalization strips only what is unambiguously a
+legal form, URL canonicalization removes only named tracking parameters rather
+than trusting an allowlist, and an unrecognised ATS URL yields no id rather than
+a guessed one.
+
+**Amended — the traps are all ordinary words.** Review of the first
+implementation found four wrong-merge bugs, and every one came from a rule that
+looked safe in the abstract and collided with everyday language:
+
+- `zoo` and `spa` are legal forms abroad (`sp. z o.o.`, `S.p.A.`) and ordinary
+  English nouns here. As suffixes they turned "Bronx Zoo" into `bronx`.
+- A Workday requisition pattern that allowed zero letters read the `2026` out of
+  `Software-Engineer-Intern_Summer_2026`, giving two internships one join key.
+- `ref` and `position` as tracking parameters: the first is how a job *reference
+  number* is spelled, the second is a synonym for the posting itself.
+- An empty canonical URL is a valid IndexedDB key that matches itself, so two
+  postings with no URL were reported as one.
+
+The working test for any new stripping rule is therefore not "is this ever a
+legal form / tracking parameter" but "**could this plausibly be part of a name,
+or identify the posting**". If yes, leave it. The cost of leaving it is a
+duplicate the user can see.
+
+Schema version 2 carries the backfill: version 1 stored these fields as the
+caller sent them, and a change in the *meaning* of a persisted field is the kind
+that ships silently (decision 9).
+
 **Revisit when.** The external tracker settles into a real schema worth
 integrating with, or is retired. The keys remain useful for in-extension dedupe
 regardless.

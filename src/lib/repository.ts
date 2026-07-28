@@ -1,5 +1,7 @@
 import type { JourneyTrackerDb } from './db'
 import { now } from './ids'
+import { normalizePostingInput } from './normalize'
+import { isUsableUrlKey } from './normalize/url'
 import { POSTING_INPUT_FIELDS, SCHEMA_VERSION } from './types'
 import type { Posting, PostingInput, Snapshot } from './types'
 
@@ -27,8 +29,14 @@ function unchanged(existing: Posting, input: PostingInput): boolean {
  */
 export async function upsertPosting(
   db: JourneyTrackerDb,
-  input: PostingInput,
+  raw: PostingInput,
 ): Promise<Posting> {
+  // Derived here rather than by the caller, so the join keys cannot drift
+  // between whoever happens to be writing. Done before the comparison below so
+  // a caller that sends stale keys with otherwise identical content is still
+  // recognised as a retry.
+  const input = normalizePostingInput(raw)
+
   return db.transaction('rw', db.postings, async () => {
     const existing = await db.postings.get(input.id)
 
@@ -61,6 +69,63 @@ export async function listPostings(db: JourneyTrackerDb): Promise<Posting[]> {
 
 export async function countPostings(db: JourneyTrackerDb): Promise<number> {
   return db.postings.count()
+}
+
+/**
+ * Finds an existing record for the same posting, or `null`.
+ *
+ * Two keys, tried in order (decision 7):
+ *
+ * 1. **Canonical URL**, when it is a real URL. Direct and unambiguous once
+ *    tracking noise is stripped.
+ * 2. **Normalized company plus requisition id.** For the same posting reached
+ *    through a different route — an aggregator, an embedded board, a shortened
+ *    link — where the URLs never converge.
+ *
+ * Job title is deliberately *not* in the second key, though an earlier plan had
+ * it there. A requisition id is already unique within a company, so the title
+ * adds no discriminating power; all it adds is a way for the match to fail when
+ * a board rewords its own listing. Every field in a join key is a chance to miss.
+ *
+ * The second key is skipped entirely unless both parts are present. Falling back
+ * to company alone would merge every posting at that employer, which is the
+ * silent-corruption failure the whole normalization layer is arranged to avoid.
+ *
+ * This reports; it does not merge. What to do about a duplicate is the form's
+ * decision in phase 3, not the repository's.
+ */
+export async function findDuplicate(
+  db: JourneyTrackerDb,
+  raw: PostingInput,
+): Promise<Posting | null> {
+  const input = normalizePostingInput(raw)
+
+  if (isUsableUrlKey(input.canonicalUrl)) {
+    // Excluded inside the query rather than after it. Taking the first hit and
+    // then discarding it for being the record itself would stop the search
+    // early and miss a real duplicate sitting behind it — and would make the
+    // answer depend on which of the two records was asked about.
+    const byUrl = await db.postings
+      .where('canonicalUrl')
+      .equals(input.canonicalUrl)
+      .filter((p) => p.id !== input.id)
+      .first()
+
+    if (byUrl) return byUrl
+  }
+
+  if (!input.atsReqId || !input.companyNormalized) return null
+
+  // Indexed on company, then filtered on the requisition. The compound index
+  // cannot serve this directly — it carries `jobTitle` in the middle — and the
+  // number of records at any one employer is small enough that it does not
+  // matter.
+  const sameCompany = await db.postings
+    .where('companyNormalized')
+    .equals(input.companyNormalized)
+    .toArray()
+
+  return sameCompany.find((p) => p.id !== input.id && p.atsReqId === input.atsReqId) ?? null
 }
 
 /**

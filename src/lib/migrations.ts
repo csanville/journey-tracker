@@ -1,4 +1,5 @@
 import type { JourneyTrackerDb } from './db'
+import { deriveJoinKeys } from './normalize'
 import { patchSettings, readSettings } from './settings'
 import { SCHEMA_VERSION } from './types'
 
@@ -23,11 +24,39 @@ export interface Migration {
 }
 
 /**
- * Empty at schema version 1: there is no prior version in the wild to migrate
- * from. The harness is here now because retrofitting one after records exist on
- * users' machines is the problem it is meant to prevent.
+ * Version 1 stored `companyNormalized` and `canonicalUrl` exactly as the caller
+ * supplied them — the fields existed, but nothing derived them. Version 2 makes
+ * them real join keys computed by the repository.
+ *
+ * That is a change of *meaning* in a persisted field rather than a change of
+ * shape, which is the kind that ships silently: nothing fails, and a record
+ * written by the older build simply never matches a newer one on either dedupe
+ * key. Decision 9 exists for exactly this, and a backfill is cheap now and
+ * impossible once the records are on someone else's machine.
+ *
+ * Re-derivation is idempotent, so a worker killed partway through re-runs
+ * harmlessly. `updatedAt` is deliberately untouched: this corrects a key, it is
+ * not an edit the user made, and bumping it would reorder their list.
  */
-export const MIGRATIONS: Migration[] = []
+const backfillJoinKeys: Migration = {
+  to: 2,
+  description: 'derive company, URL and requisition join keys on existing records',
+  async run(db) {
+    await db.transaction('rw', db.postings, async () => {
+      const stored = await db.postings.toArray()
+
+      const rewritten = stored.map((posting) => ({
+        ...posting,
+        ...deriveJoinKeys(posting),
+        schemaVersion: 2,
+      }))
+
+      if (rewritten.length > 0) await db.postings.bulkPut(rewritten)
+    })
+  },
+}
+
+export const MIGRATIONS: Migration[] = [backfillJoinKeys]
 
 export interface MigrationOutcome {
   from: number

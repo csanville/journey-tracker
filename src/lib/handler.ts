@@ -34,6 +34,8 @@ async function dispatch(db: JourneyTrackerDb, request: Request): Promise<unknown
       return repo.listPostings(db)
     case 'posting/count':
       return repo.countPostings(db)
+    case 'posting/find-duplicate':
+      return repo.findDuplicate(db, request.posting)
     case 'posting/delete':
       await repo.deletePosting(db, request.id)
       return { deleted: request.id }
