@@ -9,11 +9,11 @@ then merged.
 | Phase | Branch | Scope | Done when |
 |---|---|---|---|
 | 0 ✅ | `main` | Node 24, CRXJS scaffold, MV3 manifest, side panel that probes storage | Panel opens in Chrome |
-| 1 | `feat/schema-storage` | Dexie schema, migration harness, single-writer message layer, storage persistence | Tests green, no UI |
-| 2 | `feat/normalization` | Company normalization, URL canonicalization, `atsReqId`, dedupe | Fixture tests green, no UI |
+| 1 ✅ | `feat/schema-storage` | Dexie schema, migration harness, single-writer message layer, storage persistence | Tests green, no UI |
+| 2 ✅ | `feat/normalization` | Company normalization, URL canonicalization, `atsReqId`, dedupe | Fixture tests green, no UI |
 | 3 | `feat/sidepanel-form` | Full form, theme, manual save, dirty tracking, save → wipe → fresh form | Enter a job by hand; it survives a reload |
-| 4 | `feat/extraction` | Tiered adapters, snapshots, adapter versioning, fixture tests | A real posting fills the form |
-| 5 | `feat/live-sync` | Tab listeners, swap rules, dirty banner, `activeTab` capture for unknown sites | Tab between postings; the form follows |
+| 4 | `feat/extraction` | Tiered adapters, snapshots, adapter versioning, URL reporting that survives SPA navigation, fixture tests | A real posting fills the form |
+| 5 | `feat/live-sync` | Tab listeners, swap rules, dirty banner, revisit warning, toolbar badge, `activeTab` capture for unknown sites | Tab between postings; the form follows, and a posting already tracked says so before you type |
 | 6 | `feat/export-import` | JSON lean/full round-trip, CSV report, skip-duplicate import | Export, wipe, re-import — data identical |
 | 7 | `feat/dashboard` | `liveQuery`-backed views: status funnel, over time, per-board yield | Patterns visible across saved data |
 | 8 | `feat/submit-detect` | Submission heuristics behind a prompt | Prompt fires on a real submission |
@@ -63,14 +63,71 @@ dedupe quality lives here.
   whatever the caller sent; changing what they *mean* needs a migration exactly
   as much as changing their shape does (decision 9).
 - **Dedupe** on canonical URL — when it is a real URL — falling back to
-  `companyNormalized + atsReqId`.
-  `jobTitle` was dropped from the fallback key during implementation: a
+  `companyNormalized + atsReqId`, and then to `companyNormalized` plus a
+  normalized title. `jobTitle` is absent from the *second* key on purpose: a
   requisition id is already unique within a company, so the title added no
-  discriminating power and only gave the match a way to fail when a board
-  rewords its own listing (decision 7).
+  discriminating power there and only gave the match a way to fail when a board
+  rewords its own listing. It earns its own third key because that one only
+  raises a prompt, never merges (decision 7).
 
 **Done when** a fixture set of messy real-world URLs and company strings collapses
 to the expected records, including the near-miss cases that should *not* merge.
+
+## Phase 4 — extraction
+
+Reading a posting off the page. Adapters are tiered, generic first, so a new
+board is partly covered before anyone writes an adapter for it (decision 5).
+
+- **Tiered adapters** — JSON-LD `JobPosting`, then OpenGraph and meta tags, then
+  embedded application state, then per-site DOM selectors. Greenhouse and Lever
+  first; Workday last, since it is a heavy SPA that fetches through internal
+  JSON APIs and is several times the work of the others.
+- **Snapshots and adapter versioning** so a parser fix can be replayed against
+  what the page actually said (decision 6).
+- **URL reporting that survives SPA navigation.** The content script reports its
+  own `location.href` rather than the extension reading `tab.url`, which keeps
+  the manifest free of the `tabs` permission (decision 2). The trap: Workday and
+  Ashby change the URL without a page load, so a script that reads the location
+  once at injection goes quietly stale as the user clicks between postings. It
+  has to watch for history changes — patched `pushState`/`replaceState`,
+  `popstate`, or the Navigation API — and re-report. Expect "why didn't it
+  notice?" bugs to trace back here.
+- **Fixture tests** against checked-in HTML, so a board changing its markup
+  surfaces as a failing test rather than as silence.
+
+**Done when** opening a real Greenhouse or Lever posting fills the form, and the
+adapters still pass against saved fixtures.
+
+## Phase 5 — live sync and the revisit warning
+
+The phase that makes the tracker a companion rather than a form. Everything here
+depends on phase 4 producing a reliable URL.
+
+- **Tab listeners and swap rules.** A pristine form auto-fills from the active
+  tab; once anything has been typed, a new posting announces itself as a banner
+  instead of overwriting the work (decision 13). The dirty tracking this needs
+  already exists, and `isDirty` already compares against a baseline rather than
+  against empty for exactly this reason.
+- **The revisit warning.** On arriving at a posting, canonicalize the reported
+  URL and run `findDuplicate` *before* anything is typed — "You tracked this on
+  14 March — applied." This is the same machinery the save-time duplicate check
+  uses; it just runs earlier, which is when the question is actually being
+  asked. Answering it at save is answering it too late.
+- **The toolbar badge.** `chrome.action.setBadgeText` marks the icon when the
+  current page is already tracked, so the answer arrives without opening the
+  panel at all. No extra permission — the action is already ours — and it only
+  works on domains a content script matches, which is the honest limit of the
+  narrow-permission posture. Likely the highest value-per-line feature in the
+  plan: it answers "have I been here before" at the moment someone would think
+  to ask.
+- **`activeTab` capture for the long tail.** Unknown sites are reachable by an
+  explicit click, which grants access to that one tab without a broad host
+  permission (decision 2). Automatic detection is the deliberate trade-off given
+  up here; a click is the price of not asking for every site.
+
+**Done when** tabbing between postings moves the form correctly, typed work is
+never clobbered, and returning to a posting already saved says so — in the panel
+and on the badge — before a single field is touched.
 
 ## Changes from the original plan
 
@@ -87,3 +144,9 @@ to the expected records, including the near-miss cases that should *not* merge.
   reachable by an explicit click without a broad host permission.
 - **Export gained lean/full variants** (decisions 6, 14), so a backup can be shared
   without the page-derived PII snapshots carry.
+- **A third dedupe key, and the revisit warning that uses it** (decision 7). Came
+  out of using phase 3: two hand-entered applications for one role at one
+  employer saved as separate records without comment. The fix was a weaker
+  company-plus-title key that only ever prompts — and the realisation that the
+  same check is far more useful *before* the form is filled in than at save,
+  which is what put the revisit warning and the badge into phase 5.
