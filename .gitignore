@@ -1,0 +1,14 @@
+node_modules/
+dist/
+*.local
+.DS_Store
+
+# Vite / CRXJS scratch output
+.vite/
+stats.html
+
+# Never commit real application data or resumes — this extension's whole
+# premise is that they stay on the user's machine.
+*.journeytracker.json
+journeytracker-backup-*.json
+fixtures/private/
