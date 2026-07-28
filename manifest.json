@@ -4,7 +4,7 @@
   "version": "0.0.1",
   "description": "Track your job application journey. Everything stays in your browser.",
   "minimum_chrome_version": "116",
-  "permissions": ["sidePanel", "storage"],
+  "permissions": ["sidePanel", "storage", "unlimitedStorage"],
   "background": {
     "service_worker": "src/background/service-worker.ts",
     "type": "module"

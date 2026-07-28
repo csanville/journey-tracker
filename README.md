@@ -40,22 +40,34 @@ Then load it into Chrome:
 4. Click the JourneyTracker toolbar icon to open the side panel
 
 `npm run dev` runs Vite with hot reload; point Chrome at `dist/` the same way.
+On WSL, see below — `dist/` is the one path Chrome has trouble reaching.
 
 ### Loading from WSL
 
-Chrome runs on the Windows host while the code lives in Linux, so browse to the
-build output through the UNC path:
-
-```
-\\wsl.localhost\Ubuntu\home\chase\projects\JourneyTracker\dist
-```
-
-If Chrome refuses that path or reloads unreliably, build to the Windows
-filesystem instead and load `C:\Users\chase\JourneyTracker-dist`:
+Chrome runs on the Windows host while this code lives in Linux. Chrome's **Load
+unpacked** button opens a native Windows folder picker, and that picker does not
+reliably reach the WSL share — the Linux entry is frequently missing from its
+sidebar. So build to the Windows filesystem instead:
 
 ```bash
-npx vite build --outDir /mnt/c/Users/chase/JourneyTracker-dist --emptyOutDir
+npm run build:win
 ```
+
+That typechecks, builds, and prints the Windows path to select — by default
+`C:\Users\<you>\JourneyTracker-dist`. Set `JT_WIN_DIST` to put it elsewhere,
+as a Linux path (`/mnt/c/Users/you/...`, not `C:\Users\you\...`). The script
+empties its output directory, so it refuses any destination that exists and
+does not already contain a build.
+
+Re-run it after every change and hit the reload icon on the extension card;
+there is no need to remove and re-add the extension. There is no watch mode
+here — `npm run dev` has one, but its output lands in `dist/`, which is the
+directory Chrome cannot reliably load from on WSL.
+
+Pasting the UNC path `\\wsl.localhost\Ubuntu\home\chase\projects\JourneyTracker\dist`
+into the picker's folder field sometimes works too, but Chrome is inconsistent
+about loading extensions from network paths, so the Windows-side build is the
+one to rely on.
 
 ## Layout
 
@@ -65,6 +77,7 @@ vite.config.ts             Vite + CRXJS
 src/background/            service worker
 src/sidepanel/             the panel UI
 tools/make-icons.py        regenerates public/icons/*.png
+tools/build-win.sh         builds to the Windows filesystem, for WSL
 docs/ROADMAP.md            the phase plan
 docs/DECISIONS.md          architecture decisions and their revisit conditions
 ```
