@@ -37,9 +37,12 @@ one enforced path.
 - **Single-writer message layer.** Typed request/response between panel and
   service worker; every mutation idempotent so a torn-down worker can be retried
   safely (decision 4).
-- **Storage persistence.** Call `navigator.storage.persist()`, check the returned
-  boolean, and record the result as a setting the UI can warn about. IndexedDB is
-  evictable by default and this is the project's worst failure mode (decision 3).
+- **Storage persistence.** Declare `unlimitedStorage`, which alone exempts an
+  extension from eviction, and additionally call `navigator.storage.persist()`
+  from the side panel — that call is `[Exposed=Window]`, so the worker can only
+  read the state, not request it. Record both, warn only when neither holds.
+  IndexedDB is evictable by default and this is the project's worst failure mode
+  (decision 3).
 - **Vitest**, against a fake-indexeddb backend so tests need no browser.
 
 **Done when** the suite covers a round-trip write/read, a migration from a seeded

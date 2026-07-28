@@ -8,10 +8,12 @@ There is no server and no account. Nothing is transmitted anywhere.
 
 ## Status
 
-**Phase 0 — walking skeleton.** The extension loads, the side panel renders, and
-it can reach `chrome.storage`. The application form arrives in phase 3. See
-`docs/ROADMAP.md` for the phase plan and `docs/DECISIONS.md` for the architecture
-decisions behind it.
+**Phase 1 — schema and storage.** The extension loads, and the side panel talks
+to the service worker over the real message layer: database open, migrations,
+storage-protection check, request round-trip. The panel is still a diagnostic
+readout rather than the product UI — the application form arrives in phase 3.
+See `docs/ROADMAP.md` for the phase plan and `docs/DECISIONS.md` for the
+architecture decisions behind it.
 
 ## Requirements
 
@@ -69,9 +71,19 @@ docs/DECISIONS.md          architecture decisions and their revisit conditions
 
 ## Privacy
 
-The manifest requests only `sidePanel` and `storage`. Content scripts are matched
-against specific job-board domains rather than all sites; anywhere else, capture
-is click-initiated through `activeTab`, which needs no host permission at all.
+The manifest requests three permissions, and no host permissions at all:
+
+| Permission | Why |
+|---|---|
+| `sidePanel` | the UI surface |
+| `storage` | settings (records live in IndexedDB) |
+| `unlimitedStorage` | exempts the extension from storage quota **and** from Chrome's LRU eviction, so a job-search history that exists nowhere else cannot be silently cleared under disk pressure |
+
+None of these grant access to page content. There are no content scripts yet;
+when extraction lands in phase 4 they will be matched against specific job-board
+domains rather than all sites, and anywhere else capture will be click-initiated
+through `activeTab`, which needs no host permission at all.
+
 Nothing is sent off the machine, and there is no analytics of any kind.
 
 Captured records stay in IndexedDB on your device. Exports are the only way data

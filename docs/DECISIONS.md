@@ -119,6 +119,23 @@ real install of this extension. The UI therefore warns on neither-defence-holds
 rather than on `persist()` alone, since a warning shown on every fresh install
 is one that gets ignored when it finally matters.
 
+**Corrected again — the two calls cannot live in the same place.** The first
+implementation put both probes in the service worker, where only one of them
+works: in the Storage standard `persisted()` is exposed to workers but
+`persist()` is `[Exposed=Window]`. The worker's feature check therefore failed
+every time and, because it guarded both calls together, skipped the read as
+well — so the recorded `storagePersisted` was a fabricated `false` rather than a
+measurement, and would have reported genuinely persistent storage as evictable
+had `unlimitedStorage` ever been dropped. Reading and requesting are now
+separate: the worker reads, the side panel asks, and a `storage/reassess`
+message carries the answer back so the single writer still owns settings
+(decision 4).
+
+The pattern behind all three corrections in this entry is worth naming, since it
+will recur: a protection was recorded as established when only its *declaration*
+had been checked. Anything claiming to guard the data needs evidence that the
+mechanism actually executes in the context that calls it.
+
 The cost is an extra permission, against a decision-2 posture of asking for as
 little as possible. Worth it: the permission is narrow, needs no host access, and
 buys the one guarantee this project cannot do without. Whether it adds a
