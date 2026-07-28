@@ -1,6 +1,7 @@
 import type { JourneyTrackerDb } from './db'
 import { now } from './ids'
 import { normalizePostingInput } from './normalize'
+import { isUsableUrlKey } from './normalize/url'
 import { POSTING_INPUT_FIELDS, SCHEMA_VERSION } from './types'
 import type { Posting, PostingInput, Snapshot } from './types'
 
@@ -75,7 +76,8 @@ export async function countPostings(db: JourneyTrackerDb): Promise<number> {
  *
  * Two keys, tried in order (decision 7):
  *
- * 1. **Canonical URL.** Direct and unambiguous once tracking noise is stripped.
+ * 1. **Canonical URL**, when it is a real URL. Direct and unambiguous once
+ *    tracking noise is stripped.
  * 2. **Normalized company plus requisition id.** For the same posting reached
  *    through a different route — an aggregator, an embedded board, a shortened
  *    link — where the URLs never converge.
@@ -98,8 +100,19 @@ export async function findDuplicate(
 ): Promise<Posting | null> {
   const input = normalizePostingInput(raw)
 
-  const byUrl = await db.postings.where('canonicalUrl').equals(input.canonicalUrl).first()
-  if (byUrl && byUrl.id !== input.id) return byUrl
+  if (isUsableUrlKey(input.canonicalUrl)) {
+    // Excluded inside the query rather than after it. Taking the first hit and
+    // then discarding it for being the record itself would stop the search
+    // early and miss a real duplicate sitting behind it — and would make the
+    // answer depend on which of the two records was asked about.
+    const byUrl = await db.postings
+      .where('canonicalUrl')
+      .equals(input.canonicalUrl)
+      .filter((p) => p.id !== input.id)
+      .first()
+
+    if (byUrl) return byUrl
+  }
 
   if (!input.atsReqId || !input.companyNormalized) return null
 

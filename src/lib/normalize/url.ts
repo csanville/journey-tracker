@@ -36,8 +36,12 @@ const TRACKING_PARAMS = new Set([
   'vero_id',
   'oly_enc_id',
   'oly_anon_id',
-  // Generic referral breadcrumbs.
-  'ref',
+  // Generic referral breadcrumbs. Each of these has to pass one test before it
+  // belongs here: could a job board plausibly use this name for the posting's
+  // own identifier? `referer`, `campaign` and `origin` name the traffic, never
+  // the job. Two that failed the test and were removed: `ref`, which is how a
+  // "job reference number" would be spelled, and `position`, which is a synonym
+  // for the posting itself.
   'referer',
   'referrer',
   'source',
@@ -57,7 +61,6 @@ const TRACKING_PARAMS = new Set([
   'trackingid',
   'lipi',
   'licu',
-  'position',
   'pagenum',
   'ebp',
   'originalsubdomain',
@@ -131,4 +134,25 @@ export function canonicalizeUrl(raw: string): string {
   // `toString()` re-adds a trailing slash to an empty path; that is the correct
   // canonical form for a bare origin, so leave it.
   return url.toString()
+}
+
+/**
+ * Whether a canonical URL is strong enough to identify a posting.
+ *
+ * `canonicalizeUrl` hands back unparseable input unchanged so the record still
+ * carries whatever the page said, which means an empty string or a placeholder
+ * like `n/a` can reach storage. Neither identifies anything, and both compare
+ * equal to themselves — two postings at different employers with no URL would
+ * otherwise be reported as the same record. Callers keying on the URL check this
+ * first.
+ */
+export function isUsableUrlKey(canonical: string): boolean {
+  if (!canonical) return false
+
+  try {
+    new URL(canonical)
+    return true
+  } catch {
+    return false
+  }
 }

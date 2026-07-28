@@ -16,7 +16,14 @@ const COLLAPSE: Array<{ what: string; variants: string[] }> = [
   },
   {
     what: 'periods inside an initialism',
-    variants: ['Acme S.p.A.', 'Acme SpA', 'Acme S.P.A', 'Acme'],
+    // These agree with each other but not with a bare "Acme": `spa` is an
+    // ordinary English noun, so it is not stripped as a legal form. A missed
+    // merge, chosen over merging "Blue Lagoon Spa" into "Blue Lagoon".
+    variants: ['Acme S.p.A.', 'Acme SpA', 'Acme S.P.A'],
+  },
+  {
+    what: 'a Polish legal form, which is only safe to strip as a whole phrase',
+    variants: ['Acme Sp. z o.o.', 'Acme sp. z o. o.', 'Acme'],
   },
   {
     what: 'ampersand written both ways',
@@ -66,6 +73,11 @@ const DISTINCT: Array<[string, string, string]> = [
   ['a shared first word', 'Square', 'Square Enix'],
   ['different aliases', 'PricewaterhouseCoopers', 'Ernst & Young'],
   ['plural is not a legal form', 'Acme Partners', 'Acme'],
+  // `zoo` and `spa` are legal forms abroad and ordinary nouns here. Listing
+  // them as suffixes collapsed these pairs.
+  ['a zoo is not a legal form', 'Bronx Zoo', 'Bronx'],
+  ['a spa is not a legal form', 'Blue Lagoon Spa', 'Blue Lagoon'],
+  ['an aquarium named after its city', 'Monterey Bay Aquarium', 'Monterey Bay'],
 ]
 
 describe('normalizeCompany', () => {

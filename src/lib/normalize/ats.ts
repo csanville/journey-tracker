@@ -28,10 +28,17 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 /**
  * Workday appends the requisition to the last path segment, after an
- * underscore: `…/job/San-Francisco/Software-Engineer_R-12345`. Anchored so a
- * job title that merely contains an underscore cannot produce a false id.
+ * underscore: `…/job/San-Francisco/Software-Engineer_R-12345`.
+ *
+ * At least one letter is required. Titles carry underscores of their own —
+ * `Software-Engineer-Intern_Summer_2026` — and since only the text after the
+ * *last* underscore is considered, allowing a bare digit run turned `2026` into
+ * a requisition id. Two internships at one employer then shared a join key and
+ * `findDuplicate` called them the same posting: the exact silent wrong merge
+ * this file is arranged to prevent. A requisition that is genuinely all digits
+ * is now missed instead, which is the direction that fails safely.
  */
-const WORKDAY_REQ = /^[A-Z]{0,5}-?\d{3,}$/i
+const WORKDAY_REQ = /^[A-Z]{1,5}-?\d{3,}$/i
 
 function segments(url: URL): string[] {
   return url.pathname.split('/').filter(Boolean)
@@ -41,14 +48,8 @@ function last(values: string[]): string | undefined {
   return values[values.length - 1]
 }
 
-/**
- * Greenhouse: `boards.greenhouse.io/acme/jobs/4012345`, the same path under a
- * company subdomain, or `gh_jid` on an embedded board hosted elsewhere.
- */
-function greenhouse(url: URL): string | null {
-  const embedded = url.searchParams.get('gh_jid')
-  if (embedded && /^\d+$/.test(embedded)) return embedded
-
+/** Greenhouse: `boards.greenhouse.io/acme/jobs/4012345`, or a company subdomain. */
+function greenhouseHost(url: URL): string | null {
   if (!/(^|\.)greenhouse\.io$/.test(url.hostname)) return null
 
   const parts = segments(url)
@@ -65,17 +66,30 @@ function lever(url: URL): string | null {
   // `/apply` and `/thanks` trail the id rather than replacing it.
   const candidate = segments(url).find((part) => UUID.test(part))
 
-  return candidate ?? null
+  return candidate ? candidate.toLowerCase() : null
 }
 
-/** Ashby: `jobs.ashbyhq.com/acme/<uuid>`, or `ashby_jid` when embedded. */
-function ashby(url: URL): string | null {
-  const embedded = url.searchParams.get('ashby_jid')
-  if (embedded && UUID.test(embedded)) return embedded
-
+/** Ashby: `jobs.ashbyhq.com/acme/<uuid>`. */
+function ashbyHost(url: URL): string | null {
   if (!/(^|\.)ashbyhq\.com$/.test(url.hostname)) return null
 
-  return segments(url).find((part) => UUID.test(part)) ?? null
+  const candidate = segments(url).find((part) => UUID.test(part))
+
+  return candidate ? candidate.toLowerCase() : null
+}
+
+/** A Greenhouse board embedded in a company's own careers page. */
+function greenhouseEmbedded(url: URL): string | null {
+  const embedded = url.searchParams.get('gh_jid')
+
+  return embedded && /^\d+$/.test(embedded) ? embedded : null
+}
+
+/** An Ashby board embedded in a company's own careers page. */
+function ashbyEmbedded(url: URL): string | null {
+  const embedded = url.searchParams.get('ashby_jid')
+
+  return embedded && UUID.test(embedded) ? embedded.toLowerCase() : null
 }
 
 /**
@@ -96,14 +110,30 @@ function workday(url: URL): string | null {
 
   const candidate = tail.slice(underscore + 1)
 
-  return WORKDAY_REQ.test(candidate) ? candidate : null
+  // Workday writes requisitions in upper case; folding them makes the same
+  // posting reached through a differently-cased link compare equal.
+  return WORKDAY_REQ.test(candidate) ? candidate.toUpperCase() : null
 }
 
-const MATCHERS: ReadonlyArray<{ ats: AtsName; extract: (url: URL) => string | null }> = [
-  { ats: 'greenhouse', extract: greenhouse },
+type Matcher = { ats: AtsName; extract: (url: URL) => string | null }
+
+/**
+ * Host-anchored matchers run first. The hostname is definitive — a Lever URL is
+ * a Lever posting — whereas a query parameter can be present on any page. With
+ * the embedded readers first, a stray `gh_jid` on a Lever link won the match and
+ * produced a Greenhouse id for a Lever posting.
+ */
+const HOST_MATCHERS: readonly Matcher[] = [
+  { ats: 'greenhouse', extract: greenhouseHost },
   { ats: 'lever', extract: lever },
-  { ats: 'ashby', extract: ashby },
+  { ats: 'ashby', extract: ashbyHost },
   { ats: 'workday', extract: workday },
+]
+
+/** Only consulted when the host itself says nothing. */
+const EMBEDDED_MATCHERS: readonly Matcher[] = [
+  { ats: 'greenhouse', extract: greenhouseEmbedded },
+  { ats: 'ashby', extract: ashbyEmbedded },
 ]
 
 /**
@@ -118,7 +148,7 @@ export function identifyAts(rawUrl: string): AtsIdentity | null {
     return null
   }
 
-  for (const { ats, extract } of MATCHERS) {
+  for (const { ats, extract } of [...HOST_MATCHERS, ...EMBEDDED_MATCHERS]) {
     const reqId = extract(url)
     if (reqId) return { ats, reqId }
   }

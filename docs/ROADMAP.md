@@ -58,7 +58,12 @@ dedupe quality lives here.
 - **URL canonicalization** — strip tracking parameters consistently so the same
   posting reached by different links collapses to one record.
 - **`atsReqId` extraction** from Greenhouse, Lever, Ashby and Workday URL shapes.
-- **Dedupe** on canonical URL, falling back to `companyNormalized + atsReqId`.
+- **Schema version 2**, with a migration that backfills the derived keys onto
+  records written by a phase 1 build. The fields existed at version 1 but held
+  whatever the caller sent; changing what they *mean* needs a migration exactly
+  as much as changing their shape does (decision 9).
+- **Dedupe** on canonical URL — when it is a real URL — falling back to
+  `companyNormalized + atsReqId`.
   `jobTitle` was dropped from the fallback key during implementation: a
   requisition id is already unique within a company, so the title added no
   discriminating power and only gave the match a way to fail when a board

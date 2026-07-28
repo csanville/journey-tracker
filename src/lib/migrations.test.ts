@@ -67,6 +67,49 @@ describe('runPendingMigrations', () => {
     expect(ran).toEqual([])
   })
 
+  it('backfills join keys onto records written before they were derived', async () => {
+    const db = await freshDb()
+    // A version 1 record: the key fields exist but hold whatever the caller
+    // sent, because nothing derived them yet. Written straight to the store,
+    // since `upsertPosting` would normalize it on the way in.
+    await db.postings.put({
+      ...aPosting({
+        id: 'legacy',
+        company: 'Acme, Inc.',
+        url: 'https://www.boards.greenhouse.io/acme/jobs/4012345?utm_source=email',
+        atsReqId: null,
+      }),
+      companyNormalized: 'Acme, Inc.',
+      canonicalUrl: 'https://www.boards.greenhouse.io/acme/jobs/4012345?utm_source=email',
+      schemaVersion: 1,
+      createdAt: 1_000,
+      updatedAt: 1_000,
+    })
+    await patchSettings({ dataVersion: 1 })
+
+    await runPendingMigrations(db)
+
+    const migrated = await db.postings.get('legacy')
+    expect(migrated?.companyNormalized).toBe('acme')
+    expect(migrated?.canonicalUrl).toBe('https://boards.greenhouse.io/acme/jobs/4012345')
+    expect(migrated?.atsReqId).toBe('4012345')
+    expect(migrated?.schemaVersion).toBe(2)
+    // A key correction is not an edit the user made; bumping this would
+    // reorder their list.
+    expect(migrated?.updatedAt).toBe(1_000)
+  })
+
+  it('leaves an already-derived record byte-identical when replayed', async () => {
+    const db = await freshDb()
+    const stored = await upsertPosting(db, aPosting({ id: 'current' }))
+    await patchSettings({ dataVersion: 1 })
+
+    // A worker killed mid-migration re-runs the whole thing on the survivors.
+    await runPendingMigrations(db)
+
+    expect(await db.postings.get('current')).toEqual({ ...stored, schemaVersion: 2 })
+  })
+
   it('refuses to open data written by a newer build', async () => {
     const db = await freshDb()
     await upsertPosting(db, aPosting())

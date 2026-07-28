@@ -146,6 +146,19 @@ describe('findDuplicate', () => {
     expect(await findDuplicate(db, input)).toBeNull()
   })
 
+  it('gives the same answer whichever of the pair is asked about', async () => {
+    const db = await freshDb()
+    const url = 'https://acme.com/careers/engineer'
+    await upsertPosting(db, posting({ id: 'a', url }))
+    await upsertPosting(db, posting({ id: 'b', url }))
+
+    // Reachable by design: this reports duplicates without merging them, so the
+    // form may well keep both. Taking the first index hit and discarding it for
+    // being the record itself made `findDuplicate(a)` claim `a` was unique.
+    expect((await findDuplicate(db, posting({ id: 'a', url })))?.id).toBe('b')
+    expect((await findDuplicate(db, posting({ id: 'b', url })))?.id).toBe('a')
+  })
+
   it('returns null when there is nothing to match', async () => {
     const db = await freshDb()
     await upsertPosting(db, posting({ id: 'a', url: 'https://acme.com/jobs/1' }))
@@ -228,6 +241,26 @@ describe('findDuplicate does not merge', () => {
         url: 'https://acmehealth.com/careers?gh_jid=4012345',
       }),
     )
+
+    expect(found).toBeNull()
+  })
+
+  it('two postings with no URL at all', async () => {
+    const db = await freshDb()
+    // An empty canonical URL is a valid IndexedDB key and matches itself, so
+    // without a guard these two are reported as one posting.
+    await upsertPosting(db, posting({ id: 'a', company: 'Acme', url: '' }))
+
+    const found = await findDuplicate(db, posting({ id: 'b', company: 'Globex', url: '' }))
+
+    expect(found).toBeNull()
+  })
+
+  it('two postings whose URL never parsed', async () => {
+    const db = await freshDb()
+    await upsertPosting(db, posting({ id: 'a', company: 'Acme', url: 'n/a' }))
+
+    const found = await findDuplicate(db, posting({ id: 'b', company: 'Globex', url: 'n/a' }))
 
     expect(found).toBeNull()
   })

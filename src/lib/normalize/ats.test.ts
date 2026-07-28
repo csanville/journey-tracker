@@ -87,6 +87,17 @@ const NO_MATCH: Array<[what: string, url: string]> = [
   ['a gh_jid that is not numeric', 'https://acme.com/careers?gh_jid=abc'],
   ['an ashby_jid that is not a uuid', 'https://acme.com/careers?ashby_jid=12345'],
   ['a company careers page', 'https://acme.com/careers/software-engineer'],
+  // The last underscore-separated chunk of a Workday title is not a
+  // requisition just because it is numeric. Two internships at one employer
+  // both yielding "2026" is a wrong merge, not a missed one.
+  [
+    'a Workday title ending in a year',
+    'https://acme.wd1.myworkdayjobs.com/en-US/External/job/SF/Software-Engineer-Intern_Summer_2026',
+  ],
+  [
+    'a Workday title ending in a bare number',
+    'https://acme.wd1.myworkdayjobs.com/en-US/External/job/SF/Engineer_Level_3000',
+  ],
   ['an unparseable string', 'not a url'],
   ['an empty string', ''],
 ]
@@ -104,6 +115,26 @@ describe('identifyAts', () => {
         expect(identifyAts(url)).toBeNull()
       })
     }
+  })
+
+  it('lets a definitive host outrank a stray embedded parameter', () => {
+    // A `gh_jid` can appear on any page; a Lever hostname means a Lever posting.
+    // Checked first, the parameter produced a Greenhouse id for a Lever job.
+    expect(
+      identifyAts('https://jobs.lever.co/acme/0f0e2b1a-1234-4c8d-9e0f-abcdef123456?gh_jid=99'),
+    ).toEqual({ ats: 'lever', reqId: '0f0e2b1a-1234-4c8d-9e0f-abcdef123456' })
+  })
+
+  it('folds requisition case, so the same posting matches through either link', () => {
+    const upper = 'https://jobs.ashbyhq.com/acme/0F0E2B1A-1234-4C8D-9E0F-ABCDEF123456'
+    const lower = 'https://jobs.ashbyhq.com/acme/0f0e2b1a-1234-4c8d-9e0f-abcdef123456'
+
+    // `findDuplicate` compares requisitions with `===`, so an unfolded id is a
+    // missed merge on nothing more than link casing.
+    expect(identifyAts(upper)).toEqual(identifyAts(lower))
+
+    const workday = 'https://acme.wd1.myworkdayjobs.com/en-US/External/job/SF/Engineer_r-12345'
+    expect(identifyAts(workday)?.reqId).toBe('R-12345')
   })
 
   it('is unaffected by tracking parameters', () => {

@@ -268,6 +268,28 @@ legal form, URL canonicalization removes only named tracking parameters rather
 than trusting an allowlist, and an unrecognised ATS URL yields no id rather than
 a guessed one.
 
+**Amended — the traps are all ordinary words.** Review of the first
+implementation found four wrong-merge bugs, and every one came from a rule that
+looked safe in the abstract and collided with everyday language:
+
+- `zoo` and `spa` are legal forms abroad (`sp. z o.o.`, `S.p.A.`) and ordinary
+  English nouns here. As suffixes they turned "Bronx Zoo" into `bronx`.
+- A Workday requisition pattern that allowed zero letters read the `2026` out of
+  `Software-Engineer-Intern_Summer_2026`, giving two internships one join key.
+- `ref` and `position` as tracking parameters: the first is how a job *reference
+  number* is spelled, the second is a synonym for the posting itself.
+- An empty canonical URL is a valid IndexedDB key that matches itself, so two
+  postings with no URL were reported as one.
+
+The working test for any new stripping rule is therefore not "is this ever a
+legal form / tracking parameter" but "**could this plausibly be part of a name,
+or identify the posting**". If yes, leave it. The cost of leaving it is a
+duplicate the user can see.
+
+Schema version 2 carries the backfill: version 1 stored these fields as the
+caller sent them, and a change in the *meaning* of a persisted field is the kind
+that ships silently (decision 9).
+
 **Revisit when.** The external tracker settles into a real schema worth
 integrating with, or is retired. The keys remain useful for in-extension dedupe
 regardless.

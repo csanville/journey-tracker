@@ -25,6 +25,14 @@
  * `group`, `holdings`, `partners`, `labs`, `studio`, `ventures` — those routinely
  * distinguish one real entity from another and stripping them merges companies
  * that are not the same.
+ *
+ * Also absent, and less obviously: `zoo` and `spa`. Both are real legal forms
+ * abroad — Polish `sp. z o.o.`, Italian `S.p.A.` — and both are ordinary English
+ * nouns that end a business name. Listing them turned "Bronx Zoo" into `bronx`
+ * and "Blue Lagoon Spa" into `blue lagoon`, either of which then collides with
+ * an unrelated employer named after the same place. The Polish form is handled
+ * as a whole phrase below instead; an Italian S.p.A. is simply left alone, which
+ * costs a missed merge rather than a wrong one.
  */
 const LEGAL_SUFFIXES = new Set([
   'inc',
@@ -51,7 +59,6 @@ const LEGAL_SUFFIXES = new Set([
   'sarl',
   'sl',
   'srl',
-  'spa',
   'nv',
   'bv',
   'ab',
@@ -66,10 +73,19 @@ const LEGAL_SUFFIXES = new Set([
   'kk',
   'kft',
   'doo',
-  'zoo',
   'pc',
   'psc',
 ])
+
+/**
+ * Legal forms that are only unambiguous as a whole phrase.
+ *
+ * `sp. z o.o.` becomes the tokens `sp zoo` once punctuation is stripped and the
+ * trailing initials are joined. Neither token can go in the single-token list —
+ * `zoo` is an ordinary noun and `sp` is too short to be safe — but the pair
+ * together is unmistakably the Polish limited-liability form.
+ */
+const PHRASE_SUFFIXES: readonly (readonly string[])[] = [['sp', 'zoo']]
 
 /**
  * Names that are genuinely the same employer written two ways.
@@ -114,9 +130,10 @@ function tokenize(raw: string): string[] {
 
 /**
  * Joins runs of single-character tokens, so initialisms written with periods
- * survive punctuation stripping: "S.p.A." arrives here as `s p a` and leaves as
- * `spa`, which the suffix list can then recognise. Same for `L.L.C.`, `N.V.`,
- * `A.G.` — and for names that really are initials, like H-E-B.
+ * survive punctuation stripping: `L.L.C.` arrives here as `l l c` and leaves as
+ * `llc`, which the suffix list can then recognise. Same for `N.V.` and `A.G.` —
+ * and for names that really are initials, like H-E-B, which is the reason this
+ * runs on every name rather than only on trailing tokens.
  */
 function joinInitialisms(tokens: string[]): string[] {
   const out: string[] = []
@@ -149,7 +166,24 @@ function joinInitialisms(tokens: string[]): string[] {
  */
 function stripLegalSuffixes(tokens: string[]): string[] {
   let end = tokens.length
-  while (end > 1 && LEGAL_SUFFIXES.has(tokens[end - 1]!)) end--
+
+  for (let changed = true; changed; ) {
+    changed = false
+
+    for (const phrase of PHRASE_SUFFIXES) {
+      const start = end - phrase.length
+      if (start > 0 && phrase.every((token, i) => tokens[start + i] === token)) {
+        end = start
+        changed = true
+      }
+    }
+
+    if (end > 1 && LEGAL_SUFFIXES.has(tokens[end - 1]!)) {
+      end--
+      changed = true
+    }
+  }
+
   return tokens.slice(0, end)
 }
 

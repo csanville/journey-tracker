@@ -5,7 +5,7 @@
  * migrations and cross-version imports stay possible (decision 10). Bump it in
  * lockstep with adding a migration to `migrations.ts` — never on its own.
  */
-export const SCHEMA_VERSION = 1
+export const SCHEMA_VERSION = 2
 
 /**
  * Whether the user merely looked at a posting or actually applied to it.
@@ -83,8 +83,25 @@ export interface Snapshot {
  * generated server-side: a caller-owned id is what makes a retried write
  * idempotent when the service worker dies mid-request (decision 4).
  */
-export type PostingInput = Omit<Posting, 'schemaVersion' | 'createdAt' | 'updatedAt'> & {
+export type PostingInput = Omit<
+  Posting,
+  'schemaVersion' | 'createdAt' | 'updatedAt' | 'companyNormalized' | 'canonicalUrl'
+> & {
   createdAt?: number
+  /**
+   * Derived by the repository from `company` and `url`. Optional because a
+   * caller has no business setting them — anything supplied here is overwritten.
+   * Kept assignable rather than forbidden so a normalized record round-trips
+   * back through `upsertPosting` unchanged, which is what makes a retry a no-op.
+   */
+  companyNormalized?: string
+  canonicalUrl?: string
+}
+
+/** A `PostingInput` after the repository has filled in the derived join keys. */
+export type NormalizedPostingInput = PostingInput & {
+  companyNormalized: string
+  canonicalUrl: string
 }
 
 /** Fields a caller controls; the rest are managed by the repository. */

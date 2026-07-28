@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { canonicalizeUrl } from './url'
+import { canonicalizeUrl, isUsableUrlKey } from './url'
 
 /** Spellings of one posting that must collapse to a single canonical URL. */
 const COLLAPSE: Array<{ what: string; variants: string[] }> = [
@@ -37,7 +37,7 @@ const COLLAPSE: Array<{ what: string; variants: string[] }> = [
     what: 'LinkedIn per-impression noise',
     variants: [
       'https://www.linkedin.com/jobs/view/3812345678',
-      'https://www.linkedin.com/jobs/view/3812345678?refId=abc%3D&trackingId=xyz%3D&position=3&pageNum=0',
+      'https://www.linkedin.com/jobs/view/3812345678?refId=abc%3D&trackingId=xyz%3D&pageNum=0',
     ],
   },
   {
@@ -116,7 +116,35 @@ const DISTINCT: Array<[string, string, string]> = [
     'https://example.com/careers?jobId=1',
     'https://example.com/careers?jobId=2',
   ],
+  // `ref` is how a job reference number would be spelled, and `position` is a
+  // synonym for the posting itself. Stripping either collapsed every listing on
+  // a board that keys postings that way.
+  [
+    'ref could be a job reference number',
+    'https://example.com/careers?ref=1234',
+    'https://example.com/careers?ref=5678',
+  ],
+  [
+    'position could be the posting itself',
+    'https://example.com/careers?position=1234',
+    'https://example.com/careers?position=5678',
+  ],
 ]
+
+describe('isUsableUrlKey', () => {
+  it('accepts a real URL', () => {
+    expect(isUsableUrlKey('https://boards.greenhouse.io/acme/jobs/4012345')).toBe(true)
+  })
+
+  it('rejects what would key on nothing', () => {
+    // These reach storage because `canonicalizeUrl` hands unparseable input back
+    // unchanged. Both compare equal to themselves, so without this guard two
+    // postings at different employers match on an empty URL.
+    expect(isUsableUrlKey('')).toBe(false)
+    expect(isUsableUrlKey('n/a')).toBe(false)
+    expect(isUsableUrlKey('not a url')).toBe(false)
+  })
+})
 
 describe('canonicalizeUrl', () => {
   describe('collapses', () => {
