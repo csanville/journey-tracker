@@ -12,7 +12,8 @@ There is no server and no account. Nothing is transmitted anywhere.
 to the service worker over the real message layer: database open, migrations,
 storage-protection check, request round-trip. The panel is still a diagnostic
 readout rather than the product UI — the application form arrives in phase 3.
-See `docs/ROADMAP.md` for the full phase plan.
+See `docs/ROADMAP.md` for the phase plan and `docs/DECISIONS.md` for the
+architecture decisions behind it.
 
 ## Requirements
 
@@ -92,7 +93,7 @@ The manifest requests three permissions, and no host permissions at all:
 
 None of these grant access to page content. There are no content scripts yet;
 when extraction lands in phase 4 they will be matched against specific job-board
-domains rather than all sites, and scanning any other site will be an optional
-permission you grant deliberately.
+domains rather than all sites, and anywhere else capture will be click-initiated
+through `activeTab`, which needs no host permission at all.
 
 Nothing is sent off the machine, and there is no analytics of any kind.
