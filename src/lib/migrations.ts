@@ -90,7 +90,18 @@ export async function runPendingMigrations(
   options: MigrationOptions = {},
 ): Promise<MigrationOutcome> {
   const { migrations = MIGRATIONS, targetVersion = SCHEMA_VERSION } = options
-  const { dataVersion } = await readSettings()
+  const { dataVersion, migrationInProgress } = await readSettings()
+
+  // A flag still raised on entry is stale by definition: the `finally` below
+  // clears it on every path a running migration can take, and an MV3 worker
+  // that is terminated mid-migration never gets to run it. Nothing else would
+  // ever clear it, so a single killed migration would leave every future reader
+  // that waits on this flag blocking until it times out — permanently. This
+  // call is about to redo the work the killed run was doing anyway.
+  if (migrationInProgress) {
+    console.warn('[JourneyTracker] clearing a migration flag left by an interrupted run')
+    await patchSettings({ migrationInProgress: false })
+  }
 
   // Data written by a newer build than this one. Refuse rather than carry on:
   // the version stamp is the only record of what has actually been applied, and

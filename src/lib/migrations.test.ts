@@ -110,6 +110,20 @@ describe('runPendingMigrations', () => {
     expect(await db.postings.get('current')).toEqual({ ...stored, schemaVersion: 2 })
   })
 
+  it('clears a migration flag left behind by a killed worker', async () => {
+    const db = await freshDb()
+    await upsertPosting(db, aPosting())
+    // What a worker terminated mid-migration leaves behind: the flag is raised
+    // and no `finally` ever ran. Nothing else clears it, so every reader that
+    // waits on it would block until timeout, forever.
+    await patchSettings({ dataVersion: SCHEMA_VERSION, migrationInProgress: true })
+
+    await runPendingMigrations(db)
+
+    expect((await readSettings()).migrationInProgress).toBe(false)
+    await expect(waitForMigration(50)).resolves.toBeUndefined()
+  })
+
   it('refuses to open data written by a newer build', async () => {
     const db = await freshDb()
     await upsertPosting(db, aPosting())
