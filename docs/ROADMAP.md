@@ -11,7 +11,7 @@ then merged.
 | 0 ✅ | `main` | Node 24, CRXJS scaffold, MV3 manifest, side panel that probes storage | Panel opens in Chrome |
 | 1 ✅ | `feat/schema-storage` | Dexie schema, migration harness, single-writer message layer, storage persistence | Tests green, no UI |
 | 2 ✅ | `feat/normalization` | Company normalization, URL canonicalization, `atsReqId`, dedupe | Fixture tests green, no UI |
-| 3 | `feat/sidepanel-form` | Full form, theme, manual save, dirty tracking, save → wipe → fresh form | Enter a job by hand; it survives a reload |
+| 3 ✅ | `feat/sidepanel-form` | Full form, theme, manual save, dirty tracking, save → wipe → fresh form | Enter a job by hand; it survives a reload |
 | 4 | `feat/extraction` | Tiered adapters, snapshots, adapter versioning, URL reporting that survives SPA navigation, fixture tests | A real posting fills the form |
 | 5 | `feat/live-sync` | Tab listeners, swap rules, dirty banner, revisit warning, toolbar badge, `activeTab` capture for unknown sites | Tab between postings; the form follows, and a posting already tracked says so before you type |
 | 6 | `feat/export-import` | JSON lean/full round-trip, CSV report, skip-duplicate import | Export, wipe, re-import — data identical |
@@ -78,25 +78,63 @@ to the expected records, including the near-miss cases that should *not* merge.
 Reading a posting off the page. Adapters are tiered, generic first, so a new
 board is partly covered before anyone writes an adapter for it (decision 5).
 
-- **Tiered adapters** — JSON-LD `JobPosting`, then OpenGraph and meta tags, then
-  embedded application state, then per-site DOM selectors. Greenhouse and Lever
+- **Tiered adapters** — JSON-LD `JobPosting`, then embedded application state,
+  then per-site DOM selectors, then OpenGraph and meta tags. Greenhouse and Lever
   first; Workday last, since it is a heavy SPA that fetches through internal
   JSON APIs and is several times the work of the others.
+
+  That order is **not** the one this file originally gave, which ranked
+  OpenGraph second. Both launch boards' real markup contradicted it: Lever's
+  `og:title` welds the employer to the role, and Greenhouse's `og:description`
+  holds the location. Meta tags are link-preview copy and belong last, where
+  they still cover a site nobody has adapted. See decision 5.
 - **Snapshots and adapter versioning** so a parser fix can be replayed against
-  what the page actually said (decision 6).
+  what the page actually said (decision 6). The stored snapshot is itself a
+  parseable document, so a re-parse runs the same adapters as a live page.
 - **URL reporting that survives SPA navigation.** The content script reports its
   own `location.href` rather than the extension reading `tab.url`, which keeps
   the manifest free of the `tabs` permission (decision 2). The trap: Workday and
   Ashby change the URL without a page load, so a script that reads the location
-  once at injection goes quietly stale as the user clicks between postings. It
-  has to watch for history changes — patched `pushState`/`replaceState`,
-  `popstate`, or the Navigation API — and re-report. Expect "why didn't it
-  notice?" bugs to trace back here.
+  once at injection goes quietly stale as the user clicks between postings.
+
+  This file suggested patching `pushState`/`replaceState`. **That cannot work
+  from a content script** — an isolated world has its own JavaScript heap, so the
+  function patched is not the one the page calls. What ships is `popstate` and
+  `hashchange`, the Navigation API's `navigatesuccess` where present, and a
+  once-a-second poll of `location.href` as the backstop that makes the answer to
+  "did it notice?" actually yes.
 - **Fixture tests** against checked-in HTML, so a board changing its markup
-  surfaces as a failing test rather than as silence.
+  surfaces as a failing test rather than as silence. Both fixtures are real
+  captures — a live Greenhouse posting and Lever's own public demo board — because
+  markup this project invented could never notice a board changing.
+- **The panel's fill affordance.** A banner naming what the page said and which
+  fields it would fill, behind an explicit click. A pristine form fills straight
+  away; a form with typed work in it asks first (decision 13).
 
 **Done when** opening a real Greenhouse or Lever posting fills the form, and the
 adapters still pass against saved fixtures.
+
+### Deliberately not in phase 4
+
+- **Auto-fill, tab following, and swap rules.** Filling is a button here. The
+  panel re-reads the active tab on mount and on focus, and nothing listens to tab
+  changes. That is phase 5, and keeping it there is what stops decision 13's
+  rules from being half-built in two places.
+- **Boards embedded in a company's own careers page.** The modern Greenhouse and
+  Ashby embeds render into the host page on a domain the manifest has no business
+  matching. Reaching them is what phase 5's click-initiated `activeTab` capture
+  is for.
+- **Salary written in prose.** Structured salary is read only where a board
+  states it structurally. A wrong salary is a number that looks authoritative in
+  a dashboard and is off by a factor of twelve; prose ranges are where every one
+  of those mistakes lives.
+- **The 500-posting snapshot retention sweep** from decision 6. Snapshots are
+  one per posting and replaced on re-capture, so nothing grows without bound per
+  record, but nothing prunes old ones either. It belongs with phase 6, where the
+  storage picture is already open.
+- **Ashby and Workday adapters.** Both are reachable today through the generic
+  adapter's JSON-LD tier, and `atsReqId` already comes off their URLs from
+  phase 2.
 
 ## Phase 5 — live sync and the revisit warning
 
@@ -144,6 +182,16 @@ and on the badge — before a single field is touched.
   reachable by an explicit click without a broad host permission.
 - **Export gained lean/full variants** (decisions 6, 14), so a backup can be shared
   without the page-derived PII snapshots carry.
+- **The extraction tier order is JSON-LD → app state → DOM → OpenGraph**
+  (decision 5), not the JSON-LD → OpenGraph → app state → DOM this file first
+  gave. Meta tags are link-preview copy, and both launch boards prove it.
+- **Greenhouse emits no JSON-LD** (decision 5). The tier is still first where it
+  exists, but "JSON-LD first" was not a plan on its own.
+- **The `pushState` patch in phase 4 was never possible** from a content script's
+  isolated world; a poll is the backstop that replaces it.
+- **The permission allowlist is `content_scripts.matches`, and the manifest
+  declares no `host_permissions` at all** (decision 2) — less than the original
+  plan asked for, at no cost.
 - **A third dedupe key, and the revisit warning that uses it** (decision 7). Came
   out of using phase 3: two hand-entered applications for one role at one
   employer saved as separate records without comment. The fix was a weaker

@@ -1,9 +1,11 @@
 import { useEffect, useId, useMemo, useState } from 'react'
 import { send } from '../lib/client'
+import type { DetectionSummary } from '../lib/detection'
 import { newId } from '../lib/ids'
 import type { DuplicateMatch } from '../lib/types'
 import {
   EMPTY_DRAFT,
+  MANUAL_SAVE,
   draftErrors,
   isDirty,
   isSaveable,
@@ -11,6 +13,7 @@ import {
   today,
   type Draft,
 } from './draft'
+import { draftFromDetection, fieldsFilled, saveContextFor } from './fill'
 
 /**
  * How long the form takes to clear itself after a save. Matches the
@@ -33,10 +36,36 @@ function prefersReducedMotion(): boolean {
   return globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
 }
 
-export function PostingForm({ onSaved }: { onSaved: () => void }) {
+/**
+ * A fill that has happened: what was filled, and from where.
+ *
+ * The draft is kept as well as the detection because it becomes the dirty
+ * baseline. `isDirty` has compared against a baseline rather than against empty
+ * since phase 3, for exactly this: after a fill, "the user has typed something"
+ * has to mean "different from what was filled in", not "not blank" (decision
+ * 13). Without it, Discard would light up on a form nobody had touched.
+ */
+interface Filled {
+  detection: DetectionSummary
+  draft: Draft
+}
+
+export function PostingForm({
+  onSaved,
+  detection,
+}: {
+  onSaved: () => void
+  /** What the active tab is showing, or `null` if it is not a posting. */
+  detection: DetectionSummary | null
+}) {
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT)
   const [phase, setPhase] = useState<Phase>({ name: 'editing' })
   const [showErrors, setShowErrors] = useState(false)
+  const [filled, setFilled] = useState<Filled | null>(null)
+  /** Set when a fill would overwrite typed work and is waiting to be confirmed. */
+  const [confirmingFill, setConfirmingFill] = useState(false)
+  /** The detection whose banner has been folded away, by id. */
+  const [dismissed, setDismissed] = useState<string | null>(null)
 
   /**
    * Fixed for the life of this draft rather than generated at save.
@@ -48,9 +77,32 @@ export function PostingForm({ onSaved }: { onSaved: () => void }) {
   const [draftId, setDraftId] = useState(newId)
 
   const errors = draftErrors(draft)
-  const dirty = isDirty(draft)
+  const dirty = isDirty(draft, filled?.draft ?? EMPTY_DRAFT)
+
+  /**
+   * Whether there is anything to throw away.
+   *
+   * Not the same question as `dirty`, and conflating them broke Discard. After
+   * a fill the draft *equals* its baseline, so `dirty` is false while the form
+   * is full — leaving a user who filled from the wrong posting, which is what a
+   * board that rendered late produces, to clear every field by hand. `dirty`
+   * governs "has the user typed something worth protecting" (decision 13);
+   * this governs "is the form empty", which is what Discard is asking.
+   */
+  const hasContent = dirty || filled !== null
   const busy =
     phase.name === 'checking' || phase.name === 'saving' || phase.name === 'wiping'
+
+  /**
+   * A detection worth offering: one that is not already in the form.
+   *
+   * Comparing on `detectionId` rather than on the URL means a re-read of the
+   * same page — which the content script does when a single-page board renders
+   * late — offers itself again with the better parse, while a page that has not
+   * changed does not nag.
+   */
+  const offered =
+    detection && detection.detectionId !== filled?.detection.detectionId ? detection : null
 
   const field = <K extends keyof Draft>(key: K, value: Draft[K]) => {
     setDraft((current) => ({ ...current, [key]: value }))
@@ -64,6 +116,24 @@ export function PostingForm({ onSaved }: { onSaved: () => void }) {
     setDraftId(newId())
     setShowErrors(false)
     setPhase({ name: 'editing' })
+    setFilled(null)
+    setConfirmingFill(false)
+    setDismissed(null)
+  }
+
+  /**
+   * Applies a detection to the form.
+   *
+   * Layered over the current draft rather than replacing it, so status, notes,
+   * tags and the applied date — none of which a job board knows anything about —
+   * survive a fill. See `fill.ts`.
+   */
+  const applyFill = (summary: DetectionSummary) => {
+    const next = draftFromDetection(summary, draft)
+    setDraft(next)
+    setFilled({ detection: summary, draft: next })
+    setConfirmingFill(false)
+    if (phase.name === 'duplicate' || phase.name === 'failed') setPhase({ name: 'editing' })
   }
 
   // The wipe is driven by a timer rather than `animationend`, so a form that is
@@ -82,7 +152,14 @@ export function PostingForm({ onSaved }: { onSaved: () => void }) {
       return
     }
 
-    const posting = toPostingInput(draft, draftId)
+    // Provenance travels with the save rather than being stamped on later: a
+    // record that came off a page has to say which adapter read it, or a fix to
+    // that adapter has no way to find the records it should replay (decision 6).
+    const posting = toPostingInput(
+      draft,
+      draftId,
+      filled ? saveContextFor(filled.detection, draft) : MANUAL_SAVE,
+    )
 
     try {
       if (!force) {
@@ -95,7 +172,12 @@ export function PostingForm({ onSaved }: { onSaved: () => void }) {
       }
 
       setPhase({ name: 'saving' })
-      await send('posting/upsert', { posting })
+      // The id, not the snapshot: the worker has the page source cached and the
+      // panel never needs to hold 256KB of it. See `lib/detection.ts`.
+      await send('posting/upsert', {
+        posting,
+        detectionId: filled?.detection.detectionId,
+      })
       onSaved()
       setPhase({ name: 'wiping' })
     } catch (error) {
@@ -116,6 +198,40 @@ export function PostingForm({ onSaved }: { onSaved: () => void }) {
       }}
       noValidate
     >
+      {offered && (
+        <DetectedNotice
+          detection={offered}
+          changes={fieldsFilled(offered, draft).length}
+          confirming={confirmingFill}
+          quiet={dismissed === offered.detectionId}
+          // Locked for the same reason the fieldset below is, and it was
+          // outside it: a fill landing during a save writes into `draft` and
+          // `filled` after `toPostingInput` has already snapshotted the draft,
+          // so the record is written with the pre-fill values and manual
+          // provenance — and then `reset()` wipes the fill on the way out.
+          // Every way into the form has to be shut while a save is in flight,
+          // not just the inputs.
+          busy={busy}
+          onFill={() => {
+            // Decision 13 in its explicit-click form. A pristine form fills
+            // straight away; a form with typed work in it asks first, because
+            // "fill from this page" is not the same request as "throw away what
+            // I wrote". Live auto-fill, and the swap rules around it, are
+            // phase 5.
+            if (dirty && !confirmingFill) setConfirmingFill(true)
+            else applyFill(offered)
+          }}
+          onDismiss={() => {
+            // Folds the banner down to a one-line offer rather than removing
+            // it. Decision 13 is explicit that dismissing must not discard the
+            // detection silently, and a button that has quietly stopped
+            // existing is not something a user can ask for again.
+            setDismissed(offered.detectionId)
+            setConfirmingFill(false)
+          }}
+        />
+      )}
+
       {/*
         Locked while a save is in flight. `toPostingInput` snapshots the draft
         before the round-trip, and on a cold worker that round-trip is not
@@ -242,7 +358,7 @@ export function PostingForm({ onSaved }: { onSaved: () => void }) {
           type="button"
           className="button button--quiet"
           onClick={reset}
-          disabled={!dirty || busy}
+          disabled={!hasContent || busy}
         >
           Discard
         </button>
@@ -251,6 +367,96 @@ export function PostingForm({ onSaved }: { onSaved: () => void }) {
         </button>
       </div>
     </form>
+  )
+}
+
+/**
+ * Offers what the page said, and shows enough of it to be judged.
+ *
+ * It names the fields it would fill and the adapter that read them rather than
+ * just claiming a posting was found. A user who can see "company, job title,
+ * location · greenhouse" before clicking does not have to undo anything to find
+ * out what the button does — which matters because the tiers genuinely differ in
+ * quality, and a `generic` read off a link preview deserves more suspicion than
+ * a board's own state blob.
+ *
+ * The confidence number is deliberately not shown. It is coverage weighted by
+ * trust, not a probability that the parse is right (see `extract/merge.ts`), and
+ * a percentage in a UI is read as the second thing no matter what the tooltip
+ * says.
+ */
+function DetectedNotice({
+  detection,
+  changes,
+  confirming,
+  quiet,
+  busy,
+  onFill,
+  onDismiss,
+}: {
+  detection: DetectionSummary
+  changes: number
+  confirming: boolean
+  quiet: boolean
+  busy: boolean
+  onFill: () => void
+  onDismiss: () => void
+}) {
+  const { company, jobTitle } = detection.fields
+  const heading = [jobTitle, company].filter(Boolean).join(' · ')
+
+  if (quiet) {
+    return (
+      <p className="detected detected--quiet">
+        <button
+          type="button"
+          className="button button--quiet"
+          onClick={onFill}
+          disabled={busy}
+        >
+          {/* The confirm step has to be visible here too. Dismissed, the
+              banner is a single button, and asking for confirmation by
+              flipping a state nothing renders made the first click look like a
+              dead button — the fill only happened on the second, for no reason
+              the user could see. */}
+          {confirming ? 'Replace what you typed?' : 'Fill from this page'}
+        </button>
+      </p>
+    )
+  }
+
+  return (
+    <div className="notice detected" role="status">
+      <p className="notice__title">
+        {confirming ? 'Replace what you have typed?' : 'This page looks like a posting.'}
+      </p>
+      <p>{heading}</p>
+      <p className="notice__detail">
+        {changes === 0
+          ? 'Nothing new to fill in'
+          : `Would fill ${changes} field${changes === 1 ? '' : 's'}`}
+        {` · read by ${detection.source}`}
+        {detection.snapshotBytes > 0 && ' · page kept for re-parsing'}
+      </p>
+      <div className="notice__actions">
+        <button
+          type="button"
+          className="button button--quiet"
+          onClick={onDismiss}
+          disabled={busy}
+        >
+          Not now
+        </button>
+        <button
+          type="button"
+          className="button"
+          onClick={onFill}
+          disabled={busy || (changes === 0 && !confirming)}
+        >
+          {confirming ? 'Replace' : 'Fill form'}
+        </button>
+      </div>
+    </div>
   )
 }
 

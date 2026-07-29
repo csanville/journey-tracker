@@ -10,7 +10,7 @@
  * stored shape happens once, at save.
  */
 import { newId } from '../lib/ids'
-import type { PostingInput, PostingState, WorkMode } from '../lib/types'
+import type { PostingInput, PostingState, Salary, WorkMode } from '../lib/types'
 
 export interface Draft {
   company: string
@@ -120,19 +120,55 @@ export function parseAppliedAt(value: string): number | null {
 }
 
 /**
+ * Where a record's contents came from, written onto it at save.
+ *
+ * `source` and `adapterVersion` are what make a stored snapshot re-parseable
+ * later (decision 6): they say which parser produced this record, so a fix to
+ * that parser knows which records to replay. A hand-typed record is still an
+ * answer to that question — `manual@1` — which is why the default is a value
+ * rather than an absence.
+ */
+export interface SaveContext {
+  source: string
+  sourceConfidence: number
+  adapterVersion: string
+  /**
+   * A structured salary from an adapter, used in place of the raw text.
+   *
+   * Only passed when the adapter parsed one *and* the user has not edited the
+   * salary field since. The form is all strings, so a range with a currency and
+   * a period cannot survive a round trip through it; carrying it alongside is
+   * what keeps `min`/`max`/`period` from being thrown away the moment they are
+   * shown to somebody.
+   */
+  salary?: Salary | null
+}
+
+export const MANUAL_SAVE: SaveContext = {
+  source: 'manual',
+  sourceConfidence: 1,
+  adapterVersion: 'manual@1',
+}
+
+/**
  * Converts a draft into what the repository stores.
  *
  * `companyNormalized` and `canonicalUrl` are absent by design — the worker
  * derives them, and a form that guessed at them would be a second place for the
  * join keys to disagree.
  *
- * Salary is kept as the raw string the user typed. Splitting it into a range
- * with a currency and a period is parsing, and parsing belongs with the
- * extraction adapters in phase 4; inventing a weaker version of it here would
- * leave two of them to reconcile later.
+ * A typed salary is kept as raw text. Splitting a phrase like "$120k–150k, DOE"
+ * into a range is parsing, and the extraction layer deliberately does not do it
+ * either — see `lib/extract/salary.ts`, which reads structured salary only where
+ * a board states it structurally. Where it did, `context.salary` carries the
+ * result and this uses it.
  */
-export function toPostingInput(draft: Draft, id: string = newId()): PostingInput {
-  const salary = blankToNull(draft.salary)
+export function toPostingInput(
+  draft: Draft,
+  id: string = newId(),
+  context: SaveContext = MANUAL_SAVE,
+): PostingInput {
+  const typed = blankToNull(draft.salary)
 
   return {
     id,
@@ -141,13 +177,13 @@ export function toPostingInput(draft: Draft, id: string = newId()): PostingInput
     location: blankToNull(draft.location),
     workMode: draft.workMode || null,
     atsReqId: blankToNull(draft.atsReqId),
-    salary: salary
-      ? { min: null, max: null, currency: null, period: null, raw: salary }
-      : null,
+    salary:
+      context.salary ??
+      (typed ? { min: null, max: null, currency: null, period: null, raw: typed } : null),
     url: draft.url.trim(),
-    source: 'manual',
-    sourceConfidence: 1,
-    adapterVersion: 'manual@1',
+    source: context.source,
+    sourceConfidence: context.sourceConfidence,
+    adapterVersion: context.adapterVersion,
     state: draft.state,
     // A date only means anything once the application has actually gone in.
     appliedAt: draft.state === 'applied' ? parseAppliedAt(draft.appliedAt) : null,

@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { aPosting, freshDb } from '../test/factories'
+import type { DetectionReport } from './detection'
 import { handleRequest } from './handler'
-import type { Request } from './messages'
+import { allowedFromContentScript, type Request } from './messages'
 import { patchSettings } from './settings'
 import { SCHEMA_VERSION } from './types'
 
@@ -78,5 +79,152 @@ describe('handleRequest', () => {
 
     const count = await handleRequest(db, { kind: 'posting/count' })
     expect(count.ok && count.data).toBe(0)
+  })
+})
+
+/** A report as a content script would send it, with a snapshot attached. */
+function aReport(overrides: Partial<DetectionReport> = {}): DetectionReport {
+  return {
+    detectionId: 'det-1',
+    url: 'https://jobs.lever.co/acme/00000000-0000-4000-8000-000000000000',
+    source: 'lever',
+    adapterVersion: 'lever@1',
+    confidence: 0.71,
+    fields: {
+      company: 'Acme',
+      jobTitle: 'Staff Engineer',
+      location: 'Berlin',
+      workMode: 'hybrid',
+      atsReqId: null,
+      salary: null,
+    },
+    provenance: {
+      company: 'jsonld',
+      jobTitle: 'jsonld',
+      location: 'jsonld',
+      workMode: 'dom',
+      atsReqId: null,
+      salary: null,
+    },
+    snapshot: { trimmedSource: '<html>the posting</html>', truncated: false },
+    ...overrides,
+  }
+}
+
+describe('detection', () => {
+  it('carries a page from the content script to the panel', async () => {
+    const db = await freshDb()
+
+    const stored = await handleRequest(
+      db,
+      { kind: 'detection/report', report: aReport() },
+      { tabId: 12 },
+    )
+    expect(stored.ok && stored.data).toEqual({ detectionId: 'det-1' })
+
+    // The panel asks by tab id, which it gets from `chrome.tabs.query` without
+    // needing the `tabs` permission.
+    const read = await handleRequest(db, { kind: 'detection/get', tabId: 12 })
+
+    expect(read.ok && read.data).toMatchObject({
+      detectionId: 'det-1',
+      source: 'lever',
+      snapshotBytes: '<html>the posting</html>'.length,
+    })
+  })
+
+  it('ignores a report that arrived without a tab', async () => {
+    const db = await freshDb()
+
+    // Which is to say, one that did not come from a content script. A detection
+    // not attached to a tab is one the panel could never ask for.
+    const response = await handleRequest(db, {
+      kind: 'detection/report',
+      report: aReport(),
+    })
+
+    expect(response.ok && response.data).toBeNull()
+  })
+
+  it('ignores a report that does not survive validation', async () => {
+    const db = await freshDb()
+    const junk = aReport()
+    junk.fields = { ...junk.fields, company: null, jobTitle: null }
+
+    const response = await handleRequest(
+      db,
+      { kind: 'detection/report', report: junk },
+      { tabId: 12 },
+    )
+
+    expect(response.ok && response.data).toBeNull()
+
+    const read = await handleRequest(db, { kind: 'detection/get', tabId: 12 })
+    expect(read.ok && read.data).toBeNull()
+  })
+
+  it('stores the snapshot of the page a record was filled from', async () => {
+    const db = await freshDb()
+    await handleRequest(db, { kind: 'detection/report', report: aReport() }, { tabId: 12 })
+
+    const posting = aPosting()
+    await handleRequest(db, { kind: 'posting/upsert', posting, detectionId: 'det-1' })
+
+    const snapshot = await handleRequest(db, {
+      kind: 'snapshot/get',
+      postingId: posting.id,
+    })
+
+    expect(snapshot.ok && snapshot.data).toMatchObject({
+      postingId: posting.id,
+      adapterVersion: 'lever@1',
+      trimmedSource: '<html>the posting</html>',
+      truncated: false,
+    })
+  })
+
+  it('saves the record even when the detection has expired', async () => {
+    const db = await freshDb()
+    const posting = aPosting()
+
+    // The tab navigated on, so the only snapshot available is of a different
+    // page. Writing none is the right answer, and it must not cost the user the
+    // application they just filed.
+    const response = await handleRequest(db, {
+      kind: 'posting/upsert',
+      posting,
+      detectionId: 'long-gone',
+    })
+
+    expect(response.ok).toBe(true)
+    const snapshot = await handleRequest(db, {
+      kind: 'snapshot/get',
+      postingId: posting.id,
+    })
+    expect(snapshot.ok && snapshot.data).toBeNull()
+  })
+
+  it('leaves a hand-typed record without a snapshot', async () => {
+    const db = await freshDb()
+    const posting = aPosting()
+
+    await handleRequest(db, { kind: 'posting/upsert', posting })
+
+    const snapshot = await handleRequest(db, {
+      kind: 'snapshot/get',
+      postingId: posting.id,
+    })
+    expect(snapshot.ok && snapshot.data).toBeNull()
+  })
+})
+
+describe('allowedFromContentScript', () => {
+  it('lets a content script report, and nothing else', () => {
+    // Not a wall against an attacker — a web page cannot reach `onMessage` at
+    // all. A wall against an ambient capability nothing uses.
+    expect(allowedFromContentScript('detection/report')).toBe(true)
+    expect(allowedFromContentScript('posting/delete')).toBe(false)
+    expect(allowedFromContentScript('posting/upsert')).toBe(false)
+    expect(allowedFromContentScript('detection/get')).toBe(false)
   })
 })

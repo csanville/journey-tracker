@@ -8,10 +8,17 @@ There is no server and no account. Nothing is transmitted anywhere.
 
 ## Status
 
-**Phase 3 — the form.** The side panel files a job application by hand: a full
-form with dirty tracking, a duplicate check before saving, and a save that clears
-the form for the next one. Records carry the join keys derived in phase 2.
-Auto-filling from the page you are looking at arrives in phases 4 and 5.
+**Phase 4 — extraction.** Open a Greenhouse or Lever posting and the panel offers
+to fill the form from it: employer, role, location, work mode and salary where the
+board states one, plus the posting's URL. The page it read is kept alongside the
+record, trimmed, so a parser fix can be replayed against it later.
+
+Filling is a button, not yet automatic — the panel checks the current tab when it
+opens and when you click back into it. Following tabs as you switch between
+postings is phase 5.
+
+Everything from phase 3 is unchanged: a full form with dirty tracking, a
+duplicate check before saving, and a save that clears the form for the next one.
 See `docs/ROADMAP.md` for the phase plan and `docs/DECISIONS.md` for the
 architecture decisions behind it.
 
@@ -75,9 +82,12 @@ one to rely on.
 manifest.json              MV3 manifest — permissions live here, keep them narrow
 vite.config.ts             Vite + CRXJS
 src/background/            service worker
+src/content/               the reader that runs on a job page
 src/sidepanel/             the panel UI
 src/lib/                   schema, storage, message layer
 src/lib/normalize/         join-key derivation — company, URL, ATS req id
+src/lib/extract/           tiered adapters, snapshot trimming
+src/test/fixtures/         real captured job pages the adapters are tested against
 tools/make-icons.py        regenerates public/icons/*.png
 tools/build-win.sh         builds to the Windows filesystem, for WSL
 .prettierrc.json           formatting; run `npm run format` before committing

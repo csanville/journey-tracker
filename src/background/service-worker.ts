@@ -6,8 +6,9 @@
  * raced between however many panels happen to be open (decision 4).
  */
 import { openDb, type JourneyTrackerDb } from '../lib/db'
+import { forgetTab } from '../lib/detection'
 import { handleRequest } from '../lib/handler'
-import { isRequest } from '../lib/messages'
+import { allowedFromContentScript, isRequest } from '../lib/messages'
 import { runPendingMigrations } from '../lib/migrations'
 import { recordStorageProtection } from '../lib/persistence'
 
@@ -68,12 +69,34 @@ chrome.runtime.onStartup.addListener(() => {
   })
 })
 
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+/**
+ * A tab's detection is only useful while the tab exists, and
+ * `chrome.storage.session` is a shared 10MB budget. Cleaning up here means the
+ * cache's own eviction bound is a backstop rather than the only thing keeping
+ * it from filling with closed tabs. No permission is needed for this listener —
+ * `onRemoved` reports an id, not a URL.
+ */
+chrome.tabs.onRemoved.addListener((tabId) => {
+  void forgetTab(tabId).catch((error: unknown) => {
+    console.error('[JourneyTracker] could not forget tab', tabId, error)
+  })
+})
+
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!isRequest(message)) return false
+
+  // `sender.tab` is set exactly when the sender is a content script. The panel
+  // and the worker's own callers have no tab, and nothing in the extension
+  // needs a content script to be able to write or delete records.
+  const fromContentScript = sender.tab !== undefined
+  if (fromContentScript && !allowedFromContentScript(message.kind)) {
+    sendResponse({ ok: false, error: `not available to content scripts: ${message.kind}` })
+    return false
+  }
 
   void (async () => {
     try {
-      sendResponse(await handleRequest(await ready(), message))
+      sendResponse(await handleRequest(await ready(), message, { tabId: sender.tab?.id }))
     } catch (error) {
       sendResponse({
         ok: false,
