@@ -141,7 +141,9 @@ export function toPostingInput(draft: Draft, id: string = newId()): PostingInput
     location: blankToNull(draft.location),
     workMode: draft.workMode || null,
     atsReqId: blankToNull(draft.atsReqId),
-    salary: salary ? { min: null, max: null, currency: null, period: null, raw: salary } : null,
+    salary: salary
+      ? { min: null, max: null, currency: null, period: null, raw: salary }
+      : null,
     url: draft.url.trim(),
     source: 'manual',
     sourceConfidence: 1,

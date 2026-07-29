@@ -201,10 +201,7 @@ export async function deletePosting(db: JourneyTrackerDb, id: string): Promise<v
  * to keep raw source is re-parsing the *current* posting after a parser fix
  * (decision 6).
  */
-export async function putSnapshot(
-  db: JourneyTrackerDb,
-  snapshot: Snapshot,
-): Promise<void> {
+export async function putSnapshot(db: JourneyTrackerDb, snapshot: Snapshot): Promise<void> {
   await db.snapshots.put(snapshot)
 }
 

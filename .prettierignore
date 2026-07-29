@@ -1,0 +1,7 @@
+dist
+node_modules
+
+# The docs are hand-wrapped prose. Prettier leaves line breaks alone by default,
+# but it still rewrites list markers and emphasis, and the diff noise is not
+# worth it for files that are read far more often than they are edited.
+*.md

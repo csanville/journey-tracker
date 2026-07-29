@@ -54,7 +54,10 @@ export function formatWhen(timestamp: number, now: number = Date.now()): string 
   if (days === 1) return 'yesterday'
   if (days < 7) return `${days} days ago`
 
-  return new Date(timestamp).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+  return new Date(timestamp).toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+  })
 }
 
 /** Local midnight, so the comparison is between calendar days. */

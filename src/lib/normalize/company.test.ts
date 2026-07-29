@@ -8,7 +8,13 @@ import { normalizeCompany } from './company'
 const COLLAPSE: Array<{ what: string; variants: string[] }> = [
   {
     what: 'legal suffix and punctuation noise',
-    variants: ['Acme, Inc.', 'ACME Inc', 'Acme Incorporated', 'acme inc.', '  Acme   Inc  '],
+    variants: [
+      'Acme, Inc.',
+      'ACME Inc',
+      'Acme Incorporated',
+      'acme inc.',
+      '  Acme   Inc  ',
+    ],
   },
   {
     what: 'stacked legal forms',

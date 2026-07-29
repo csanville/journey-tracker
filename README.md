@@ -80,6 +80,7 @@ src/lib/                   schema, storage, message layer
 src/lib/normalize/         join-key derivation — company, URL, ATS req id
 tools/make-icons.py        regenerates public/icons/*.png
 tools/build-win.sh         builds to the Windows filesystem, for WSL
+.prettierrc.json           formatting; run `npm run format` before committing
 docs/ROADMAP.md            the phase plan
 docs/DECISIONS.md          architecture decisions and their revisit conditions
 ```

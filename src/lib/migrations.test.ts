@@ -204,7 +204,10 @@ describe('runPendingMigrations', () => {
     }
 
     await expect(
-      runPendingMigrations(db, { targetVersion: 3, migrations: [migration(2, ran), flaky] }),
+      runPendingMigrations(db, {
+        targetVersion: 3,
+        migrations: [migration(2, ran), flaky],
+      }),
     ).rejects.toThrow('worker terminated')
 
     // Version 2 completed and was recorded, so the retry must not replay it.
@@ -229,7 +232,13 @@ describe('runPendingMigrations', () => {
       runPendingMigrations(db, {
         targetVersion: 2,
         migrations: [
-          { to: 2, description: 'explodes', run: async () => { throw new Error('boom') } },
+          {
+            to: 2,
+            description: 'explodes',
+            run: async () => {
+              throw new Error('boom')
+            },
+          },
         ],
       }),
     ).rejects.toThrow('boom')

@@ -69,14 +69,18 @@ describe('send', () => {
   })
 
   it('does not retry an error the worker deliberately returned', async () => {
-    const { sendMessage } = stubSendMessage([() => ({ ok: false, error: 'no such posting' })])
+    const { sendMessage } = stubSendMessage([
+      () => ({ ok: false, error: 'no such posting' }),
+    ])
 
     await expect(send('posting/get', { id: 'nope' })).rejects.toThrow('no such posting')
     expect(sendMessage).toHaveBeenCalledTimes(1)
   })
 
   it('gives up rather than retrying forever', async () => {
-    const { sendMessage } = stubSendMessage([throws('The message port closed before a response')])
+    const { sendMessage } = stubSendMessage([
+      throws('The message port closed before a response'),
+    ])
 
     await expect(send('posting/count', {})).rejects.toThrow(/message port closed/)
     expect(sendMessage).toHaveBeenCalledTimes(4)

@@ -26,7 +26,7 @@ export interface RequestMap {
   }
   'snapshot/put': { payload: { snapshot: Snapshot }; result: { postingId: string } }
   'snapshot/get': { payload: { postingId: string }; result: Snapshot | null }
-  'status': { payload: NoPayload; result: StatusReport }
+  status: { payload: NoPayload; result: StatusReport }
   /**
    * Re-reads storage protection and records the answer. The panel sends this
    * after calling `persist()`, which only a Window context can do — the worker
@@ -49,8 +49,7 @@ export type Request<K extends RequestKind = RequestKind> = K extends RequestKind
 export type Result<K extends RequestKind> = RequestMap[K]['result']
 
 export type Response<K extends RequestKind> =
-  | { ok: true; data: Result<K> }
-  | { ok: false; error: string }
+  { ok: true; data: Result<K> } | { ok: false; error: string }
 
 /** What the worker can tell the panel about its own health. */
 export interface StatusReport {
