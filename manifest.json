@@ -5,6 +5,13 @@
   "description": "Track your job application journey. Everything stays in your browser.",
   "minimum_chrome_version": "116",
   "permissions": ["sidePanel", "storage", "unlimitedStorage"],
+  "content_scripts": [
+    {
+      "matches": ["https://*.greenhouse.io/*", "https://jobs.lever.co/*"],
+      "js": ["src/content/content-script.ts"],
+      "run_at": "document_idle"
+    }
+  ],
   "background": {
     "service_worker": "src/background/service-worker.ts",
     "type": "module"

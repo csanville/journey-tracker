@@ -156,6 +156,27 @@ body {
   background: transparent;
 }
 
+/*
+ * The detected-posting banner borrows `.notice`'s layout but not its colour.
+ * `.notice` is amber because it is a caution — a duplicate, a failed save, a
+ * storage warning. A page offering to fill the form in is an offer, so it takes
+ * the indigo accent instead; using the caution colour for good news is how a
+ * palette stops meaning anything.
+ */
+.detected {
+  border-color: var(--indigo);
+  background: transparent;
+}
+
+.detected--quiet {
+  display: flex;
+  justify-content: flex-start;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+}
+
 /* ---- form ---------------------------------------------------------------- */
 
 .form {

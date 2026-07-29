@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState } from 'react'
 import { send } from '../lib/client'
+import type { DetectionSummary } from '../lib/detection'
 import type { StatusReport } from '../lib/messages'
 import { requestPersistence } from '../lib/persistence'
 import type { Posting } from '../lib/types'
+import { activeTabDetection } from './detection-client'
 import { PostingForm } from './PostingForm'
 import { RecentPostings } from './RecentPostings'
 
@@ -20,6 +22,7 @@ export function App() {
   /** `null` until the first load answers — distinct from "loaded, and empty". */
   const [postings, setPostings] = useState<Posting[] | null>(null)
   const [failure, setFailure] = useState<string | null>(null)
+  const [detection, setDetection] = useState<DetectionSummary | null>(null)
   const version = chrome.runtime.getManifest().version
 
   const refresh = useCallback(async (): Promise<StatusReport | null> => {
@@ -38,6 +41,37 @@ export function App() {
       return null
     }
   }, [])
+
+  /**
+   * Re-asks what the active tab is showing.
+   *
+   * Called on mount and whenever the panel regains focus — which is to say,
+   * whenever the user clicks back into it, having just been reading a posting.
+   * That covers the phase-4 flow without any tab listeners: the panel is only
+   * ever stale while nobody is looking at it.
+   *
+   * Following tab switches as they happen, and the swap rules that decide what a
+   * half-filled form should do about them, are phase 5 (decision 13).
+   */
+  const refreshDetection = useCallback(async () => {
+    try {
+      setDetection(await activeTabDetection())
+    } catch (error) {
+      // Not reaching the worker is already reported by `refresh`, and a missing
+      // detection is an ordinary state — most pages are not job postings — so
+      // this failure is not worth a second banner.
+      console.debug('[JourneyTracker] could not read the active tab', error)
+    }
+  }, [])
+
+  useEffect(() => {
+    void refreshDetection()
+
+    const onFocus = () => void refreshDetection()
+    globalThis.addEventListener('focus', onFocus)
+
+    return () => globalThis.removeEventListener('focus', onFocus)
+  }, [refreshDetection])
 
   useEffect(() => {
     let cancelled = false
@@ -102,7 +136,16 @@ export function App() {
         </p>
       )}
 
-      <PostingForm onSaved={() => void refresh()} />
+      <PostingForm
+        detection={detection}
+        onSaved={() => {
+          void refresh()
+          // A save wipes the form, so the next thing the user sees should be
+          // this page offering itself again rather than a stale banner about
+          // the posting they just filed.
+          void refreshDetection()
+        }}
+      />
 
       <section className="section">
         <h2 className="section__head">
@@ -137,10 +180,17 @@ export function App() {
                 : 'evictable'}
           </Row>
           <Row label="Postings">{status ? String(status.postingCount) : '—'}</Row>
+          {/* The one probe that answers "is the content script running?", which
+              is otherwise invisible from inside the panel. */}
+          <Row label="This page">
+            {detection
+              ? `${detection.source} · ${Math.round(detection.confidence * 100)}% coverage`
+              : 'no posting detected'}
+          </Row>
         </dl>
       </details>
 
-      <footer className="panel__foot">Phase 3 · the form</footer>
+      <footer className="panel__foot">Phase 4 · extraction</footer>
     </div>
   )
 }

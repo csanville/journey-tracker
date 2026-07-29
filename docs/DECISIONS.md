@@ -56,6 +56,23 @@ collapses them into a vaguer warning once the list grows. It is a much milder
 dialog than `<all_urls>`, not the absence of one. The `activeTab` half of the
 decision is what carries no warning, and it is unaffected.
 
+**Amended — the allowlist is `content_scripts.matches`, not `host_permissions`.**
+Phase 4 shipped the first content script and the decision's own wording turned
+out to name the wrong manifest key. A declarative content script is granted
+injection by its own `matches` patterns; `host_permissions` grants something
+else — `fetch` to those hosts, their cookies, `webRequest` — and this extension
+does none of it. So the manifest declares `content_scripts` and **no
+`host_permissions` at all**, which is strictly less than the decision as
+written asked for, at no cost. The install warning is the same either way, since
+Chrome derives it from both. `optional_host_permissions` for user-added sites is
+still the intended shape and is not built yet.
+
+Related: reading a tab's URL from the extension side is what would need the
+`tabs` permission, and nothing does — the content script reports its own
+`location.href`. The panel calls `chrome.tabs.query` to learn *which* tab it is
+next to, which returns an id to any extension; `url`, `title` and `favIconUrl`
+are the fields that permission gates, and none of them is read.
+
 **Consequences.** Slightly more code — a permission-request flow and a runtime
 injection path in addition to declarative content scripts. Auto-detection
 (showing a badge, or live-filling the panel, before the user clicks) only works
@@ -191,6 +208,45 @@ approach. Coverage of a given board may be partial at the higher tiers, which is
 why adapters return partial results with a confidence score rather than
 all-or-nothing.
 
+**Amended — JSON-LD is not universal, and one of the two launch boards has
+none.** The premise above says boards emit it for Google Jobs indexing. Lever
+does, and a good one. **Greenhouse emits none at all** — the checked-in fixture
+is a real capture of a live posting and contains zero `application/ld+json`
+blocks. The tier is still ranked first where it exists, but "JSON-LD first" is
+not a plan on its own, and the tiers below it are load-bearing rather than
+insurance.
+
+**Amended — the order is JSON-LD → embedded state → DOM → OpenGraph.** The
+original put OpenGraph second. Reading both boards' real markup showed that
+ranking to be actively wrong:
+
+- Lever's `og:title` is `"Lever Demo 2 - Software Engineer"` — employer and role
+  welded together. Its DOM has the role alone in `.posting-headline h2`.
+- Greenhouse's `og:description` is not a description. It holds the location.
+
+OpenGraph is social-preview copy: written to read well in a link unfurl, not to
+name a field, and a board may put anything in it. Anything that knows the site —
+the board's own state blob, a selector aimed at the board's own markup — beats it.
+It stays in the list, last, because it is the only tier that works on a site
+nobody has adapted, which is what makes the generic adapter worth having.
+
+**Amended — the state tier reads script *text*, not globals.** Greenhouse hands
+its posting to the page as `window.__remixContext`. A content script cannot read
+it: it runs in an isolated world with its own JavaScript heap, so its `window` is
+not the page's. The DOM is shared, the state arrives inside a `<script>` element,
+and the text of that element is readable. Parsing the text is not a workaround
+for a missing API — short of a `world: "MAIN"` injection, which puts extension
+code in the page's own context, it is the only path there is.
+
+**Amended — the confidence score is coverage, not accuracy.** It is a 0–1 number
+weighting which tier answered each field by how central that field is. It has no
+way to know whether the title it read is the right title. It separates "JSON-LD
+named the employer" from "we inferred a title from a link preview", which is
+useful; read as a probability of correctness it will mislead, so the UI does not
+show it as a percentage next to a claim. This is the same failure decision 3
+names three times over: a thing recorded as established when only its declaration
+was checked.
+
 **Revisit when.** Never wholesale. Individual adapters may skip tiers a
 particular host does not implement.
 
@@ -222,6 +278,36 @@ first written:
   than dropping the snapshot entirely when it exceeds that.
 - Retain snapshots for the 500 most recent postings; drop the oldest beyond that.
   Records are never dropped, only their snapshots.
+
+**Amended — a snapshot is a parseable document, and that is what makes it
+worth keeping.** Phase 4 built the capture, and the shape it settled on is the
+part worth recording. What is stored is a small, well-formed HTML page: the
+`<title>`, the link-preview meta tags, every JSON-LD block verbatim, and the
+posting's content subtree. That is exactly the input the adapters take, so
+re-parsing a snapshot runs the *same* code path as parsing a live page rather
+than a second one that quietly diverges. A test parses a fixture, snapshots it,
+re-parses the snapshot and demands identical fields.
+
+The 256KB cap is implemented, with truncation and a marker rather than dropping
+the capture. The 500-posting retention sweep is **not built** — snapshots are
+one-per-posting and replaced on re-capture, so nothing grows without bound
+per record, but nothing prunes old ones either. It belongs with export/import in
+phase 6, where the storage picture is already on the table.
+
+**Amended — what "trimmed" excludes, and the PII was not hypothetical.** The
+whole application form goes: `form`, `input`, `textarea`, `select`, `option`.
+The real Greenhouse capture carries a voluntary self-identification
+questionnaire — gender, race, veteran status, disability status — and on a
+logged-in session those fields are prefilled with the user's answers. So do
+inline scripts other than JSON-LD, which is where Greenhouse's state blob lives,
+and the questionnaire with it.
+
+That last exclusion has a real cost, and it is the honest trade: Greenhouse's
+*best* tier is that blob, so a re-parsed Greenhouse snapshot falls back to the
+DOM tier. It loses nothing that matters — title, employer and location are all in
+the kept subtree and the page title — but a future adapter that depended on the
+blob would find it gone. Keeping the user's demographic answers on disk to
+preserve a parser tier is not a trade this project makes.
 
 **Revisit when.** Storage pressure becomes real. Tighten retention or trimming
 before abandoning snapshots.
@@ -316,6 +402,24 @@ URLs on different hosts prove nothing.** One job routinely appears on LinkedIn,
 on an aggregator and on the company's own board under three unrelated URLs —
 that is the case this key exists to catch, so treating any URL difference as
 decisive would have thrown away most of its value.
+
+**Amended — extraction adapters do not write `atsReqId`, and the reason is a
+third trap of the same family.** Every adapter built in phase 4 leaves the
+requisition to `deriveJoinKeys`, which reads it from the URL. That is not an
+omission. Pages hand over ids constantly and they are the wrong ids:
+
+- schema.org's `identifier` is usually the board's internal record id.
+- Greenhouse's state blob carries `hiring_plan_id` — 6368940002 on the captured
+  posting, which is addressed by 8433948002. Worse than merely different: a
+  hiring plan spans every opening on it, so keying on it would merge unrelated
+  roles at one employer.
+
+`deriveJoinKeys` prefers a caller-supplied `atsReqId` over its own URL reading,
+on the reasoning that an adapter which read the page has better information. That
+reasoning holds only for a requisition the page states *as* a requisition — a
+public "Req #" the applicant would quote in an email. None of the fields above is
+that. So the rule is: an adapter writes `atsReqId` only when the page names a
+public requisition number, and until one does, none of them writes it.
 
 **Revisit when.** The external tracker settles into a real schema worth
 integrating with, or is retired. The keys remain useful for in-extension dedupe
@@ -478,3 +582,55 @@ page-derived PII that snapshots contain (decision 6).
 **Revisit when.** A real merge case appears — the same history edited on two
 machines. That needs `updatedAt` (decision 10) and an explicit conflict UI, not a
 silent policy change.
+
+---
+
+## 15. The content script pushes; the worker caches; the panel gets a summary
+
+**Decision.** A content script reports what it parsed, unprompted, along with its
+own `location.href`. The service worker caches that per tab in
+`chrome.storage.session`. The panel asks the worker for the active tab's
+detection and receives a summary **without** the page source. On save it sends
+back only the `detectionId`, and the worker writes the snapshot from its own
+cache.
+
+**Why.** Each hop is forced by something already decided.
+
+- *Push, not pull.* Pulling would mean the extension asking Chrome what a tab's
+  URL is, which needs the `tabs` permission (decision 2). The script reporting
+  its own location needs nothing.
+- *The worker holds it.* It is already the single writer (decision 4) and it is
+  the only context both the page and the panel can reach.
+- *Summary without the source.* The trimmed snapshot is up to 256KB of
+  page-derived text (decision 6). The panel has no use for it; sending it would
+  push it through two message hops into a React state tree for nothing.
+- *`chrome.storage.session`, not a module variable.* An MV3 worker is torn down
+  after roughly 30 seconds idle (decision 9), and the gap between detecting a
+  posting and pressing Save is however long it takes to read a job description.
+  In memory the snapshot would be gone by then — every time, silently, decision 6
+  defeated by a lifecycle detail. `session` is not written to disk, clears when
+  the browser closes, and needs no permission beyond the `storage` already
+  declared.
+- *An id, not a tab, on the way back.* By save time the tab may have navigated
+  on. Looking the snapshot up by id means a tab that moved yields **no**
+  snapshot rather than the wrong one, and a snapshot of a different page attached
+  to this record is worse than none.
+
+**Consequences.** The cache is bounded to eight tabs and evicts by recency; a
+closed tab is forgotten on `chrome.tabs.onRemoved`. Reports are validated on
+arrival — not because the sender is untrusted, since only this extension's own
+content scripts can reach `onMessage`, but because everything *inside* the
+message came off a web page and a page is free to put a megabyte in its
+`<title>`. Content scripts are restricted to the one message they need, so
+`posting/delete` is not an ambient capability sitting in a context that runs
+inside arbitrary markup.
+
+The snapshot write is allowed to fail without failing the save. Decision 6 exists
+to make a future re-parse possible, and losing that is not a reason to lose the
+application the user just filed.
+
+**Revisit when.** Phase 5 makes the panel follow tabs live. The push half does
+not change; what changes is that the panel stops asking only on focus. If the
+session cache ever proves too small for how people actually browse, raise the
+bound before moving the snapshot anywhere more durable — it is page-derived data
+and it should not outlive the browser session.

@@ -1,9 +1,27 @@
 import type { JourneyTrackerDb } from './db'
+import {
+  findSnapshot,
+  getDetectionSummary,
+  recordDetection,
+  sanitizeReport,
+} from './detection'
 import type { Request, RequestKind, Response, Result, StatusReport } from './messages'
 import { recordStorageProtection } from './persistence'
 import * as repo from './repository'
 import { readSettings } from './settings'
 import { SCHEMA_VERSION } from './types'
+
+/**
+ * Who sent the request, as far as the worker can tell for itself.
+ *
+ * Only `tabId` today, and it comes from Chrome's `sender`, not the payload — a
+ * content script cannot claim to be a tab it is not in. It is a separate
+ * argument rather than part of the request so the protocol stays a description
+ * of what is being asked, not of who is asking.
+ */
+export interface RequestContext {
+  tabId?: number
+}
 
 /**
  * Request dispatch, kept out of the service worker itself so it can be tested
@@ -12,9 +30,10 @@ import { SCHEMA_VERSION } from './types'
 export async function handleRequest<K extends RequestKind>(
   db: JourneyTrackerDb,
   request: Request<K>,
+  context: RequestContext = {},
 ): Promise<Response<K>> {
   try {
-    const data = (await dispatch(db, request as Request)) as Result<K>
+    const data = (await dispatch(db, request as Request, context)) as Result<K>
     return { ok: true, data }
   } catch (error) {
     // The panel gets a message, the console gets the stack. Nothing leaves the
@@ -24,10 +43,14 @@ export async function handleRequest<K extends RequestKind>(
   }
 }
 
-async function dispatch(db: JourneyTrackerDb, request: Request): Promise<unknown> {
+async function dispatch(
+  db: JourneyTrackerDb,
+  request: Request,
+  context: RequestContext,
+): Promise<unknown> {
   switch (request.kind) {
     case 'posting/upsert':
-      return repo.upsertPosting(db, request.posting)
+      return upsert(db, request.posting, request.detectionId)
     case 'posting/get':
       return repo.getPosting(db, request.id)
     case 'posting/list':
@@ -44,6 +67,19 @@ async function dispatch(db: JourneyTrackerDb, request: Request): Promise<unknown
       return { postingId: request.snapshot.postingId }
     case 'snapshot/get':
       return repo.getSnapshot(db, request.postingId)
+    case 'detection/report': {
+      // No tab means this did not come from a content script, and a detection
+      // that is not attached to a tab is one the panel could never ask for.
+      if (context.tabId === undefined) return null
+
+      const report = sanitizeReport(request.report)
+      if (!report) return null
+
+      await recordDetection(context.tabId, report)
+      return { detectionId: report.detectionId }
+    }
+    case 'detection/get':
+      return getDetectionSummary(request.tabId)
     case 'status':
       return status(db)
     case 'storage/reassess':
@@ -55,6 +91,45 @@ async function dispatch(db: JourneyTrackerDb, request: Request): Promise<unknown
       throw new Error(`unhandled request: ${JSON.stringify(exhaustive)}`)
     }
   }
+}
+
+/**
+ * Writes the posting, then the snapshot of the page it was filled from.
+ *
+ * Ordered that way because the snapshot is the optional half: a record with no
+ * snapshot is a working record, while a snapshot with no record is an orphan.
+ * The snapshot write is also allowed to fail without failing the save —
+ * decision 6 exists to make a future re-parse possible, and losing that is not
+ * a reason to lose the application the user just filed.
+ *
+ * A `detectionId` that is no longer cached writes nothing, and that is correct
+ * rather than a miss. It means the tab has navigated on since the form was
+ * filled, so the only snapshot available is of a different page.
+ */
+async function upsert(
+  db: JourneyTrackerDb,
+  input: Parameters<typeof repo.upsertPosting>[1],
+  detectionId?: string,
+): Promise<unknown> {
+  const posting = await repo.upsertPosting(db, input)
+  if (!detectionId) return posting
+
+  try {
+    const detection = await findSnapshot(detectionId)
+    if (detection?.snapshot.trimmedSource) {
+      await repo.putSnapshot(db, {
+        postingId: posting.id,
+        capturedAt: detection.capturedAt,
+        adapterVersion: detection.adapterVersion,
+        trimmedSource: detection.snapshot.trimmedSource,
+        truncated: detection.snapshot.truncated,
+      })
+    }
+  } catch (error) {
+    console.error('[JourneyTracker] could not store the snapshot', error)
+  }
+
+  return posting
 }
 
 async function status(db: JourneyTrackerDb): Promise<StatusReport> {
