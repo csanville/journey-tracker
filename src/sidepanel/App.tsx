@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { send } from '../lib/client'
 import type { DetectionSummary } from '../lib/detection'
 import type { StatusReport } from '../lib/messages'
@@ -52,10 +52,22 @@ export function App() {
    *
    * Following tab switches as they happen, and the swap rules that decide what a
    * half-filled form should do about them, are phase 5 (decision 13).
+   *
+   * The counter is not ceremony. This fires on mount *and* on every focus, so
+   * two calls overlap whenever the user clicks into the panel while the first
+   * is still waiting on a cold worker — and on a cold worker `send` retries for
+   * the better part of a second. Resolved out of order, the older answer wins
+   * and the panel offers the tab the user has already left. Only the newest
+   * request is allowed to set state, and after unmount none of them is.
    */
+  const latestDetection = useRef(0)
+
   const refreshDetection = useCallback(async () => {
+    const mine = ++latestDetection.current
+
     try {
-      setDetection(await activeTabDetection())
+      const next = await activeTabDetection()
+      if (mine === latestDetection.current) setDetection(next)
     } catch (error) {
       // Not reaching the worker is already reported by `refresh`, and a missing
       // detection is an ordinary state — most pages are not job postings — so
@@ -70,7 +82,12 @@ export function App() {
     const onFocus = () => void refreshDetection()
     globalThis.addEventListener('focus', onFocus)
 
-    return () => globalThis.removeEventListener('focus', onFocus)
+    return () => {
+      globalThis.removeEventListener('focus', onFocus)
+      // Retires every request in flight, so none of them sets state on an
+      // unmounted panel.
+      latestDetection.current++
+    }
   }, [refreshDetection])
 
   useEffect(() => {

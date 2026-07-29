@@ -223,6 +223,36 @@ async function writeCache(cache: Cache): Promise<void> {
   await chrome.storage.session.set({ [CACHE_KEY]: cache })
 }
 
+/**
+ * Serializes every read-modify-write of the cache.
+ *
+ * `chrome.storage` is asynchronous, so a read and the write that depends on it
+ * are two turns with a gap between them, and the worker is free to service
+ * another message in that gap. Two tabs reporting at once is not a rare
+ * interleaving to reason about — it is what happens every time somebody
+ * middle-clicks two postings from a search page, because both content scripts
+ * fire their first attempt on the same timer. Interleaved, the second write
+ * lands on a snapshot of the cache taken before the first, and one tab's
+ * detection disappears: the panel says "no posting detected" for a page whose
+ * content script parsed it perfectly, with nothing in any console.
+ *
+ * A promise chain is enough. The worker is single-threaded, so the only
+ * concurrency is this — awaits interleaving inside one thread — and queueing
+ * the whole read-modify-write behind the previous one removes it. The queue is
+ * per-worker-lifetime, which is the same lifetime as the only writer there is
+ * (decision 4).
+ */
+let queue: Promise<unknown> = Promise.resolve()
+
+function serialized<T>(operation: () => Promise<T>): Promise<T> {
+  // The failure of one operation must not poison the queue for the next, so the
+  // chain is continued from a settled promise rather than the returned one.
+  const result = queue.then(operation, operation)
+  queue = result.catch(() => undefined)
+
+  return result
+}
+
 export function summarize(detection: CachedDetection): DetectionSummary {
   const { snapshot: kept, ...rest } = detection
 
@@ -233,28 +263,30 @@ export function summarize(detection: CachedDetection): DetectionSummary {
  * Stores a detection against the tab that reported it, evicting the oldest once
  * the cache is full.
  */
-export async function recordDetection(
+export function recordDetection(
   tabId: number,
   report: DetectionReport,
   capturedAt: number = Date.now(),
 ): Promise<CachedDetection> {
-  const cache = await readCache()
-  const detection: CachedDetection = { ...report, capturedAt }
+  return serialized(async () => {
+    const cache = await readCache()
+    const detection: CachedDetection = { ...report, capturedAt }
 
-  cache[String(tabId)] = detection
+    cache[String(tabId)] = detection
 
-  const entries = Object.entries(cache)
-  if (entries.length > MAX_CACHED_TABS) {
-    const survivors = entries
-      .sort(([, a], [, b]) => b.capturedAt - a.capturedAt)
-      .slice(0, MAX_CACHED_TABS)
+    const entries = Object.entries(cache)
+    if (entries.length > MAX_CACHED_TABS) {
+      const survivors = entries
+        .sort(([, a], [, b]) => b.capturedAt - a.capturedAt)
+        .slice(0, MAX_CACHED_TABS)
 
-    await writeCache(Object.fromEntries(survivors))
+      await writeCache(Object.fromEntries(survivors))
+      return detection
+    }
+
+    await writeCache(cache)
     return detection
-  }
-
-  await writeCache(cache)
-  return detection
+  })
 }
 
 /** The panel's view of what is on a tab, or `null` if nothing was detected. */
@@ -281,11 +313,20 @@ export async function findSnapshot(detectionId: string): Promise<CachedDetection
   )
 }
 
-/** Drops a tab's detection. Used when a tab closes. */
-export async function forgetTab(tabId: number): Promise<void> {
-  const cache = await readCache()
-  if (!(String(tabId) in cache)) return
+/**
+ * Drops a tab's detection. Used when a tab closes.
+ *
+ * Serialized for the same reason as `recordDetection`, and against a sharper
+ * failure: interleaved with a report from another tab, an unqueued delete
+ * writes back a cache snapshot taken before that report — resurrecting the
+ * closed tab's entry and losing the live one.
+ */
+export function forgetTab(tabId: number): Promise<void> {
+  return serialized(async () => {
+    const cache = await readCache()
+    if (!(String(tabId) in cache)) return
 
-  delete cache[String(tabId)]
-  await writeCache(cache)
+    delete cache[String(tabId)]
+    await writeCache(cache)
+  })
 }

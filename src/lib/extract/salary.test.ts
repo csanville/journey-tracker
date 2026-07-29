@@ -37,6 +37,28 @@ describe('parseBaseSalary', () => {
     expect(salary).toMatchObject({ min: 180000, max: 220000 })
   })
 
+  it('leaves a one-sided range one-sided', () => {
+    // "Up to 200,000" is not "exactly 200,000". Mirroring the stated end into
+    // the missing one records a floor the employer never offered, and it reads
+    // as authoritative in every later aggregation — the wrong-salary failure
+    // this module refuses to risk.
+    expect(
+      parseBaseSalary({ value: { maxValue: 200000, unitText: 'YEAR' } }),
+    ).toMatchObject({ min: null, max: 200000, raw: 'up to 200,000 per year' })
+
+    expect(
+      parseBaseSalary({ currency: 'USD', value: { minValue: 150000, unitText: 'YEAR' } }),
+    ).toMatchObject({ min: 150000, max: null, raw: 'from USD 150,000 per year' })
+  })
+
+  it('still collapses a range whose ends are equal', () => {
+    expect(parseBaseSalary({ value: { minValue: 1000, maxValue: 1000 } })).toMatchObject({
+      min: 1000,
+      max: 1000,
+      raw: '1,000',
+    })
+  })
+
   it('refuses a zero, a negative, and an unparseable string', () => {
     // `Number('')` is 0 and `Number('120k')` is NaN. A salary of zero written
     // into a record reads as a real figure forever, so neither is coerced.

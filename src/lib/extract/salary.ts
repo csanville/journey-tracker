@@ -95,10 +95,16 @@ function render(
   const money = (amount: number) =>
     `${currency ? `${currency} ` : ''}${amount.toLocaleString('en-US')}`
 
+  // An open-ended range says so. "up to 200,000" and "200,000" are different
+  // claims, and the string is what the user reads in the form before saving.
   const range =
-    min !== null && max !== null && min !== max
-      ? `${money(min)}–${money(max)}`
-      : money((min ?? max) as number)
+    min !== null && max !== null
+      ? min === max
+        ? money(min)
+        : `${money(min)}–${money(max)}`
+      : min !== null
+        ? `from ${money(min)}`
+        : `up to ${money(max as number)}`
 
   return period ? `${range} per ${period}` : range
 }
@@ -139,8 +145,16 @@ export function parseBaseSalary(raw: unknown): Salary | null {
 
   // A range whose ends arrived backwards is a page bug, not a signal; ordering
   // them here keeps every downstream comparison honest.
-  const low = min !== null && max !== null ? Math.min(min, max) : (min ?? max)
-  const high = min !== null && max !== null ? Math.max(min, max) : (max ?? min)
+  //
+  // An end that is *absent* is left absent. A posting that states only a
+  // maximum is saying "up to 200,000", and mirroring that figure into `min`
+  // would record a floor the employer never offered — an invented number that
+  // reads as authoritative in every later aggregation, which is the exact
+  // failure this module's preamble refuses to risk. A one-sided range is
+  // honest; a fabricated two-sided one is not.
+  const ordered = min !== null && max !== null
+  const low = ordered ? Math.min(min, max) : min
+  const high = ordered ? Math.max(min, max) : max
 
   return { min: low, max: high, currency, period, raw: render(low, high, currency, period) }
 }

@@ -149,6 +149,48 @@ describe('the detection cache', () => {
     expect(await getDetectionSummary(MAX_CACHED_TABS)).not.toBeNull()
   })
 
+  it('keeps both tabs when two content scripts report at once', async () => {
+    // Not an exotic interleaving: middle-clicking two postings from a search
+    // page makes both content scripts fire their first attempt on the same
+    // timer. A read and the write that depends on it are two turns with a gap,
+    // and unserialized the second write lands on a cache snapshot taken before
+    // the first — so one tab's detection vanishes, and the panel says "no
+    // posting detected" for a page that parsed perfectly.
+    await Promise.all([
+      recordDetection(1, aReport({ detectionId: 'tab-one' }), 1000),
+      recordDetection(2, aReport({ detectionId: 'tab-two' }), 1001),
+    ])
+
+    expect((await getDetectionSummary(1))?.detectionId).toBe('tab-one')
+    expect((await getDetectionSummary(2))?.detectionId).toBe('tab-two')
+  })
+
+  it('does not resurrect a closed tab when a forget races a report', async () => {
+    await recordDetection(1, aReport({ detectionId: 'doomed' }), 1000)
+
+    await Promise.all([
+      forgetTab(1),
+      recordDetection(2, aReport({ detectionId: 'live' }), 1002),
+    ])
+
+    expect(await getDetectionSummary(1)).toBeNull()
+    expect((await getDetectionSummary(2))?.detectionId).toBe('live')
+  })
+
+  it('keeps every tab when a full cache is written concurrently', async () => {
+    await Promise.all(
+      Array.from({ length: MAX_CACHED_TABS }, (_, tab) =>
+        recordDetection(tab, aReport({ detectionId: `det-${tab}` }), 1000 + tab),
+      ),
+    )
+
+    const found = await Promise.all(
+      Array.from({ length: MAX_CACHED_TABS }, (_, tab) => getDetectionSummary(tab)),
+    )
+
+    expect(found.filter(Boolean)).toHaveLength(MAX_CACHED_TABS)
+  })
+
   it('finds a snapshot by detection id, wherever the tab has got to', async () => {
     await recordDetection(7, aReport({ detectionId: 'wanted' }), 1000)
     await recordDetection(8, aReport({ detectionId: 'other' }), 2000)

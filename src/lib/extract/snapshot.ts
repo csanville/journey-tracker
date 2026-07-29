@@ -153,28 +153,56 @@ export interface TrimmedSnapshot {
  * posting. The head fragment is never cut: it is small, and it is where the
  * JSON-LD lives.
  */
+const MARKER = '<!-- JourneyTracker: truncated at the snapshot size cap -->'
+
+/**
+ * Shrinks `text` until the document built around it fits the cap.
+ *
+ * Cutting by characters against a byte budget is deliberately conservative: a
+ * UTF-8 character is at least one byte, so slicing to the byte budget can only
+ * ever come in under it. The loop then trims the last few multi-byte characters
+ * if it did not.
+ */
+function fitTo(text: string, build: (inner: string) => string): string {
+  const room = SNAPSHOT_CAP_BYTES - byteLength(build(''))
+
+  let cut = text.slice(0, Math.max(0, room))
+  while (cut && byteLength(build(cut)) > SNAPSHOT_CAP_BYTES) {
+    cut = cut.slice(0, Math.floor(cut.length * 0.95))
+  }
+
+  return cut
+}
+
 export function buildSnapshot(document: Document): TrimmedSnapshot {
   const head = headHtml(document)
   const body = contentHtml(document)
 
-  const wrap = (inner: string, marker: string) =>
-    `<!doctype html><html><head>${head}</head><body>${inner}${marker}</body></html>`
+  const wrap = (keptHead: string, inner: string, marker: string) =>
+    `<!doctype html><html><head>${keptHead}</head><body>${inner}${marker}</body></html>`
 
-  const full = wrap(body, '')
+  const full = wrap(head, body, '')
   if (byteLength(full) <= SNAPSHOT_CAP_BYTES)
     return { trimmedSource: full, truncated: false }
 
-  const marker = '<!-- JourneyTracker: truncated at the snapshot size cap -->'
-  const room = SNAPSHOT_CAP_BYTES - byteLength(wrap('', marker))
-
-  // Cutting by characters against a byte budget is deliberately conservative:
-  // a UTF-8 character is at least one byte, so slicing to the byte budget can
-  // only ever come in under it. The loop below then trims the last few
-  // multi-byte characters if it did not.
-  let cut = body.slice(0, Math.max(0, room))
-  while (cut && byteLength(wrap(cut, marker)) > SNAPSHOT_CAP_BYTES) {
-    cut = cut.slice(0, Math.floor(cut.length * 0.95))
+  const bodyCut = fitTo(body, (inner) => wrap(head, inner, MARKER))
+  if (byteLength(wrap(head, bodyCut, MARKER)) <= SNAPSHOT_CAP_BYTES) {
+    return { trimmedSource: wrap(head, bodyCut, MARKER), truncated: true }
   }
 
-  return { trimmedSource: wrap(cut, marker), truncated: true }
+  // The head alone busts the cap. Every JSON-LD block on the page is kept
+  // verbatim, and a board that inlines its whole listing as JSON-LD can push
+  // that past 256KB on its own — at which point cutting the body reaches zero
+  // and the document is still over. Without this branch the result was a
+  // snapshot that *exceeded* the cap, which `sanitizeReport` then discarded
+  // entirely: no snapshot, no `truncated` marker, and no way to tell afterwards
+  // that anything had been dropped. The docstring above promises the opposite,
+  // and decision 6 is explicit that a cut capture beats none.
+  //
+  // So the head is cut too. What survives is the front of it, which is where
+  // `<title>` and the first JSON-LD block sit — the two things a re-parse most
+  // wants.
+  const headCut = fitTo(head, (kept) => wrap(kept, '', MARKER))
+
+  return { trimmedSource: wrap(headCut, '', MARKER), truncated: true }
 }

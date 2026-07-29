@@ -78,6 +78,18 @@ export function PostingForm({
 
   const errors = draftErrors(draft)
   const dirty = isDirty(draft, filled?.draft ?? EMPTY_DRAFT)
+
+  /**
+   * Whether there is anything to throw away.
+   *
+   * Not the same question as `dirty`, and conflating them broke Discard. After
+   * a fill the draft *equals* its baseline, so `dirty` is false while the form
+   * is full — leaving a user who filled from the wrong posting, which is what a
+   * board that rendered late produces, to clear every field by hand. `dirty`
+   * governs "has the user typed something worth protecting" (decision 13);
+   * this governs "is the form empty", which is what Discard is asking.
+   */
+  const hasContent = dirty || filled !== null
   const busy =
     phase.name === 'checking' || phase.name === 'saving' || phase.name === 'wiping'
 
@@ -192,6 +204,14 @@ export function PostingForm({
           changes={fieldsFilled(offered, draft).length}
           confirming={confirmingFill}
           quiet={dismissed === offered.detectionId}
+          // Locked for the same reason the fieldset below is, and it was
+          // outside it: a fill landing during a save writes into `draft` and
+          // `filled` after `toPostingInput` has already snapshotted the draft,
+          // so the record is written with the pre-fill values and manual
+          // provenance — and then `reset()` wipes the fill on the way out.
+          // Every way into the form has to be shut while a save is in flight,
+          // not just the inputs.
+          busy={busy}
           onFill={() => {
             // Decision 13 in its explicit-click form. A pristine form fills
             // straight away; a form with typed work in it asks first, because
@@ -338,7 +358,7 @@ export function PostingForm({
           type="button"
           className="button button--quiet"
           onClick={reset}
-          disabled={!dirty || busy}
+          disabled={!hasContent || busy}
         >
           Discard
         </button>
@@ -370,6 +390,7 @@ function DetectedNotice({
   changes,
   confirming,
   quiet,
+  busy,
   onFill,
   onDismiss,
 }: {
@@ -377,6 +398,7 @@ function DetectedNotice({
   changes: number
   confirming: boolean
   quiet: boolean
+  busy: boolean
   onFill: () => void
   onDismiss: () => void
 }) {
@@ -386,8 +408,18 @@ function DetectedNotice({
   if (quiet) {
     return (
       <p className="detected detected--quiet">
-        <button type="button" className="button button--quiet" onClick={onFill}>
-          Fill from this page
+        <button
+          type="button"
+          className="button button--quiet"
+          onClick={onFill}
+          disabled={busy}
+        >
+          {/* The confirm step has to be visible here too. Dismissed, the
+              banner is a single button, and asking for confirmation by
+              flipping a state nothing renders made the first click look like a
+              dead button — the fill only happened on the second, for no reason
+              the user could see. */}
+          {confirming ? 'Replace what you typed?' : 'Fill from this page'}
         </button>
       </p>
     )
@@ -407,14 +439,19 @@ function DetectedNotice({
         {detection.snapshotBytes > 0 && ' · page kept for re-parsing'}
       </p>
       <div className="notice__actions">
-        <button type="button" className="button button--quiet" onClick={onDismiss}>
+        <button
+          type="button"
+          className="button button--quiet"
+          onClick={onDismiss}
+          disabled={busy}
+        >
           Not now
         </button>
         <button
           type="button"
           className="button"
           onClick={onFill}
-          disabled={changes === 0 && !confirming}
+          disabled={busy || (changes === 0 && !confirming)}
         >
           {confirming ? 'Replace' : 'Fill form'}
         </button>

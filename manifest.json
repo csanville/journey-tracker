@@ -7,7 +7,11 @@
   "permissions": ["sidePanel", "storage", "unlimitedStorage"],
   "content_scripts": [
     {
-      "matches": ["https://*.greenhouse.io/*", "https://jobs.lever.co/*"],
+      "matches": [
+        "https://job-boards.greenhouse.io/*",
+        "https://boards.greenhouse.io/*",
+        "https://jobs.lever.co/*"
+      ],
       "js": ["src/content/content-script.ts"],
       "run_at": "document_idle"
     }

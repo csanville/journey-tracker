@@ -221,6 +221,27 @@ describe('lever', () => {
     expect(leverReaders.readDom(document).company).toBe('Acme Corp')
   })
 
+  it('splits the role out of the page title when the headline is gone', () => {
+    // A redesign that takes out both the JSON-LD block and `.posting-headline
+    // h2` would otherwise leave the meta tier answering, and `og:title` on
+    // these pages is "{Company} - {Title}" — the whole string, welded. That
+    // string would then key the company-plus-title dedupe fallback
+    // (decision 7).
+    const document = parseHtml(
+      `<html><head><title>Acme Corp - Senior Engineer</title>
+       <meta property="og:title" content="Acme Corp - Senior Engineer"></head>
+       <body><div class="posting-categories">
+         <div class="posting-category location">Berlin</div>
+       </div></body></html>`,
+    )
+
+    expect(leverReaders.readDom(document)).toMatchObject({
+      company: 'Acme Corp',
+      jobTitle: 'Senior Engineer',
+    })
+    expect(extract(document, LEVER_URL).fields.jobTitle).toBe('Senior Engineer')
+  })
+
   it('reads Lever’s own workplace-type label when the employer set one', () => {
     const document = parseHtml(
       `<html><body><div class="posting-headline"><h2>Engineer</h2>

@@ -67,6 +67,15 @@ written asked for, at no cost. The install warning is the same either way, since
 Chrome derives it from both. `optional_host_permissions` for user-added sites is
 still the intended shape and is not built yet.
 
+The patterns name **board hosts, not vendors**. The first version matched
+`https://*.greenhouse.io/*`, which review caught: `app.greenhouse.io` and
+`my.greenhouse.io` are the logged-in recruiter console — live hosts, full of
+candidate data — and `www.` is marketing. The content script would have parsed
+and snapshotted recruiter pages and offered them in the panel. Company
+subdomains do not resolve, so the wildcard bought nothing for it. The general
+rule, now enforced by a test: **a match pattern names a host that serves job
+postings, never an apex a vendor also runs its own product on.**
+
 Related: reading a tab's URL from the extension side is what would need the
 `tabs` permission, and nothing does — the content script reports its own
 `location.href`. The panel calls `chrome.tabs.query` to learn *which* tab it is
@@ -289,7 +298,14 @@ than a second one that quietly diverges. A test parses a fixture, snapshots it,
 re-parses the snapshot and demands identical fields.
 
 The 256KB cap is implemented, with truncation and a marker rather than dropping
-the capture. The 500-posting retention sweep is **not built** — snapshots are
+the capture — including when the *head* alone exceeds it, which a board that
+inlines its whole listing as JSON-LD can manage on its own. Cutting only the body
+left the document still over the cap, and the validator then discarded it
+outright: no snapshot, no marker, nothing to say anything had been dropped. The
+head is cut too, keeping its front, where `<title>` and the first JSON-LD block
+sit.
+
+The 500-posting retention sweep is **not built** — snapshots are
 one-per-posting and replaced on re-capture, so nothing grows without bound
 per record, but nothing prunes old ones either. It belongs with export/import in
 phase 6, where the storage picture is already on the table.
@@ -554,6 +570,21 @@ with anything they care about.
 retrofitted once live sync arrives. Dismissing the banner must not discard the
 detected posting silently — the user should be able to get it back.
 
+**Amended — "dirty" and "has anything in it" are different questions.** Phase 4
+made the fill's own output the dirty baseline, which is correct: after a fill the
+form is untouched, so Discard should not be lit. Wiring Discard to `dirty`
+directly then disabled it on a *full* form, stranding anyone who filled from the
+wrong posting — which is what a board that renders late produces — with every
+field to clear by hand. `dirty` answers "has the user typed something worth
+protecting"; Discard is asking "is there anything here". Both are needed, and one
+cannot stand in for the other.
+
+Related, from the same review: every affordance that writes into the form has to
+be locked while a save is in flight, not merely the inputs. The fill button sat
+outside the disabled fieldset, so a fill landing mid-save wrote into a draft that
+had already been snapshotted for writing — the record saved with pre-fill values
+and manual provenance, and the reset that follows a save then wiped the fill.
+
 **Revisit when.** Never as a principle. The specific affordance can change.
 
 ---
@@ -617,7 +648,19 @@ cache.
   to this record is worse than none.
 
 **Consequences.** The cache is bounded to eight tabs and evicts by recency; a
-closed tab is forgotten on `chrome.tabs.onRemoved`. Reports are validated on
+closed tab is forgotten on `chrome.tabs.onRemoved`.
+
+Every read-modify-write of it is serialized through a promise chain. A read and
+the write that depends on it are two turns of the event loop, and the worker is
+free to service another message in the gap — so two tabs reporting at once, which
+is what middle-clicking two postings from a search page produces, would leave the
+second write landing on a cache snapshot taken before the first. One tab's
+detection disappears, and the panel reports "no posting detected" for a page its
+content script parsed perfectly, with nothing in any console. This is the same
+class of bug as decision 9's half-migrated read: an async gap in a component that
+looks single-threaded because the language is.
+
+Reports are validated on
 arrival — not because the sender is untrusted, since only this extension's own
 content scripts can reach `onMessage`, but because everything *inside* the
 message came off a web page and a page is free to put a megabyte in its

@@ -50,7 +50,16 @@ function readDom(document: Document): Partial<ExtractedFields> {
 
   return {
     company: companyOf(document),
-    jobTitle: firstText(document, ['.posting-headline h2', '.posting-header h2']),
+    jobTitle:
+      firstText(document, ['.posting-headline h2', '.posting-header h2']) ??
+      // The right half of `"{Company} - {Title}"`. This exists so the meta tier
+      // is not the last line of defence for the role: `og:title` on these pages
+      // is the *whole* string, employer welded on, and `jobTitle` is half of
+      // the company-plus-title dedupe key (decision 7). If a redesign takes out
+      // both the JSON-LD block and the headline selector, splitting the page
+      // title here is what keeps "Acme Corp - Senior Engineer" out of that key.
+      splitOnce(document.title, / - /)?.[1] ??
+      null,
     location,
     workMode: inferWorkMode(workplaceType, location),
   }

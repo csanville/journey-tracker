@@ -138,6 +138,35 @@ describe('buildSnapshot', () => {
     )
   })
 
+  it('still stores something when the head alone busts the cap', () => {
+    // Every JSON-LD block is kept verbatim, so a board that inlines its whole
+    // listing can push the head past 256KB on its own. Cutting the body then
+    // reaches zero with the document still over, and the returned snapshot
+    // *exceeded* the cap — which `sanitizeReport` discards outright, leaving no
+    // snapshot and no marker to explain why. Decision 6 says a cut capture
+    // beats none.
+    const filler = JSON.stringify({
+      '@type': 'JobPosting',
+      title: 'Engineer',
+      description: 'x'.repeat(400 * 1024),
+    })
+    const document = parseHtml(
+      `<html><head><title>Job Application for Engineer at Initech</title>
+       <script type="application/ld+json">${filler}</script></head>
+       <body><main><p>body</p></main></body></html>`,
+    )
+
+    const snapshot = buildSnapshot(document)
+
+    expect(snapshot.truncated).toBe(true)
+    expect(new TextEncoder().encode(snapshot.trimmedSource).length).toBeLessThanOrEqual(
+      SNAPSHOT_CAP_BYTES,
+    )
+    expect(snapshot.trimmedSource).not.toBe('')
+    // The front of the head survives, which is where `<title>` sits.
+    expect(snapshot.trimmedSource).toContain('Job Application for Engineer at Initech')
+  })
+
   it('does not mark a snapshot inside the cap as truncated', () => {
     const snapshot = buildSnapshot(loadFixture('lever-job.html'))
 
