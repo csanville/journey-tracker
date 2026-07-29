@@ -418,3 +418,21 @@ body {
   color: var(--ink-faint);
   font-size: 0.75rem;
 }
+
+/*
+ * A fieldset only for the `disabled` behaviour, which is the one way to lock a
+ * whole form's inputs at once. It carries no visual weight of its own.
+ */
+.fields {
+  display: flex;
+  flex-direction: column;
+  gap: var(--step);
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+
+.fields:disabled {
+  opacity: 0.6;
+}

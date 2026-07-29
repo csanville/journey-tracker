@@ -17,7 +17,8 @@ import { RecentPostings } from './RecentPostings'
  */
 export function App() {
   const [status, setStatus] = useState<StatusReport | null>(null)
-  const [postings, setPostings] = useState<Posting[]>([])
+  /** `null` until the first load answers — distinct from "loaded, and empty". */
+  const [postings, setPostings] = useState<Posting[] | null>(null)
   const [failure, setFailure] = useState<string | null>(null)
   const version = chrome.runtime.getManifest().version
 
@@ -39,18 +40,37 @@ export function App() {
   }, [])
 
   useEffect(() => {
+    let cancelled = false
+
     void (async () => {
       const first = await refresh()
+      if (cancelled || !first) return
 
       // `persist()` is exposed to Window contexts only, so this panel is the
       // one place in the extension that can ask — the worker can merely read
       // the answer. Only worth asking when `unlimitedStorage` did not already
       // cover us, since either defence alone is sufficient.
-      if (first && !first.evictionSafe) {
+      if (first.evictionSafe) return
+
+      try {
         await requestPersistence()
-        setStatus(await send('storage/reassess', {}))
+        const rechecked = await send('storage/reassess', {})
+        if (!cancelled) setStatus(rechecked)
+      } catch (error) {
+        // The worker can die between the two calls — that is ordinary for MV3
+        // and is why the client retries at all. Unhandled, this was a silent
+        // rejection that left the panel showing pre-persist state with nothing
+        // said.
+        console.error('[JourneyTracker] could not re-check storage protection', error)
+        if (!cancelled) {
+          setFailure(error instanceof Error ? error.message : String(error))
+        }
       }
     })()
+
+    return () => {
+      cancelled = true
+    }
   }, [refresh])
 
   return (
@@ -63,9 +83,16 @@ export function App() {
       </header>
 
       {failure && (
-        <p className="notice notice--bad" role="alert">
-          Could not reach the extension's service worker — {failure}
-        </p>
+        <div className="notice notice--bad" role="alert">
+          <p>Could not reach the extension's service worker — {failure}</p>
+          <div className="notice__actions">
+            {/* Otherwise only a successful save clears this, and saving is the
+                thing that is not working. */}
+            <button type="button" className="button" onClick={() => void refresh()}>
+              Try again
+            </button>
+          </div>
+        </div>
       )}
 
       {status && !status.evictionSafe && (

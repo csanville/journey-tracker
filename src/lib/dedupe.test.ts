@@ -255,6 +255,62 @@ describe('findDuplicate on company and title', () => {
     expect(found).toBeNull()
   })
 
+  it('does not fire on two listings from one board', async () => {
+    const db = await freshDb()
+    // Same host, different paths, no requisitions to compare. The board is
+    // telling us these are two listings, so the shared title means nothing.
+    await upsertPosting(
+      db,
+      posting({
+        id: 'a',
+        company: 'Roadrunner',
+        jobTitle: 'Software Engineer',
+        url: 'https://roadrunner.com/careers/eng-platform',
+      }),
+    )
+
+    const found = await findDuplicate(
+      db,
+      posting({
+        id: 'b',
+        company: 'Roadrunner',
+        jobTitle: 'Software Engineer',
+        url: 'https://roadrunner.com/careers/eng-infra',
+      }),
+    )
+
+    expect(found).toBeNull()
+  })
+
+  it('still fires for one posting seen on two different sites', async () => {
+    const db = await freshDb()
+    // Different hosts settle nothing: this is the aggregator case, and it is
+    // the reason the title key exists at all. Suppressing on any URL
+    // difference would throw it away.
+    await upsertPosting(
+      db,
+      posting({
+        id: 'a',
+        company: 'Roadrunner',
+        jobTitle: 'Software Engineer',
+        url: 'https://www.linkedin.com/jobs/view/3812345678',
+      }),
+    )
+
+    const found = await findDuplicate(
+      db,
+      posting({
+        id: 'b',
+        company: 'Roadrunner',
+        jobTitle: 'Software Engineer',
+        url: 'https://roadrunner.com/careers/eng-platform',
+      }),
+    )
+
+    expect(found?.posting.id).toBe('a')
+    expect(found?.matchedOn).toBe('title')
+  })
+
   it('does not fire on the same title at a different employer', async () => {
     const db = await freshDb()
     await upsertPosting(

@@ -2,9 +2,15 @@ import type { JourneyTrackerDb } from './db'
 import { now } from './ids'
 import { normalizePostingInput } from './normalize'
 import { normalizeTitle } from './normalize/title'
-import { isUsableUrlKey } from './normalize/url'
+import { isUsableUrlKey, urlHost } from './normalize/url'
 import { POSTING_INPUT_FIELDS, SCHEMA_VERSION } from './types'
-import type { DuplicateMatch, Posting, PostingInput, Snapshot } from './types'
+import type {
+  DuplicateMatch,
+  NormalizedPostingInput,
+  Posting,
+  PostingInput,
+  Snapshot,
+} from './types'
 
 /**
  * The only write path. Content scripts cannot reach the extension's IndexedDB
@@ -140,15 +146,42 @@ export async function findDuplicate(
   if (!title) return null
 
   const byTitle = sameCompany.find(
-    (p) =>
-      normalizeTitle(p.jobTitle) === title &&
-      // Two requisitions that are both known and different are definitively
-      // different postings, whatever the title says. Without this, every role a
-      // large employer posts twice would flag against itself.
-      !(p.atsReqId && input.atsReqId && p.atsReqId !== input.atsReqId),
+    (p) => normalizeTitle(p.jobTitle) === title && !settledAsDifferent(p, input),
   )
 
   return byTitle ? { posting: byTitle, matchedOn: 'title' } : null
+}
+
+/**
+ * Whether two same-titled records at one employer are known to be different
+ * postings, making the title resemblance irrelevant.
+ *
+ * Two cases qualify, and the difference between them is the whole point:
+ *
+ * - **Different requisition ids.** A requisition is the ATS's own identity for a
+ *   posting and is unique within a tenant, so two that disagree are two
+ *   postings. Without this, every role a large employer posts twice would flag
+ *   against itself.
+ * - **Different URLs on the same host.** One board serving two paths is that
+ *   board saying these are two listings.
+ *
+ * Different URLs on *different* hosts settle nothing, which is why the host
+ * comparison is there. The same job routinely appears on LinkedIn, on an
+ * aggregator, and on the company's own board under three unrelated URLs — that
+ * is the case the title key exists to catch, and treating any URL difference as
+ * decisive would throw it away.
+ */
+function settledAsDifferent(stored: Posting, input: NormalizedPostingInput): boolean {
+  if (stored.atsReqId && input.atsReqId && stored.atsReqId !== input.atsReqId) return true
+
+  const storedHost = urlHost(stored.canonicalUrl)
+  const inputHost = urlHost(input.canonicalUrl)
+
+  return (
+    storedHost !== null &&
+    storedHost === inputHost &&
+    stored.canonicalUrl !== input.canonicalUrl
+  )
 }
 
 /**

@@ -49,7 +49,8 @@ export function PostingForm({ onSaved }: { onSaved: () => void }) {
 
   const errors = draftErrors(draft)
   const dirty = isDirty(draft)
-  const busy = phase.name === 'checking' || phase.name === 'saving' || phase.name === 'wiping'
+  const busy =
+    phase.name === 'checking' || phase.name === 'saving' || phase.name === 'wiping'
 
   const field = <K extends keyof Draft>(key: K, value: Draft[K]) => {
     setDraft((current) => ({ ...current, [key]: value }))
@@ -115,95 +116,112 @@ export function PostingForm({ onSaved }: { onSaved: () => void }) {
       }}
       noValidate
     >
-      <Text
-        label="Company"
-        value={draft.company}
-        onChange={(v) => field('company', v)}
-        error={showErrors ? errors.company : undefined}
-        required
-        autoFocus
-      />
-
-      <Text
-        label="Job title"
-        value={draft.jobTitle}
-        onChange={(v) => field('jobTitle', v)}
-        error={showErrors ? errors.jobTitle : undefined}
-        required
-      />
-
-      <Text
-        label="Posting URL"
-        type="url"
-        value={draft.url}
-        onChange={(v) => field('url', v)}
-        hint="Optional. Used to recognise this posting again."
-      />
-
-      <div className="row">
-        <Text label="Location" value={draft.location} onChange={(v) => field('location', v)} />
-        <Select
-          label="Work mode"
-          value={draft.workMode}
-          onChange={(v) => field('workMode', v as Draft['workMode'])}
-          options={[
-            ['', '—'],
-            ['onsite', 'Onsite'],
-            ['hybrid', 'Hybrid'],
-            ['remote', 'Remote'],
-          ]}
-        />
-      </div>
-
-      <div className="row">
+      {/*
+        Locked while a save is in flight. `toPostingInput` snapshots the draft
+        before the round-trip, and on a cold worker that round-trip is not
+        instant — the client retries a waking worker four times. Without this,
+        a correction typed into the gap would be checked against the old values,
+        written as the old values, and then wiped by the reset that follows.
+      */}
+      <fieldset className="fields" disabled={busy}>
         <Text
-          label="Salary"
-          value={draft.salary}
-          onChange={(v) => field('salary', v)}
-          hint="As written"
+          label="Company"
+          value={draft.company}
+          onChange={(v) => field('company', v)}
+          error={showErrors ? errors.company : undefined}
+          required
+          autoFocus
         />
-        <Text label="Req ID" value={draft.atsReqId} onChange={(v) => field('atsReqId', v)} />
-      </div>
 
-      <div className="row">
-        <Select
-          label="Status"
-          value={draft.state}
-          onChange={(v) => {
-            field('state', v as Draft['state'])
-            // Applying is nearly always something you just did.
-            if (v === 'applied' && !draft.appliedAt) field('appliedAt', today())
-          }}
-          options={[
-            ['viewed', 'Viewed'],
-            ['applied', 'Applied'],
-          ]}
+        <Text
+          label="Job title"
+          value={draft.jobTitle}
+          onChange={(v) => field('jobTitle', v)}
+          error={showErrors ? errors.jobTitle : undefined}
+          required
         />
-        {draft.state === 'applied' && (
+
+        <Text
+          label="Posting URL"
+          type="url"
+          value={draft.url}
+          onChange={(v) => field('url', v)}
+          hint="Optional. Used to recognise this posting again."
+        />
+
+        <div className="row">
           <Text
-            label="Applied on"
-            type="date"
-            value={draft.appliedAt}
-            onChange={(v) => field('appliedAt', v)}
+            label="Location"
+            value={draft.location}
+            onChange={(v) => field('location', v)}
           />
-        )}
-      </div>
+          <Select
+            label="Work mode"
+            value={draft.workMode}
+            onChange={(v) => field('workMode', v as Draft['workMode'])}
+            options={[
+              ['', '—'],
+              ['onsite', 'Onsite'],
+              ['hybrid', 'Hybrid'],
+              ['remote', 'Remote'],
+            ]}
+          />
+        </div>
 
-      <Text
-        label="Resume used"
-        value={draft.resumeUsed}
-        onChange={(v) => field('resumeUsed', v)}
-        hint="A label, e.g. “backend-2026”. No file is stored."
-      />
+        <div className="row">
+          <Text
+            label="Salary"
+            value={draft.salary}
+            onChange={(v) => field('salary', v)}
+            hint="As written"
+          />
+          <Text
+            label="Req ID"
+            value={draft.atsReqId}
+            onChange={(v) => field('atsReqId', v)}
+          />
+        </div>
 
-      <Text
-        label="Tags"
-        value={draft.tags}
-        onChange={(v) => field('tags', v)}
-        hint="Comma separated"
-      />
+        <div className="row">
+          <Select
+            label="Status"
+            value={draft.state}
+            onChange={(v) => {
+              field('state', v as Draft['state'])
+              // Applying is nearly always something you just did.
+              if (v === 'applied' && !draft.appliedAt) field('appliedAt', today())
+            }}
+            options={[
+              ['viewed', 'Viewed'],
+              ['applied', 'Applied'],
+            ]}
+          />
+          {draft.state === 'applied' && (
+            <Text
+              label="Applied on"
+              type="date"
+              value={draft.appliedAt}
+              onChange={(v) => field('appliedAt', v)}
+            />
+          )}
+        </div>
 
-      <Textarea label="Notes" value={draft.notes} onChange={(v) => field('notes', v)} />
+        <Text
+          label="Resume used"
+          value={draft.resumeUsed}
+          onChange={(v) => field('resumeUsed', v)}
+          hint="A label, e.g. “backend-2026”. No file is stored."
+        />
+
+        <Text
+          label="Tags"
+          value={draft.tags}
+          onChange={(v) => field('tags', v)}
+          hint="Comma separated"
+        />
+
+        <Textarea label="Notes" value={draft.notes} onChange={(v) => field('notes', v)} />
+      </fieldset>
 
       {phase.name === 'duplicate' && (
         <DuplicateNotice
@@ -269,7 +287,9 @@ function DuplicateNotice({
           ? `Applied ${new Date(posting.appliedAt).toLocaleDateString()}`
           : `Saved ${new Date(posting.createdAt).toLocaleDateString()}`}
         {posting.canonicalUrl && ` · ${hostOf(posting.canonicalUrl)}`}
-        {match.matchedOn === 'requisition' && posting.atsReqId && ` · req ${posting.atsReqId}`}
+        {match.matchedOn === 'requisition' &&
+          posting.atsReqId &&
+          ` · req ${posting.atsReqId}`}
       </p>
       <div className="notice__actions">
         <button type="button" className="button button--quiet" onClick={onDiscard}>

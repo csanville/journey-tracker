@@ -308,6 +308,15 @@ The general lesson: **conservatism has to be calibrated to the consequence.** Th
 same rule that is right for a key that merges records is too strict for a key
 that asks a question.
 
+Review then found the third key firing on two *different* listings from one
+board — same employer, same title, no requisitions. The suppression rule that
+resolves it turns on a distinction worth keeping: **different requisition ids
+prove two postings, and so do different URLs on the same host, but different
+URLs on different hosts prove nothing.** One job routinely appears on LinkedIn,
+on an aggregator and on the company's own board under three unrelated URLs —
+that is the case this key exists to catch, so treating any URL difference as
+decisive would have thrown away most of its value.
+
 **Revisit when.** The external tracker settles into a real schema worth
 integrating with, or is retired. The keys remain useful for in-extension dedupe
 regardless.

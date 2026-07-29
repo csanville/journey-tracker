@@ -124,6 +124,42 @@ describe('runPendingMigrations', () => {
     await expect(waitForMigration(50)).resolves.toBeUndefined()
   })
 
+  it('does not release a waiting reader before the real migration finishes', async () => {
+    const db = await freshDb()
+    await upsertPosting(db, aPosting())
+    // A stale flag *and* work to do: the interrupted run left the flag up, and
+    // this run is about to redo it.
+    await patchSettings({ dataVersion: 1, migrationInProgress: true })
+
+    let released = false
+    let releasedDuringRun: boolean | undefined
+    const waiting = waitForMigration(1_000).then(() => {
+      released = true
+    })
+
+    await runPendingMigrations(db, {
+      targetVersion: 2,
+      migrations: [
+        {
+          to: 2,
+          description: 'observes whether readers were let go early',
+          async run() {
+            // Let any pending change notifications settle first.
+            await Promise.resolve()
+            releasedDuringRun = released
+          },
+        },
+      ],
+    })
+    await waiting
+
+    // Clearing the stale flag on entry would resolve the waiter here, moments
+    // before this same call raises the flag again and starts rewriting records
+    // — the half-migrated read the flag exists to prevent.
+    expect(releasedDuringRun).toBe(false)
+    expect(released).toBe(true)
+  })
+
   it('refuses to open data written by a newer build', async () => {
     const db = await freshDb()
     await upsertPosting(db, aPosting())
