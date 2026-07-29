@@ -72,7 +72,8 @@ const TRACKING_PREFIXES = ['utm_', 'hsa_', 'pk_', 'mtm_', 'matomo_', 'piwik_']
 function isTracking(name: string): boolean {
   const lower = name.toLowerCase()
   return (
-    TRACKING_PARAMS.has(lower) || TRACKING_PREFIXES.some((prefix) => lower.startsWith(prefix))
+    TRACKING_PARAMS.has(lower) ||
+    TRACKING_PREFIXES.some((prefix) => lower.startsWith(prefix))
   )
 }
 

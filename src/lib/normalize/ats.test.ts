@@ -76,13 +76,19 @@ const CASES: Array<[what: string, url: string, ats: AtsName, reqId: string]> = [
  */
 const NO_MATCH: Array<[what: string, url: string]> = [
   ['a Greenhouse board index with no job', 'https://boards.greenhouse.io/acme'],
-  ['a Workday board with no job in the path', 'https://acme.wd1.myworkdayjobs.com/en-US/External'],
+  [
+    'a Workday board with no job in the path',
+    'https://acme.wd1.myworkdayjobs.com/en-US/External',
+  ],
   [
     'a Workday title containing an underscore but no requisition',
     'https://acme.wd1.myworkdayjobs.com/en-US/External/job/SF/Software_Engineer',
   ],
   ['a Lever board index', 'https://jobs.lever.co/acme'],
-  ['a Greenhouse job id that is not numeric', 'https://boards.greenhouse.io/acme/jobs/engineer'],
+  [
+    'a Greenhouse job id that is not numeric',
+    'https://boards.greenhouse.io/acme/jobs/engineer',
+  ],
   ['a lookalike host', 'https://greenhouse.io.evil.example/acme/jobs/4012345'],
   ['a gh_jid that is not numeric', 'https://acme.com/careers?gh_jid=abc'],
   ['an ashby_jid that is not a uuid', 'https://acme.com/careers?ashby_jid=12345'],
@@ -121,7 +127,9 @@ describe('identifyAts', () => {
     // A `gh_jid` can appear on any page; a Lever hostname means a Lever posting.
     // Checked first, the parameter produced a Greenhouse id for a Lever job.
     expect(
-      identifyAts('https://jobs.lever.co/acme/0f0e2b1a-1234-4c8d-9e0f-abcdef123456?gh_jid=99'),
+      identifyAts(
+        'https://jobs.lever.co/acme/0f0e2b1a-1234-4c8d-9e0f-abcdef123456?gh_jid=99',
+      ),
     ).toEqual({ ats: 'lever', reqId: '0f0e2b1a-1234-4c8d-9e0f-abcdef123456' })
   })
 
@@ -133,7 +141,8 @@ describe('identifyAts', () => {
     // missed merge on nothing more than link casing.
     expect(identifyAts(upper)).toEqual(identifyAts(lower))
 
-    const workday = 'https://acme.wd1.myworkdayjobs.com/en-US/External/job/SF/Engineer_r-12345'
+    const workday =
+      'https://acme.wd1.myworkdayjobs.com/en-US/External/job/SF/Engineer_r-12345'
     expect(identifyAts(workday)?.reqId).toBe('R-12345')
   })
 
@@ -147,7 +156,9 @@ describe('identifyAts', () => {
 
 describe('extractAtsReqId', () => {
   it('returns just the id', () => {
-    expect(extractAtsReqId('https://boards.greenhouse.io/acme/jobs/4012345')).toBe('4012345')
+    expect(extractAtsReqId('https://boards.greenhouse.io/acme/jobs/4012345')).toBe(
+      '4012345',
+    )
   })
 
   it('returns null for a URL it does not recognise', () => {

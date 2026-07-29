@@ -167,7 +167,7 @@ function joinInitialisms(tokens: string[]): string[] {
 function stripLegalSuffixes(tokens: string[]): string[] {
   let end = tokens.length
 
-  for (let changed = true; changed; ) {
+  for (let changed = true; changed;) {
     changed = false
 
     for (const phrase of PHRASE_SUFFIXES) {

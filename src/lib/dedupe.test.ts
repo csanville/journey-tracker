@@ -95,7 +95,11 @@ describe('findDuplicate', () => {
     // Found first on the company's embedded board...
     await upsertPosting(
       db,
-      posting({ id: 'a', company: 'Acme, Inc.', url: 'https://acme.com/careers?gh_jid=4012345' }),
+      posting({
+        id: 'a',
+        company: 'Acme, Inc.',
+        url: 'https://acme.com/careers?gh_jid=4012345',
+      }),
     )
 
     // ...then again on the Greenhouse board itself. Different canonical URLs,
@@ -140,7 +144,10 @@ describe('findDuplicate', () => {
 
   it('does not report a record as its own duplicate', async () => {
     const db = await freshDb()
-    const input = posting({ id: 'a', url: 'https://boards.greenhouse.io/acme/jobs/4012345' })
+    const input = posting({
+      id: 'a',
+      url: 'https://boards.greenhouse.io/acme/jobs/4012345',
+    })
     await upsertPosting(db, input)
 
     expect(await findDuplicate(db, input)).toBeNull()
@@ -163,12 +170,22 @@ describe('findDuplicate', () => {
     const db = await freshDb()
     await upsertPosting(
       db,
-      posting({ id: 'a', company: 'Acme', jobTitle: 'Engineer', url: 'https://acme.com/jobs/1' }),
+      posting({
+        id: 'a',
+        company: 'Acme',
+        jobTitle: 'Engineer',
+        url: 'https://acme.com/jobs/1',
+      }),
     )
 
     const found = await findDuplicate(
       db,
-      posting({ id: 'b', company: 'Globex', jobTitle: 'Designer', url: 'https://other.com/9' }),
+      posting({
+        id: 'b',
+        company: 'Globex',
+        jobTitle: 'Designer',
+        url: 'https://other.com/9',
+      }),
     )
 
     expect(found).toBeNull()
@@ -206,12 +223,22 @@ describe('findDuplicate on company and title', () => {
     const db = await freshDb()
     await upsertPosting(
       db,
-      posting({ id: 'a', company: 'Roadrunner', jobTitle: 'Senior Software Engineer', url: '' }),
+      posting({
+        id: 'a',
+        company: 'Roadrunner',
+        jobTitle: 'Senior Software Engineer',
+        url: '',
+      }),
     )
 
     const found = await findDuplicate(
       db,
-      posting({ id: 'b', company: 'Roadrunner', jobTitle: '  senior software  engineer ', url: '' }),
+      posting({
+        id: 'b',
+        company: 'Roadrunner',
+        jobTitle: '  senior software  engineer ',
+        url: '',
+      }),
     )
 
     expect(found?.posting.id).toBe('a')
@@ -223,8 +250,10 @@ describe('findDuplicate on company and title', () => {
     await upsertPosting(db, posting({ id: 'a', company: 'Roadrunner', url }))
 
     // Same URL, same company, same title — all three keys would match.
-    expect((await findDuplicate(db, posting({ id: 'b', company: 'Roadrunner', url })))?.matchedOn)
-      .toBe('url')
+    expect(
+      (await findDuplicate(db, posting({ id: 'b', company: 'Roadrunner', url })))
+        ?.matchedOn,
+    ).toBe('url')
   })
 
   it('does not fire when two known requisitions differ', async () => {
@@ -328,7 +357,10 @@ describe('findDuplicate on company and title', () => {
 
   it('does not fire when the title is unknown', async () => {
     const db = await freshDb()
-    await upsertPosting(db, posting({ id: 'a', company: 'Roadrunner', jobTitle: '', url: '' }))
+    await upsertPosting(
+      db,
+      posting({ id: 'a', company: 'Roadrunner', jobTitle: '', url: '' }),
+    )
 
     const found = await findDuplicate(
       db,
@@ -346,12 +378,20 @@ describe('findDuplicate does not merge', () => {
     const db = await freshDb()
     await upsertPosting(
       db,
-      posting({ id: 'a', company: 'Acme', url: 'https://boards.greenhouse.io/acme/jobs/4012345' }),
+      posting({
+        id: 'a',
+        company: 'Acme',
+        url: 'https://boards.greenhouse.io/acme/jobs/4012345',
+      }),
     )
 
     const found = await findDuplicate(
       db,
-      posting({ id: 'b', company: 'Acme', url: 'https://boards.greenhouse.io/acme/jobs/4012346' }),
+      posting({
+        id: 'b',
+        company: 'Acme',
+        url: 'https://boards.greenhouse.io/acme/jobs/4012346',
+      }),
     )
 
     expect(found).toBeNull()
@@ -444,7 +484,10 @@ describe('findDuplicate does not merge', () => {
     const db = await freshDb()
     await upsertPosting(db, posting({ id: 'a', company: 'Acme', url: 'n/a' }))
 
-    const found = await findDuplicate(db, posting({ id: 'b', company: 'Globex', url: 'n/a' }))
+    const found = await findDuplicate(
+      db,
+      posting({ id: 'b', company: 'Globex', url: 'n/a' }),
+    )
 
     expect(found).toBeNull()
   })

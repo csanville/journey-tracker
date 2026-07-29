@@ -97,8 +97,8 @@ export function App() {
 
       {status && !status.evictionSafe && (
         <p className="notice" role="status">
-          Chrome may evict this extension's data if the disk runs low. Exporting a
-          backup will matter more than usual until that changes.
+          Chrome may evict this extension's data if the disk runs low. Exporting a backup
+          will matter more than usual until that changes.
         </p>
       )}
 
