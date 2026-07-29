@@ -1,9 +1,16 @@
 import type { JourneyTrackerDb } from './db'
 import { now } from './ids'
 import { normalizePostingInput } from './normalize'
-import { isUsableUrlKey } from './normalize/url'
+import { normalizeTitle } from './normalize/title'
+import { isUsableUrlKey, urlHost } from './normalize/url'
 import { POSTING_INPUT_FIELDS, SCHEMA_VERSION } from './types'
-import type { Posting, PostingInput, Snapshot } from './types'
+import type {
+  DuplicateMatch,
+  NormalizedPostingInput,
+  Posting,
+  PostingInput,
+  Snapshot,
+} from './types'
 
 /**
  * The only write path. Content scripts cannot reach the extension's IndexedDB
@@ -72,32 +79,37 @@ export async function countPostings(db: JourneyTrackerDb): Promise<number> {
 }
 
 /**
- * Finds an existing record for the same posting, or `null`.
+ * Finds an existing record that may be the same posting, or `null`.
  *
- * Two keys, tried in order (decision 7):
+ * Three keys, strongest first (decision 7):
  *
- * 1. **Canonical URL**, when it is a real URL. Direct and unambiguous once
- *    tracking noise is stripped.
- * 2. **Normalized company plus requisition id.** For the same posting reached
- *    through a different route — an aggregator, an embedded board, a shortened
- *    link — where the URLs never converge.
+ * 1. **Canonical URL**, when it is a real URL. Identity, once tracking noise is
+ *    stripped.
+ * 2. **Normalized company plus requisition id.** Also identity — a requisition
+ *    is unique within an ATS tenant — and it catches the same posting reached
+ *    through a different route, where the URLs never converge.
+ * 3. **Normalized company plus normalized title.** A resemblance rather than an
+ *    identity: often the same posting, sometimes two teams hiring the same role.
  *
- * Job title is deliberately *not* in the second key, though an earlier plan had
- * it there. A requisition id is already unique within a company, so the title
- * adds no discriminating power; all it adds is a way for the match to fail when
- * a board rewords its own listing. Every field in a join key is a chance to miss.
+ * Job title is deliberately absent from key 2. A requisition id is already
+ * unique within a company, so adding the title there only gives the match a way
+ * to fail when a board rewords its own listing.
  *
- * The second key is skipped entirely unless both parts are present. Falling back
- * to company alone would merge every posting at that employer, which is the
- * silent-corruption failure the whole normalization layer is arranged to avoid.
+ * Key 3 exists because the first two answer "is this the same record" and the
+ * user's actual question is "have I been here before". Without it, two hand-
+ * entered applications to one employer for one role — no URL, no requisition —
+ * sail past each other, which is precisely when a person would expect to be
+ * asked.
  *
- * This reports; it does not merge. What to do about a duplicate is the form's
- * decision in phase 3, not the repository's.
+ * Admitting a fuzzy key is only safe because **this reports and never merges.**
+ * The wrong-merge asymmetry that governs the rest of the normalization layer is
+ * about silent collapse; here a false positive costs one dismissible prompt. The
+ * confidence travels with the answer so the UI can say which it found.
  */
 export async function findDuplicate(
   db: JourneyTrackerDb,
   raw: PostingInput,
-): Promise<Posting | null> {
+): Promise<DuplicateMatch | null> {
   const input = normalizePostingInput(raw)
 
   if (isUsableUrlKey(input.canonicalUrl)) {
@@ -111,21 +123,65 @@ export async function findDuplicate(
       .filter((p) => p.id !== input.id)
       .first()
 
-    if (byUrl) return byUrl
+    if (byUrl) return { posting: byUrl, matchedOn: 'url' }
   }
 
-  if (!input.atsReqId || !input.companyNormalized) return null
+  // Both remaining keys start from the employer. Falling back to company alone
+  // would match every posting there, which is why neither is tried without it.
+  if (!input.companyNormalized) return null
 
-  // Indexed on company, then filtered on the requisition. The compound index
-  // cannot serve this directly — it carries `jobTitle` in the middle — and the
-  // number of records at any one employer is small enough that it does not
-  // matter.
-  const sameCompany = await db.postings
-    .where('companyNormalized')
-    .equals(input.companyNormalized)
-    .toArray()
+  // Indexed on company, then filtered in memory. The compound index cannot
+  // serve either key — it carries `jobTitle` in the middle — and the number of
+  // records at any one employer is small enough that it does not matter.
+  const sameCompany = (
+    await db.postings.where('companyNormalized').equals(input.companyNormalized).toArray()
+  ).filter((p) => p.id !== input.id)
 
-  return sameCompany.find((p) => p.id !== input.id && p.atsReqId === input.atsReqId) ?? null
+  if (input.atsReqId) {
+    const byRequisition = sameCompany.find((p) => p.atsReqId === input.atsReqId)
+    if (byRequisition) return { posting: byRequisition, matchedOn: 'requisition' }
+  }
+
+  const title = normalizeTitle(input.jobTitle)
+  if (!title) return null
+
+  const byTitle = sameCompany.find(
+    (p) => normalizeTitle(p.jobTitle) === title && !settledAsDifferent(p, input),
+  )
+
+  return byTitle ? { posting: byTitle, matchedOn: 'title' } : null
+}
+
+/**
+ * Whether two same-titled records at one employer are known to be different
+ * postings, making the title resemblance irrelevant.
+ *
+ * Two cases qualify, and the difference between them is the whole point:
+ *
+ * - **Different requisition ids.** A requisition is the ATS's own identity for a
+ *   posting and is unique within a tenant, so two that disagree are two
+ *   postings. Without this, every role a large employer posts twice would flag
+ *   against itself.
+ * - **Different URLs on the same host.** One board serving two paths is that
+ *   board saying these are two listings.
+ *
+ * Different URLs on *different* hosts settle nothing, which is why the host
+ * comparison is there. The same job routinely appears on LinkedIn, on an
+ * aggregator, and on the company's own board under three unrelated URLs — that
+ * is the case the title key exists to catch, and treating any URL difference as
+ * decisive would throw it away.
+ */
+function settledAsDifferent(stored: Posting, input: NormalizedPostingInput): boolean {
+  if (stored.atsReqId && input.atsReqId && stored.atsReqId !== input.atsReqId) return true
+
+  const storedHost = urlHost(stored.canonicalUrl)
+  const inputHost = urlHost(input.canonicalUrl)
+
+  return (
+    storedHost !== null &&
+    storedHost === inputHost &&
+    stored.canonicalUrl !== input.canonicalUrl
+  )
 }
 
 /**

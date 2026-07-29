@@ -146,6 +146,15 @@ export function canonicalizeUrl(raw: string): string {
  * otherwise be reported as the same record. Callers keying on the URL check this
  * first.
  */
+/** The host a canonical URL points at, or `null` if it is not a URL. */
+export function urlHost(canonical: string): string | null {
+  try {
+    return new URL(canonical).hostname
+  } catch {
+    return null
+  }
+}
+
 export function isUsableUrlKey(canonical: string): boolean {
   if (!canonical) return false
 

@@ -12,13 +12,32 @@ import type { Request, RequestKind, RequestMap, Response, Result } from './messa
 const MAX_ATTEMPTS = 4
 const BASE_DELAY_MS = 50
 
+/**
+ * Conditions that clear on their own once the worker is back up.
+ *
+ * "no response" belongs here, and its absence was the bug: a `sendMessage` that
+ * resolves `undefined` is what a torn-down worker looks like when a listener
+ * closes the channel without answering — the single most likely symptom of the
+ * cold start these retries exist for, and it was breaking out on the first
+ * attempt.
+ */
+const TRANSIENT = [
+  'Receiving end does not exist',
+  'message port closed',
+  'no response from the service worker',
+]
+
+/**
+ * An allowlist, so anything unrecognised is treated as permanent and surfaces
+ * immediately. Deliberately absent: "Extension context invalidated", which means
+ * this page belongs to a previous generation of the extension — it was reloaded
+ * or updated underneath us. Nothing it sends will ever arrive, so retrying only
+ * spends a few hundred milliseconds reaching the same failure.
+ */
 function isTransient(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error)
-  return (
-    message.includes('Receiving end does not exist') ||
-    message.includes('message port closed') ||
-    message.includes('Extension context invalidated')
-  )
+
+  return TRANSIENT.some((transient) => message.includes(transient))
 }
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))

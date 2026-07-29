@@ -90,7 +90,24 @@ export async function runPendingMigrations(
   options: MigrationOptions = {},
 ): Promise<MigrationOutcome> {
   const { migrations = MIGRATIONS, targetVersion = SCHEMA_VERSION } = options
-  const { dataVersion } = await readSettings()
+  const { dataVersion, migrationInProgress } = await readSettings()
+
+  // A flag still raised on entry is stale: the `finally` below clears it on
+  // every path a running migration can take, and an MV3 worker terminated
+  // mid-migration never gets to run it. Nothing else would ever clear it, so a
+  // single killed migration would otherwise leave every future reader that
+  // waits on the flag blocking until it times out — permanently.
+  //
+  // Clearing it *here* would be worse than leaving it. `waitForMigration`
+  // resolves on the change event, so a reader parked on a stale flag would be
+  // released moments before the migration below raises it again and starts
+  // rewriting records — which is the half-migrated read the flag exists to
+  // prevent. So the recovery happens only on the paths that do no work; the
+  // paths that do work re-raise the flag and clear it honestly in `finally`.
+  const staleFlag = migrationInProgress
+  if (staleFlag) {
+    console.warn('[JourneyTracker] found a migration flag left by an interrupted run')
+  }
 
   // Data written by a newer build than this one. Refuse rather than carry on:
   // the version stamp is the only record of what has actually been applied, and
@@ -113,7 +130,7 @@ export async function runPendingMigrations(
   // records means the settings were lost, and replaying is the safe answer —
   // which is exactly why migrations have to be idempotent.
   if (dataVersion === 0 && (await db.postings.count()) === 0) {
-    await patchSettings({ dataVersion: targetVersion })
+    await patchSettings({ dataVersion: targetVersion, migrationInProgress: false })
     return { from: 0, to: targetVersion, applied: [], freshInstall: true }
   }
 
@@ -122,7 +139,11 @@ export async function runPendingMigrations(
     .sort((a, b) => a.to - b.to)
 
   if (pending.length === 0) {
-    if (dataVersion !== targetVersion) await patchSettings({ dataVersion: targetVersion })
+    // Nothing to do, so this is the safe place to retire a stale flag: no
+    // migration follows to invalidate the readers it releases.
+    if (dataVersion !== targetVersion || staleFlag) {
+      await patchSettings({ dataVersion: targetVersion, migrationInProgress: false })
+    }
     return { from: dataVersion, to: targetVersion, applied: [], freshInstall: false }
   }
 

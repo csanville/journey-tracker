@@ -91,17 +91,6 @@ body {
   color: var(--ink-faint);
 }
 
-.stack {
-  display: flex;
-  flex-direction: column;
-  gap: calc(var(--step) * 1.5);
-}
-
-.lede {
-  margin: 0;
-  color: var(--ink-soft);
-}
-
 .probes {
   display: flex;
   flex-direction: column;
@@ -134,23 +123,10 @@ body {
   text-align: right;
 }
 
-.probe__value--checking {
-  color: var(--ink-faint);
-}
-
-.probe__value--ok {
-  color: var(--positive);
-}
-
-.probe__value--warn {
-  color: var(--caution);
-}
-
-.probe__value--failed {
-  color: var(--negative);
-}
-
 .notice {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--step) * 0.5);
   margin: 0;
   padding: calc(var(--step) * 0.75) var(--step);
   border: 1px solid var(--caution);
@@ -160,6 +136,275 @@ body {
   font-size: 0.82rem;
 }
 
+.notice p {
+  margin: 0;
+}
+
+.notice__title {
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.notice__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: calc(var(--step) * 0.5);
+}
+
+.notice--bad {
+  border-color: var(--negative);
+  background: transparent;
+}
+
+/* ---- form ---------------------------------------------------------------- */
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--step);
+}
+
+/*
+ * The save → clear → fresh transition. Deliberately brief: it exists to make
+ * the record visibly leave the form, not to be admired between entries.
+ */
+@keyframes form-wipe {
+  60% {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  61% {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.form--wiping {
+  animation: form-wipe 380ms ease-in-out;
+}
+
+.form--wiping :is(input, select, textarea, button) {
+  /* Nothing typed during the wipe would survive the reset that follows it. */
+  pointer-events: none;
+}
+
+.field {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  gap: calc(var(--step) * 0.25);
+  min-width: 0;
+  margin: 0;
+}
+
+.field__label {
+  font-size: 0.78rem;
+  font-weight: 560;
+  color: var(--ink-soft);
+}
+
+.field__input {
+  width: 100%;
+  padding: calc(var(--step) * 0.5) calc(var(--step) * 0.6);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.85rem;
+}
+
+.field__input:focus-visible {
+  outline: 2px solid var(--indigo);
+  outline-offset: -1px;
+  border-color: var(--indigo);
+}
+
+.field__input[aria-invalid='true'] {
+  border-color: var(--negative);
+}
+
+.field__input--area {
+  resize: vertical;
+  min-height: 4.5rem;
+}
+
+.field__hint,
+.field__error {
+  font-size: 0.72rem;
+}
+
+.field__hint {
+  color: var(--ink-faint);
+}
+
+.field__error {
+  color: var(--negative);
+}
+
+.row {
+  display: flex;
+  gap: calc(var(--step) * 0.75);
+}
+
+.form__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: calc(var(--step) * 0.5);
+  padding-top: calc(var(--step) * 0.25);
+}
+
+.button {
+  padding: calc(var(--step) * 0.45) var(--step);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.83rem;
+  cursor: pointer;
+}
+
+.button:hover:not(:disabled) {
+  border-color: var(--indigo);
+}
+
+.button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.button--primary {
+  border-color: var(--indigo);
+  background: var(--indigo);
+  color: #fff;
+  font-weight: 560;
+}
+
+.button--quiet {
+  border-color: transparent;
+  color: var(--ink-soft);
+}
+
+/* ---- recent -------------------------------------------------------------- */
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--step) * 0.6);
+}
+
+.section__head {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--step) * 0.5);
+  margin: 0;
+  padding-top: var(--step);
+  border-top: 1px solid var(--rule);
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.section__count {
+  padding: 0 0.4em;
+  border-radius: 999px;
+  background: var(--rule);
+  font-size: 0.72rem;
+  letter-spacing: 0;
+  color: var(--ink-soft);
+}
+
+.empty {
+  margin: 0;
+  color: var(--ink-faint);
+  font-size: 0.82rem;
+}
+
+.recent {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  background: var(--rule);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.recent__item {
+  display: grid;
+  gap: 0.1rem;
+  padding: calc(var(--step) * 0.6) calc(var(--step) * 0.75);
+  background: var(--surface);
+}
+
+.recent__company {
+  font-weight: 560;
+  font-size: 0.85rem;
+}
+
+.recent__title {
+  color: var(--ink-soft);
+  font-size: 0.82rem;
+}
+
+.recent__meta {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--step) * 0.5);
+  color: var(--ink-faint);
+  font-size: 0.72rem;
+}
+
+.pill {
+  padding: 0 0.45em;
+  border-radius: 999px;
+  background: var(--rule);
+  color: var(--ink-soft);
+  text-transform: capitalize;
+}
+
+.pill--applied {
+  background: color-mix(in srgb, var(--indigo) 22%, transparent);
+  color: var(--indigo);
+}
+
+/* ---- diagnostics --------------------------------------------------------- */
+
+.diagnostics {
+  font-size: 0.8rem;
+}
+
+.diagnostics > summary {
+  padding: calc(var(--step) * 0.4) 0;
+  color: var(--ink-faint);
+  cursor: pointer;
+}
+
+.diagnostics > summary:focus-visible {
+  outline: 2px solid var(--indigo);
+  outline-offset: 2px;
+}
+
+.diagnostics .probes {
+  margin-top: calc(var(--step) * 0.4);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .form--wiping {
+    animation: none;
+  }
+}
+
 .panel__foot {
   margin-top: auto;
   padding-top: var(--step);
@@ -167,4 +412,27 @@ body {
   font-family: var(--font-mono);
   font-size: 0.7rem;
   color: var(--ink-faint);
+}
+
+.notice__detail {
+  color: var(--ink-faint);
+  font-size: 0.75rem;
+}
+
+/*
+ * A fieldset only for the `disabled` behaviour, which is the one way to lock a
+ * whole form's inputs at once. It carries no visual weight of its own.
+ */
+.fields {
+  display: flex;
+  flex-direction: column;
+  gap: var(--step);
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+
+.fields:disabled {
+  opacity: 0.6;
 }

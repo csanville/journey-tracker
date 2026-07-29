@@ -1,4 +1,4 @@
-import type { Posting, PostingInput, Snapshot } from './types'
+import type { DuplicateMatch, Posting, PostingInput, Snapshot } from './types'
 
 /**
  * The panel-to-worker protocol.
@@ -16,8 +16,14 @@ export interface RequestMap {
   'posting/list': { payload: NoPayload; result: Posting[] }
   'posting/count': { payload: NoPayload; result: number }
   'posting/delete': { payload: { id: string }; result: { deleted: string } }
-  /** Reports an existing record for the same posting. Reports only — never merges. */
-  'posting/find-duplicate': { payload: { posting: PostingInput }; result: Posting | null }
+  /**
+   * Reports an existing record that may be the same posting, with which key
+   * matched so the caller can weigh it. Reports only — never merges.
+   */
+  'posting/find-duplicate': {
+    payload: { posting: PostingInput }
+    result: DuplicateMatch | null
+  }
   'snapshot/put': { payload: { snapshot: Snapshot }; result: { postingId: string } }
   'snapshot/get': { payload: { postingId: string }; result: Snapshot | null }
   'status': { payload: NoPayload; result: StatusReport }
