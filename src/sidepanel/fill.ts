@@ -81,6 +81,44 @@ export function fieldsFilled(detection: DetectionSummary, base: Draft): Fillable
 }
 
 /**
+ * What a newly detected posting should do to the form.
+ *
+ * Decision 13 as a function, kept out of the component for the same reason the
+ * rest of this file is: the rule is the part worth getting right, and a rule
+ * expressed as four interacting `if`s inside an effect is a rule nobody can
+ * check. The component supplies the state and does as it is told.
+ *
+ * - `fill` — the form is pristine, so the new posting simply becomes the form.
+ *   Pristine means *untouched*, not *empty*: a form auto-filled from the last
+ *   posting and left alone is still pristine, and that is exactly the case that
+ *   must swap, because it is what tabbing between two postings looks like.
+ * - `announce` — the user has typed something, so the posting waits in a banner.
+ *   Losing typed notes by tabbing away to check something is the small betrayal
+ *   decision 13 exists to prevent.
+ * - `nothing` — either there is no new posting, or a save is in flight, or the
+ *   user already folded this one away. A save in flight matters more than it
+ *   looks: the draft has already been snapshotted for writing, so a fill landing
+ *   in the gap is saved as the pre-fill values and then wiped by the reset.
+ */
+export type SwapAction = 'fill' | 'announce' | 'nothing'
+
+export function swapAction(state: {
+  /** Whether there is a detection not already in the form. */
+  offered: boolean
+  /** Whether the user has typed anything worth protecting. */
+  dirty: boolean
+  /** Whether a save is in flight. */
+  busy: boolean
+  /** Whether this particular detection's banner was folded away. */
+  dismissed: boolean
+}): SwapAction {
+  if (!state.offered || state.busy) return 'nothing'
+  if (state.dirty) return 'announce'
+
+  return state.dismissed ? 'nothing' : 'fill'
+}
+
+/**
  * The provenance to store when saving a record that was filled from a page.
  *
  * Kept even if the user then corrects a field by hand. "Which adapter produced

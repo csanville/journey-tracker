@@ -1,7 +1,8 @@
-import { useEffect, useId, useMemo, useState } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { send } from '../lib/client'
 import type { DetectionSummary } from '../lib/detection'
 import { newId } from '../lib/ids'
+import { postingInputFromDetection } from '../lib/tracked'
 import type { DuplicateMatch } from '../lib/types'
 import {
   EMPTY_DRAFT,
@@ -13,7 +14,7 @@ import {
   today,
   type Draft,
 } from './draft'
-import { draftFromDetection, fieldsFilled, saveContextFor } from './fill'
+import { draftFromDetection, fieldsFilled, saveContextFor, swapAction } from './fill'
 
 /**
  * How long the form takes to clear itself after a save. Matches the
@@ -66,6 +67,8 @@ export function PostingForm({
   const [confirmingFill, setConfirmingFill] = useState(false)
   /** The detection whose banner has been folded away, by id. */
   const [dismissed, setDismissed] = useState<string | null>(null)
+  /** A record this page matches, found before anything was typed. */
+  const [revisit, setRevisit] = useState<DuplicateMatch | null>(null)
 
   /**
    * Fixed for the life of this draft rather than generated at save.
@@ -124,17 +127,95 @@ export function PostingForm({
   /**
    * Applies a detection to the form.
    *
-   * Layered over the current draft rather than replacing it, so status, notes,
-   * tags and the applied date — none of which a job board knows anything about —
-   * survive a fill. See `fill.ts`.
+   * `base` is what the fill layers onto, and the two callers want different
+   * things from it.
+   *
+   * An explicit click layers onto the **current draft**, so status, notes, tags
+   * and the applied date — none of which a job board knows anything about —
+   * survive a fill. That is "answer what this page knows about the record I am
+   * working on". See `fill.ts`.
+   *
+   * An automatic swap layers onto an **empty draft**, because it is a different
+   * request: the user tabbed to another posting and the form should show that
+   * posting. Layering a swap over the last one would leave the previous
+   * posting's location or salary sitting under the new one wherever the new
+   * page happened to be quieter — a record that is a blend of two jobs and
+   * looks like neither.
    */
-  const applyFill = (summary: DetectionSummary) => {
-    const next = draftFromDetection(summary, draft)
+  const applyFill = (summary: DetectionSummary, base: Draft = draft) => {
+    const next = draftFromDetection(summary, base)
     setDraft(next)
     setFilled({ detection: summary, draft: next })
     setConfirmingFill(false)
     if (phase.name === 'duplicate' || phase.name === 'failed') setPhase({ name: 'editing' })
   }
+
+  /**
+   * Decision 13's swap rule, now that the panel follows the tab.
+   *
+   * A pristine form takes the new posting without being asked; a form with
+   * typed work in it falls through to the banner below and waits. "Pristine"
+   * is `dirty`, not "empty" — a form auto-filled from the last posting and left
+   * alone is still untouched, and that is precisely the case that has to swap,
+   * because it is what tabbing between two postings looks like.
+   *
+   * Locked while a save is in flight for the same reason every other way into
+   * the form is: `toPostingInput` has already snapshotted the draft, so a fill
+   * landing in the gap is written as the pre-fill values and then wiped by the
+   * reset that follows.
+   */
+  useEffect(() => {
+    const action = swapAction({
+      offered: offered !== null,
+      dirty,
+      busy,
+      dismissed: dismissed === offered?.detectionId,
+    })
+
+    // `announce` and `nothing` are both "leave the form alone" here — the
+    // banner below renders from `offered` on its own.
+    if (action === 'fill' && offered) applyFill(offered, EMPTY_DRAFT)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [offered?.detectionId, busy, dirty, dismissed])
+
+  /**
+   * The revisit warning: "have I been here before", asked on arrival.
+   *
+   * The same `findDuplicate` the save path uses, run at the point the question
+   * is actually being asked rather than after the description has been read and
+   * the notes typed (decision 7). Answering it at save is answering it too late.
+   *
+   * Keyed on the detection rather than on the draft on purpose. This is a
+   * question about the *page*, so it must not re-run on every keystroke, and it
+   * must not depend on the user having filled anything in.
+   */
+  const latestRevisit = useRef(0)
+
+  useEffect(() => {
+    const mine = ++latestRevisit.current
+
+    if (!detection) {
+      setRevisit(null)
+      return
+    }
+
+    void (async () => {
+      try {
+        const match = await send('posting/find-duplicate', {
+          posting: postingInputFromDetection(detection),
+        })
+        // Same race as the detection fetch upstream: tabbing quickly leaves two
+        // of these in flight, and the older one must not win.
+        if (mine === latestRevisit.current) setRevisit(match)
+      } catch (error) {
+        // Not knowing is the same as not matching, and the panel already
+        // reports a worker it cannot reach. A second banner about it here
+        // would be noise on top of noise.
+        console.debug('[JourneyTracker] could not check for a revisit', error)
+      }
+    })()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detection?.detectionId])
 
   // The wipe is driven by a timer rather than `animationend`, so a form that is
   // not animating at all still clears.
@@ -198,6 +279,11 @@ export function PostingForm({
       }}
       noValidate
     >
+      {/* Suppressed while the save-time prompt is up: they are the same finding
+          at two different moments, and showing both would ask the user to
+          reconcile two banners about one record. */}
+      {revisit && phase.name !== 'duplicate' && <RevisitNotice match={revisit} />}
+
       {offered && (
         <DetectedNotice
           detection={offered}
@@ -458,6 +544,45 @@ function DetectedNotice({
       </div>
     </div>
   )
+}
+
+/**
+ * "You have been here before" — said on arrival, not at save.
+ *
+ * Deliberately not a prompt. Nothing has been typed yet, so there is no
+ * decision to make and nothing to confirm or discard; the useful thing is the
+ * fact and the date, delivered before the user spends ten minutes re-reading a
+ * description they already read. Giving it buttons would turn an answer into a
+ * question.
+ *
+ * It states the previous outcome because that is the part people actually want:
+ * "applied" means do not bother, "viewed" means this is the second time this
+ * page has caught your eye and perhaps that means something.
+ */
+function RevisitNotice({ match }: { match: DuplicateMatch }) {
+  const { posting } = match
+  const applied = posting.state === 'applied' && posting.appliedAt !== null
+
+  return (
+    <div className="notice notice--revisit" role="status">
+      <p className="notice__title">
+        {applied
+          ? `You applied to this on ${formatDay(posting.appliedAt)}.`
+          : `You looked at this on ${formatDay(posting.createdAt)}.`}
+      </p>
+      <p className="notice__detail">
+        {posting.company} — {posting.jobTitle}
+        {/* A title match is a resemblance, not identity (decision 7), so it
+            says so rather than asserting you were on this exact page. */}
+        {match.matchedOn === 'title' &&
+          ' · matched on the title, so possibly a different one'}
+      </p>
+    </div>
+  )
+}
+
+function formatDay(at: number | null): string {
+  return at === null ? 'an earlier date' : new Date(at).toLocaleDateString()
 }
 
 /**

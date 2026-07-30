@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { send } from '../lib/client'
 import type { DetectionSummary } from '../lib/detection'
+import { isEvent } from '../lib/events'
 import type { StatusReport } from '../lib/messages'
 import { requestPersistence } from '../lib/persistence'
 import type { Posting } from '../lib/types'
@@ -45,13 +46,9 @@ export function App() {
   /**
    * Re-asks what the active tab is showing.
    *
-   * Called on mount and whenever the panel regains focus — which is to say,
-   * whenever the user clicks back into it, having just been reading a posting.
-   * That covers the phase-4 flow without any tab listeners: the panel is only
-   * ever stale while nobody is looking at it.
-   *
-   * Following tab switches as they happen, and the swap rules that decide what a
-   * half-filled form should do about them, are phase 5 (decision 13).
+   * Called on mount, on focus, when the user switches tabs, and when a content
+   * script reports something new. The last two are what phase 5 adds: the form
+   * follows the tab rather than waiting to be looked at.
    *
    * The counter is not ceremony. This fires on mount *and* on every focus, so
    * two calls overlap whenever the user clicks into the panel while the first
@@ -82,8 +79,34 @@ export function App() {
     const onFocus = () => void refreshDetection()
     globalThis.addEventListener('focus', onFocus)
 
+    /**
+     * Switching tabs. `onActivated` reports a tab id and nothing else, so it
+     * needs no `tabs` permission — the same line decision 2 draws for
+     * `chrome.tabs.query`: which tab, never where it is.
+     */
+    const onActivated = () => void refreshDetection()
+    chrome.tabs.onActivated.addListener(onActivated)
+
+    /**
+     * A content script reporting while the panel is already open — a board that
+     * rendered late, or an SPA the user clicked through without a page load.
+     *
+     * Deliberately not filtered by the event's `tabId`. Doing that would mean
+     * the panel keeping its own idea of which tab is active, and that second
+     * copy is exactly the thing that goes stale; `refreshDetection` asks Chrome,
+     * which is the answer rather than a cache of it. A report from a background
+     * tab costs one message and resolves to the same detection, and the
+     * ordering guard above makes an overlapping pair safe.
+     */
+    const onEvent = (message: unknown) => {
+      if (isEvent(message)) void refreshDetection()
+    }
+    chrome.runtime.onMessage.addListener(onEvent)
+
     return () => {
       globalThis.removeEventListener('focus', onFocus)
+      chrome.tabs.onActivated.removeListener(onActivated)
+      chrome.runtime.onMessage.removeListener(onEvent)
       // Retires every request in flight, so none of them sets state on an
       // unmounted panel.
       latestDetection.current++
@@ -207,7 +230,7 @@ export function App() {
         </dl>
       </details>
 
-      <footer className="panel__foot">Phase 4 · extraction</footer>
+      <footer className="panel__foot">Phase 5 · live sync</footer>
     </div>
   )
 }

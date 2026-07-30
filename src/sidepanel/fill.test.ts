@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { DetectionSummary } from '../lib/detection'
 import { EMPTY_DRAFT, toPostingInput, type Draft } from './draft'
-import { draftFromDetection, fieldsFilled, saveContextFor } from './fill'
+import { draftFromDetection, fieldsFilled, saveContextFor, swapAction } from './fill'
 
 function aDetection(overrides: Partial<DetectionSummary> = {}): DetectionSummary {
   return {
@@ -176,5 +176,46 @@ describe('saveContextFor', () => {
     const posting = toPostingInput({ ...EMPTY_DRAFT, company: 'Acme', jobTitle: 'Eng' })
 
     expect(posting).toMatchObject({ source: 'manual', adapterVersion: 'manual@1' })
+  })
+})
+
+describe('swapAction', () => {
+  const base = { offered: true, dirty: false, busy: false, dismissed: false }
+
+  it('fills a pristine form without asking', () => {
+    expect(swapAction(base)).toBe('fill')
+  })
+
+  it('fills a form that was auto-filled and left alone', () => {
+    // The case the whole rule exists for. After a fill the draft equals its own
+    // baseline, so `dirty` is false while the form is full — and tabbing from
+    // one posting to another must move the form, not announce at it.
+    expect(swapAction({ ...base, dirty: false })).toBe('fill')
+  })
+
+  it('announces rather than overwriting typed work', () => {
+    expect(swapAction({ ...base, dirty: true })).toBe('announce')
+  })
+
+  it('does nothing while a save is in flight', () => {
+    // The draft has already been snapshotted for writing. A fill landing in the
+    // gap is saved as the pre-fill values and then wiped by the reset — which
+    // is worse than not filling, because it looks like it worked.
+    expect(swapAction({ ...base, busy: true })).toBe('nothing')
+    expect(swapAction({ ...base, busy: true, dirty: true })).toBe('nothing')
+  })
+
+  it('does not resurrect a banner the user folded away', () => {
+    expect(swapAction({ ...base, dismissed: true })).toBe('nothing')
+  })
+
+  it('still announces a dismissed posting once work has been typed', () => {
+    // Dismissing says "not this one, not now". It does not license overwriting
+    // what was typed afterwards, and the fall-through must not reach `fill`.
+    expect(swapAction({ ...base, dismissed: true, dirty: true })).toBe('announce')
+  })
+
+  it('does nothing when there is nothing on offer', () => {
+    expect(swapAction({ ...base, offered: false })).toBe('nothing')
   })
 })
