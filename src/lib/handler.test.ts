@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { aPosting, freshDb } from '../test/factories'
 import type { DetectionReport } from './detection'
 import { handleRequest } from './handler'
@@ -215,6 +215,99 @@ describe('detection', () => {
       postingId: posting.id,
     })
     expect(snapshot.ok && snapshot.data).toBeNull()
+  })
+})
+
+describe('marking a tab that is already tracked', () => {
+  /** The stored record `aReport()` describes, already normalized. */
+  async function storeMatching(db: Awaited<ReturnType<typeof freshDb>>) {
+    await db.postings.add({
+      ...aPosting({
+        id: 'stored-1',
+        company: 'Acme',
+        jobTitle: 'Staff Engineer',
+        atsReqId: null,
+      }),
+      companyNormalized: 'acme',
+      canonicalUrl: 'https://jobs.lever.co/acme/00000000-0000-4000-8000-000000000000',
+      schemaVersion: SCHEMA_VERSION,
+      createdAt: 1,
+      updatedAt: 1,
+    } as never)
+  }
+
+  it('badges the tab when the page is one already saved', async () => {
+    const db = await freshDb()
+    await storeMatching(db)
+
+    await handleRequest(db, { kind: 'detection/report', report: aReport() }, { tabId: 12 })
+
+    expect(chrome.action.setBadgeText).toHaveBeenCalledWith({ tabId: 12, text: '✓' })
+  })
+
+  it('clears the badge for a page that is not tracked', async () => {
+    const db = await freshDb()
+
+    await handleRequest(db, { kind: 'detection/report', report: aReport() }, { tabId: 12 })
+
+    expect(chrome.action.setBadgeText).toHaveBeenCalledWith({ tabId: 12, text: '' })
+  })
+
+  it('tells the panel a tab changed', async () => {
+    const db = await freshDb()
+
+    await handleRequest(db, { kind: 'detection/report', report: aReport() }, { tabId: 12 })
+
+    expect(chrome.runtime.sendMessage).toHaveBeenCalledWith({
+      type: 'detection/changed',
+      tabId: 12,
+    })
+  })
+
+  it('badges the tab a save came from, found via the detection id', async () => {
+    const db = await freshDb()
+    await handleRequest(db, { kind: 'detection/report', report: aReport() }, { tabId: 12 })
+    vi.mocked(chrome.action.setBadgeText).mockClear()
+
+    // The panel has no tab of its own, so the tab is derived from the
+    // `detectionId` the save already carries for the snapshot. The record
+    // carries the page's own URL, because that is what filling from it does.
+    await handleRequest(db, {
+      kind: 'posting/upsert',
+      posting: aPosting({
+        company: 'Acme',
+        jobTitle: 'Staff Engineer',
+        atsReqId: null,
+        url: 'https://jobs.lever.co/acme/00000000-0000-4000-8000-000000000000',
+      }),
+      detectionId: 'det-1',
+    })
+
+    expect(chrome.action.setBadgeText).toHaveBeenCalledWith({ tabId: 12, text: '✓' })
+  })
+
+  it('does not fail the save when the toolbar rejects the badge', async () => {
+    const db = await freshDb()
+    await handleRequest(db, { kind: 'detection/report', report: aReport() }, { tabId: 12 })
+    vi.mocked(chrome.action.setBadgeText).mockRejectedValueOnce(new Error('no such tab'))
+
+    // The tab closed between the report and the save. The record is written and
+    // that is what the user asked for; a badge is decoration.
+    const response = await handleRequest(db, {
+      kind: 'posting/upsert',
+      posting: aPosting(),
+      detectionId: 'det-1',
+    })
+
+    expect(response.ok).toBe(true)
+  })
+
+  it('leaves a hand-typed save alone — there is no page to mark', async () => {
+    const db = await freshDb()
+
+    await handleRequest(db, { kind: 'posting/upsert', posting: aPosting() })
+
+    expect(chrome.action.setBadgeText).not.toHaveBeenCalled()
   })
 })
 

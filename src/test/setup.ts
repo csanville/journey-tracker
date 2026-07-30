@@ -89,15 +89,42 @@ function createStorageStub() {
 
 const storage = createStorageStub()
 
+/**
+ * The toolbar and the broadcast channel, as spies.
+ *
+ * Real enough to assert against and inert enough to ignore. Both are reachable
+ * from the detection path now that a report repaints the badge and tells the
+ * panel, and neither exists in a Node process — without them every handler test
+ * that reports a detection would fail on a missing global rather than on
+ * anything it was written to check.
+ *
+ * `sendMessage` resolves rather than rejecting. Chrome rejects it when no
+ * receiver exists, and `broadcast` swallows exactly that; a stub that rejected
+ * would test the swallow and nothing else. `events.test.ts` covers the
+ * rejection case explicitly instead.
+ */
+const action = {
+  setBadgeText: vi.fn(async () => undefined),
+  setBadgeBackgroundColor: vi.fn(async () => undefined),
+}
+
+const runtime = {
+  sendMessage: vi.fn(async () => undefined),
+}
+
 vi.stubGlobal('chrome', {
   storage: {
     local: storage.local,
     session: storage.session,
     onChanged: storage.onChanged,
   },
-  runtime: {},
+  runtime,
+  action,
 })
 
 beforeEach(() => {
   storage.reset()
+  action.setBadgeText.mockClear()
+  action.setBadgeBackgroundColor.mockClear()
+  runtime.sendMessage.mockClear()
 })

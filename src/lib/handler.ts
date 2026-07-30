@@ -1,14 +1,17 @@
 import type { JourneyTrackerDb } from './db'
 import {
   findSnapshot,
+  findTabForDetection,
   getDetectionSummary,
   recordDetection,
   sanitizeReport,
 } from './detection'
+import { broadcast } from './events'
 import type { Request, RequestKind, Response, Result, StatusReport } from './messages'
 import { recordStorageProtection } from './persistence'
 import * as repo from './repository'
 import { readSettings } from './settings'
+import { postingInputFromDetection, setTrackedBadge } from './tracked'
 import { SCHEMA_VERSION } from './types'
 
 /**
@@ -76,6 +79,13 @@ async function dispatch(
       if (!report) return null
 
       await recordDetection(context.tabId, report)
+
+      // Both of these are about a tab, not about this request, so neither is
+      // allowed to fail it. The content script's report is already cached and
+      // correct by this point; a badge that did not paint or a panel that did
+      // not hear is a worse answer, not a wrong one.
+      await announceDetection(db, context.tabId)
+
       return { detectionId: report.detectionId }
     }
     case 'detection/get':
@@ -91,6 +101,30 @@ async function dispatch(
       throw new Error(`unhandled request: ${JSON.stringify(exhaustive)}`)
     }
   }
+}
+
+/**
+ * Repaints a tab's badge and tells the panel something moved.
+ *
+ * Swallows its own failures. Every caller has already done the thing that
+ * mattered — cached a detection, written a record — and neither the badge nor
+ * the broadcast is worth turning a completed write into a reported error. The
+ * `chrome.action` surface is also the one part of this that is absent in a
+ * worker with no toolbar, which is what tests run against.
+ */
+async function announceDetection(db: JourneyTrackerDb, tabId: number): Promise<void> {
+  try {
+    const detection = await getDetectionSummary(tabId)
+    const match = detection
+      ? await repo.findDuplicate(db, postingInputFromDetection(detection))
+      : null
+
+    await setTrackedBadge(tabId, match !== null)
+  } catch (error) {
+    console.error('[JourneyTracker] could not mark the tab', tabId, error)
+  }
+
+  await broadcast({ type: 'detection/changed', tabId })
 }
 
 /**
@@ -113,6 +147,10 @@ async function upsert(
 ): Promise<unknown> {
   const posting = await repo.upsertPosting(db, input)
   if (!detectionId) return posting
+
+  // The page this came from is now tracked, so its tab has a badge to light.
+  const tabId = await findTabForDetection(detectionId)
+  if (tabId !== null) await announceDetection(db, tabId)
 
   try {
     const detection = await findSnapshot(detectionId)
