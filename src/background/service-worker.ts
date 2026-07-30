@@ -6,6 +6,7 @@
  * raced between however many panels happen to be open (decision 4).
  */
 import { openDb, type JourneyTrackerDb } from '../lib/db'
+import { captureTab } from '../lib/capture'
 import { forgetTab } from '../lib/detection'
 import { broadcast } from '../lib/events'
 import { handleRequest } from '../lib/handler'
@@ -52,18 +53,83 @@ function ready(): Promise<JourneyTrackerDb> {
   return readyPromise
 }
 
+/**
+ * The right-click entry point, and the reason it is a right-click.
+ *
+ * `activeTab` is granted by four gestures and no others: an action, a context
+ * menu item, a `commands` shortcut, an omnibox suggestion. A button in the side
+ * panel grants nothing, so the obvious affordance — next to the form, where
+ * somebody would look — cannot work. The action is spoken for as well, since
+ * `openPanelOnActionClick` means clicking the icon opens the panel and
+ * `onClicked` never fires.
+ *
+ * That leaves the context menu and the keyboard shortcut, and both are wired
+ * below. The menu is the discoverable one.
+ */
+const CAPTURE_MENU_ID = 'journeytracker-capture'
+
 chrome.runtime.onInstalled.addListener(() => {
   void (async () => {
     try {
       // Without this the toolbar button does nothing and the panel can only be
       // reached from Chrome's own side-panel menu.
       await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true })
+
+      // Removed first so a reload during development does not accumulate
+      // duplicates of the same item, which `create` would reject.
+      await chrome.contextMenus.removeAll()
+      chrome.contextMenus.create({
+        id: CAPTURE_MENU_ID,
+        title: 'Read this page into JourneyTracker',
+        // `page` only. Offering this on a link or an image would promise
+        // something `activeTab` cannot deliver — the grant is for the tab in
+        // front of the user, not for whatever a link points at.
+        contexts: ['page'],
+      })
+
       await ready()
     } catch (error) {
       console.error('[JourneyTracker] install failed', error)
     }
   })()
 })
+
+chrome.contextMenus.onClicked.addListener((info, tab) => {
+  if (info.menuItemId !== CAPTURE_MENU_ID || tab?.id === undefined) return
+
+  void captureAndShow(tab.id)
+})
+
+chrome.commands.onCommand.addListener((command, tab) => {
+  if (command !== 'capture-page' || tab?.id === undefined) return
+
+  void captureAndShow(tab.id)
+})
+
+/**
+ * Reads the tab, then shows the user what came of it.
+ *
+ * The panel is opened only on a successful read. Opening it after a refusal —
+ * a PDF, the Web Store, a `chrome://` page — would answer a request to read
+ * this page with a panel that says nothing about it, which reads as a bug
+ * rather than as a limit.
+ *
+ * `sidePanel.open` has to be called while the invoking gesture is still in
+ * scope, which is why it is awaited here rather than deferred until the content
+ * script has finished its ladder. The panel is listening for the broadcast by
+ * then and fills itself in when the report lands.
+ */
+async function captureAndShow(tabId: number): Promise<void> {
+  if (!(await captureTab(tabId))) return
+
+  try {
+    await chrome.sidePanel.open({ tabId })
+  } catch (error) {
+    // The gesture expired, or the panel is already open. Neither costs the
+    // read, which has already happened.
+    console.debug('[JourneyTracker] could not open the panel', error)
+  }
+}
 
 chrome.runtime.onStartup.addListener(() => {
   void ready().catch((error: unknown) => {

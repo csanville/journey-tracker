@@ -187,6 +187,20 @@ export function App() {
         }}
       />
 
+      {/*
+        The capture gesture cannot be a button here — `activeTab` is granted by
+        an action, a context menu item, a keyboard shortcut or the omnibox, and
+        a click inside an extension page is none of those. So the panel does the
+        only thing it can and says where the gesture lives. Shown only when
+        nothing was detected, which is exactly when somebody would be wondering.
+      */}
+      {detection === null && (
+        <p className="hint hint--capture">
+          Not a board this reads automatically? Right-click the page and choose{' '}
+          <strong>Read this page into JourneyTracker</strong>.
+        </p>
+      )}
+
       <section className="section">
         <h2 className="section__head">
           Recent

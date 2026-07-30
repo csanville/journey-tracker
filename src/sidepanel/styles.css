@@ -278,6 +278,25 @@ body {
   color: var(--negative);
 }
 
+/*
+ * Signposting for the capture gesture, which cannot be a button in this panel —
+ * see App.tsx. It sits at the weight of a hint rather than a notice because
+ * nothing is wrong: most pages are not job postings, and being told so is not
+ * an event.
+ */
+.hint--capture {
+  margin: 0;
+  color: var(--ink-faint);
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+
+.hint--capture strong {
+  color: var(--ink-soft);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
 .row {
   display: flex;
   gap: calc(var(--step) * 0.75);

@@ -40,6 +40,27 @@ describe('the content script allowlist', () => {
     // fetch, cookies and webRequest against those hosts, and this extension
     // does none of them (decision 2).
     expect(manifest).not.toHaveProperty('host_permissions')
-    expect(manifest.permissions).toEqual(['sidePanel', 'storage', 'unlimitedStorage'])
+    expect(manifest.permissions).toEqual([
+      'sidePanel',
+      'storage',
+      'unlimitedStorage',
+      // Phase 5's capture gesture. `activeTab` is one tab at a time, granted by
+      // the user and lapsing on navigation, which is why it is not the same
+      // request as a host permission however similar it sounds.
+      'activeTab',
+      'scripting',
+      'contextMenus',
+    ])
+  })
+
+  it('offers the capture gesture somewhere that actually grants activeTab', () => {
+    // The load-bearing fact of the whole feature: `activeTab` comes from an
+    // action, a context menu item, a `commands` shortcut or the omnibox, and
+    // from nothing else. A button in the side panel grants nothing, and the
+    // action is spoken for by `openPanelOnActionClick`. If both of these
+    // disappeared, the feature would still look present and would never once
+    // be permitted to read a page.
+    expect(manifest.permissions).toContain('contextMenus')
+    expect(manifest.commands).toHaveProperty('capture-page')
   })
 })
