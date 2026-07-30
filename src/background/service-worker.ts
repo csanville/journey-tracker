@@ -7,10 +7,12 @@
  */
 import { openDb, type JourneyTrackerDb } from '../lib/db'
 import { forgetTab } from '../lib/detection'
+import { broadcast } from '../lib/events'
 import { handleRequest } from '../lib/handler'
 import { allowedFromContentScript, isRequest } from '../lib/messages'
 import { runPendingMigrations } from '../lib/migrations'
 import { recordStorageProtection } from '../lib/persistence'
+import { setTrackedBadge } from '../lib/tracked'
 
 let readyPromise: Promise<JourneyTrackerDb> | null = null
 
@@ -80,6 +82,41 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   void forgetTab(tabId).catch((error: unknown) => {
     console.error('[JourneyTracker] could not forget tab', tabId, error)
   })
+})
+
+/**
+ * A tab navigating away invalidates whatever was detected on it.
+ *
+ * This mattered less in phase 4, where a stale detection meant a banner
+ * offering a page the user had left and could be ignored. Now that a pristine
+ * form fills itself, a detection that outlives its page would put the previous
+ * job into the form on an unrelated site — silently, and looking exactly like a
+ * correct read.
+ *
+ * Gated on `status === 'loading'`, which is a real page load. Single-page
+ * navigation does not set it, and must not: Workday and Ashby change the URL
+ * without a load, `watch-url.ts` re-reports when they do, and clearing on those
+ * would delete a detection that is about to be replaced by an identical one.
+ *
+ * No permission. Without `tabs`, `onUpdated` still fires and still carries
+ * `status`; it is `url`, `title` and `favIconUrl` that are withheld, and none of
+ * those is wanted here (decision 2).
+ */
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (changeInfo.status !== 'loading') return
+
+  void (async () => {
+    try {
+      await forgetTab(tabId)
+      // The page that earned the mark is gone. A content script on whatever
+      // loads next will re-earn it.
+      await setTrackedBadge(tabId, false)
+    } catch (error) {
+      console.error('[JourneyTracker] could not clear tab', tabId, error)
+    }
+
+    await broadcast({ type: 'detection/changed', tabId })
+  })()
 })
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
