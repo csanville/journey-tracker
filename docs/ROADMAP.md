@@ -12,7 +12,7 @@ then merged.
 | 1 ✅ | `feat/schema-storage` | Dexie schema, migration harness, single-writer message layer, storage persistence | Tests green, no UI |
 | 2 ✅ | `feat/normalization` | Company normalization, URL canonicalization, `atsReqId`, dedupe | Fixture tests green, no UI |
 | 3 ✅ | `feat/sidepanel-form` | Full form, theme, manual save, dirty tracking, save → wipe → fresh form | Enter a job by hand; it survives a reload |
-| 4 | `feat/extraction` | Tiered adapters, snapshots, adapter versioning, URL reporting that survives SPA navigation, fixture tests | A real posting fills the form |
+| 4 ✅ | `feat/extraction` | Tiered adapters, snapshots, adapter versioning, URL reporting that survives SPA navigation, fixture tests | A real posting fills the form |
 | 5 | `feat/live-sync` | Tab listeners, swap rules, dirty banner, revisit warning, toolbar badge, `activeTab` capture for unknown sites | Tab between postings; the form follows, and a posting already tracked says so before you type |
 | 6 | `feat/export-import` | JSON lean/full round-trip, CSV report, skip-duplicate import | Export, wipe, re-import — data identical |
 | 7 | `feat/dashboard` | `liveQuery`-backed views: status funnel, over time, per-board yield | Patterns visible across saved data |
