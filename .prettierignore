@@ -5,3 +5,8 @@ node_modules
 # but it still rewrites list markers and emphasis, and the diff noise is not
 # worth it for files that are read far more often than they are edited.
 *.md
+
+# The fixtures are verbatim captures of real board markup. Reformatting them
+# would edit the very thing the tests assert against, and Prettier cannot parse
+# them anyway — both were trimmed at a tag boundary the parser reads as unclosed.
+src/test/fixtures/
