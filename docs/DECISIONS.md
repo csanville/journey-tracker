@@ -82,12 +82,54 @@ Related: reading a tab's URL from the extension side is what would need the
 next to, which returns an id to any extension; `url`, `title` and `favIconUrl`
 are the fields that permission gates, and none of them is read.
 
+**Amended — "click-initiated" is not a click of the user's choosing.** Phase 5
+built the `activeTab` half and found the decision had been assuming a freedom
+Chrome does not offer. `activeTab` is granted by exactly four gestures: invoking
+the extension's action, a context menu item, a `commands` keyboard shortcut, and
+an omnibox suggestion. **A button inside an extension page grants nothing.** So
+the obvious affordance — a "Read this page" button in the side panel, next to the
+form, where anyone would look for it — cannot work, and no amount of care in the
+panel can make it work.
+
+The action is spoken for as well. `openPanelOnActionClick` is what makes the
+toolbar icon open the panel, and it means `chrome.action.onClicked` never fires,
+so the one gesture users already understand is committed to something else. That
+leaves the context menu and the keyboard shortcut, and the manifest declares both
+— which is why `contextMenus` appears in the permission list. It buys the only
+discoverable gesture available; the shortcut alone would be a feature nobody
+finds. Real-world testing confirmed the right-click is how the feature actually
+gets used.
+
+The panel's job is therefore to *point at* the gesture rather than offer it, and
+it does so only when nothing was detected, which is exactly when somebody would
+be wondering. The hint also names the pages Chrome refuses outright — its own
+pages, the Web Store, PDFs — because the panel now opens on a refused read as
+well as a successful one, and telling somebody who just right-clicked a PDF to
+right-click the page reads as a broken menu item rather than as a limit.
+
+**Amended — the injected bundle cannot be the declared content script.** CRXJS
+compiles a declared content script into a small loader that dynamically
+`import()`s the real module, and that import is permitted only from the origins
+it lists in `web_accessible_resources` — which are the allowlisted boards.
+Injecting that file into an unknown site fails at the import, silently, in a page
+console nobody is reading, on precisely the sites `activeTab` exists to reach. So
+the injected script is a second, separate Vite build: one IIFE, every dependency
+inlined, nothing to fetch at runtime, at a fixed filename the worker can name
+without guessing a content hash. Every build path has to run it — a build that
+omits it fails at injection time with `Could not load file`, logged only in the
+worker console.
+
 **Consequences.** Slightly more code — a permission-request flow and a runtime
 injection path in addition to declarative content scripts. Auto-detection
 (showing a badge, or live-filling the panel, before the user clicks) only works
 on allowlisted hosts; everywhere else the user must initiate. That boundary is a
 user-visible behaviour difference and should be made obvious in the UI rather
 than left to be discovered.
+
+Three permissions carry the capture path — `activeTab`, `scripting`,
+`contextMenus` — and none of them adds an install warning, which is the whole
+point of the posture. `contextMenus` is the one that could be dropped, at the
+cost of the only discoverable way in.
 
 **Revisit when.** A feature genuinely requires passive observation across
 arbitrary domains. Before doing that, check whether the same insight can be
@@ -585,6 +627,42 @@ outside the disabled fieldset, so a fill landing mid-save wrote into a draft tha
 had already been snapshotted for writing — the record saved with pre-fill values
 and manual provenance, and the reset that follows a save then wiped the fill.
 
+**Amended — the rule is a function, and it has four inputs, not two.** Phase 5
+made the form follow the tab, which turns this decision from a description into
+code that runs on every detection. It lives in `sidepanel/fill.ts` as
+`swapAction`, deliberately outside React: a rule expressed as interacting `if`s
+inside an effect is a rule nobody can check, and this one is worth checking.
+
+"Pristine" means **untouched, not empty**. A form auto-filled from the last
+posting and left alone is still pristine, and it is exactly the case that must
+swap — it is what tabbing between two postings looks like. Beyond `dirty`, three
+further states must suppress a swap, and each was found by getting it wrong
+first:
+
+- *A save in flight.* The draft has already been snapshotted for writing, so a
+  fill landing in the gap is written as the pre-fill values and then wiped by the
+  reset. It looks like it worked.
+- *An unanswered question.* The duplicate prompt and a failed save are neither
+  busy nor dirty, so any re-report refilled the form and reset the phase —
+  "You already saved this one: Discard / Save anyway" vanished along with the
+  draft it was asking about, and the user had answered nothing.
+- *A form the user has just emptied.* Discard clears the draft, which makes the
+  form not dirty, which made the page eligible to fill it straight back in one
+  frame later. Discard must therefore mark the current detection dismissed rather
+  than clearing the mark, or there is no reachable state in which a posting tab's
+  form stays empty — the same failure this decision was already amended once to
+  fix, arriving by a new route.
+
+**Amended — a confirmed replace replaces.** An explicit fill layers onto the
+current draft on purpose, so that status, notes, tags and the applied date — none
+of which a job board knows anything about — survive it. But when the fill would
+overwrite typed work the button first asks *"Replace what you have typed?"*, and
+answering yes to that question then kept the notes anyway: tabbing to a different
+job and confirming carried the previous job's notes onto it, under a heading
+naming the new one. Only the confirmed path builds from an empty draft. The
+unconfirmed one still layers, and must — no confirmation was asked for because
+there was nothing to protect.
+
 **Revisit when.** Never as a principle. The specific affordance can change.
 
 ---
@@ -672,8 +750,86 @@ The snapshot write is allowed to fail without failing the save. Decision 6 exist
 to make a future re-parse possible, and losing that is not a reason to lose the
 application the user just filed.
 
-**Revisit when.** Phase 5 makes the panel follow tabs live. The push half does
-not change; what changes is that the panel stops asking only on focus. If the
-session cache ever proves too small for how people actually browse, raise the
-bound before moving the snapshot anywhere more durable — it is page-derived data
-and it should not outlive the browser session.
+**Amended — a detection has to be invalidated, not merely replaced.** Phase 5
+made the panel follow tabs live, and the push half did not change, as expected.
+What did change is the cost of a cached detection outliving its page. In phase 4
+that meant a banner offering a page the user had left, which could be ignored;
+once a pristine form fills itself it means the previous job appearing in the form
+on an unrelated site, silently, looking exactly like a correct read.
+
+So the worker drops a tab's detection on `chrome.tabs.onUpdated` when
+`changeInfo.status === 'loading'` — a real page load. Single-page navigation does
+not set it and must not: the boards that change the URL without a load are
+already re-reported by the content script's URL watcher, and clearing on those
+would delete a detection about to be replaced by an identical one. No permission
+is involved; without `tabs`, `onUpdated` still fires and still carries `status`,
+and it is `url`, `title` and `favIconUrl` that are withheld.
+
+That listener is global in a way `onRemoved` is not — it fires on every
+navigation in every tab, so an ordinary browsing session would wake the worker on
+each page load, and decision 9 rests on the worker being idle enough to be torn
+down. Everything after the cache delete is therefore gated on the delete having
+found something, which makes an uninteresting navigation cost one session-storage
+read and stop.
+
+**Revisit when.** If the session cache ever proves too small for how people
+actually browse, raise the bound before moving the snapshot anywhere more durable
+— it is page-derived data and it should not outlive the browser session.
+
+---
+
+## 16. The worker speaks first, and marks the tab itself
+
+**Decision.** The worker has a one-way event channel to the panel, discriminated
+on `type` rather than on the request protocol's `kind`. It announces
+`detection/changed` for a tab whenever that tab's detection is reported,
+re-reported, superseded or dropped. It also paints the tab's badge itself, from
+the same detection-to-posting mapping the panel's revisit banner uses.
+
+**Why.** Decision 15's protocol runs panel-to-worker, and nothing in it lets the
+worker speak. That was sufficient while filling was a button: the panel asked on
+mount and on focus, and a content script that finished parsing in between was
+simply not noticed until the next focus. A panel that follows the tab has to hear
+about a report that lands *while it is open* — a board that rendered late, a
+single-page navigation, a page read by gesture — and there is no way to hear it
+without the worker initiating.
+
+Separating `type` from `kind` is not decoration. The worker's own `onMessage`
+listener treats anything carrying a `kind` as a request and hands it to a
+dispatcher that throws on an unknown one, so a different key makes an event
+structurally incapable of being mistaken for a request in either direction. That
+`chrome.runtime.sendMessage` does not currently deliver to the sender's own
+context is a runtime detail; this is a type.
+
+**Consequences.** `broadcast` swallows its rejection, and that is the ordinary
+path rather than the exceptional one: with the panel closed there is no receiver
+and `sendMessage` rejects, which is most of the time. Letting it propagate would
+fill the worker's console with a failure meaning "working as intended" and abort
+the detection path that called it.
+
+The badge is scoped per tab, which is what makes it correct with no bookkeeping —
+Chrome shows the right answer on tab switch with nothing to repaint, and a closed
+tab takes its badge with it. A global badge would need every switch to repaint it
+and would be wrong in the gap.
+
+The panel does **not** filter events by their `tabId`. Doing so would mean the
+panel keeping its own idea of which tab is active, and that second copy is exactly
+the thing that goes stale; it re-asks Chrome instead, which is the answer rather
+than a cache of it.
+
+One mapping serves both the badge and the revisit banner
+(`lib/tracked.ts`). Two would be two definitions of what makes a detection the
+same posting as a record, and they would drift.
+
+Whether a tab is tracked is **asked** when a page is detected and **stated** when
+a record is written. Re-deriving it after a save was wrong rather than merely
+wasteful: the query is built from the cached detection, so it asks about the
+page, while the record the user saved is whatever they left in the form — and the
+URL field is optional and company names are exactly the sort of thing people tidy.
+Clear one and correct the other and the page-shaped query matches nothing, so the
+badge stayed dark on a tab the save itself had just tracked.
+
+**Revisit when.** A second kind of event is needed. The union in `lib/events.ts`
+is built to grow, but every addition is a thing the panel must decide whether to
+act on, and "refresh everything" stops being the right answer once events mean
+different things.
