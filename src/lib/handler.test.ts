@@ -286,6 +286,24 @@ describe('marking a tab that is already tracked', () => {
     expect(chrome.action.setBadgeText).toHaveBeenCalledWith({ tabId: 12, text: '✓' })
   })
 
+  it('badges the tab even when the saved record no longer looks like the page', async () => {
+    const db = await freshDb()
+    await handleRequest(db, { kind: 'detection/report', report: aReport() }, { tabId: 12 })
+    vi.mocked(chrome.action.setBadgeText).mockClear()
+
+    // The user cleared the optional URL field and tidied the company name — two
+    // ordinary edits, and between them enough to make a query built from the
+    // *page* match nothing. The badge is not a question here: the write that
+    // just succeeded is what makes this tab tracked, so it is stated.
+    await handleRequest(db, {
+      kind: 'posting/upsert',
+      posting: aPosting({ company: 'Acme', jobTitle: 'Staff Engineer', url: '' }),
+      detectionId: 'det-1',
+    })
+
+    expect(chrome.action.setBadgeText).toHaveBeenCalledWith({ tabId: 12, text: '✓' })
+  })
+
   it('does not fail the save when the toolbar rejects the badge', async () => {
     const db = await freshDb()
     await handleRequest(db, { kind: 'detection/report', report: aReport() }, { tabId: 12 })

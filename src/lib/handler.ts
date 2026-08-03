@@ -106,25 +106,45 @@ async function dispatch(
 /**
  * Repaints a tab's badge and tells the panel something moved.
  *
+ * `tracked` is the answer when the caller already has one. A page that has just
+ * been detected has to be *asked* about — that is the query below. A page a
+ * record was just written from does not: it is tracked because the write that
+ * just succeeded is what tracked it.
+ *
+ * Re-deriving it in that second case was wrong rather than merely wasteful. The
+ * query is built from the cached detection, so it asks about the *page*, while
+ * the record the user actually saved is whatever they left in the form — and the
+ * URL field is documented as optional, the company is exactly the sort of thing
+ * people tidy ("Acme Inc." to "Acme"). Clear one and correct the other and the
+ * page-shaped query matches nothing, so the badge stayed dark on a tab that was
+ * tracked by the very save that asked.
+ *
  * Swallows its own failures. Every caller has already done the thing that
  * mattered — cached a detection, written a record — and neither the badge nor
  * the broadcast is worth turning a completed write into a reported error. The
  * `chrome.action` surface is also the one part of this that is absent in a
  * worker with no toolbar, which is what tests run against.
  */
-async function announceDetection(db: JourneyTrackerDb, tabId: number): Promise<void> {
+async function announceDetection(
+  db: JourneyTrackerDb,
+  tabId: number,
+  tracked?: boolean,
+): Promise<void> {
   try {
-    const detection = await getDetectionSummary(tabId)
-    const match = detection
-      ? await repo.findDuplicate(db, postingInputFromDetection(detection))
-      : null
-
-    await setTrackedBadge(tabId, match !== null)
+    await setTrackedBadge(tabId, tracked ?? (await isTracked(db, tabId)))
   } catch (error) {
     console.error('[JourneyTracker] could not mark the tab', tabId, error)
   }
 
   await broadcast({ type: 'detection/changed', tabId })
+}
+
+/** Whether what a tab is showing is already in the database. */
+async function isTracked(db: JourneyTrackerDb, tabId: number): Promise<boolean> {
+  const detection = await getDetectionSummary(tabId)
+  if (!detection) return false
+
+  return (await repo.findDuplicate(db, postingInputFromDetection(detection))) !== null
 }
 
 /**
@@ -149,8 +169,9 @@ async function upsert(
   if (!detectionId) return posting
 
   // The page this came from is now tracked, so its tab has a badge to light.
+  // Stated rather than asked: the write above is what made it true.
   const tabId = await findTabForDetection(detectionId)
-  if (tabId !== null) await announceDetection(db, tabId)
+  if (tabId !== null) await announceDetection(db, tabId, true)
 
   try {
     const detection = await findSnapshot(detectionId)

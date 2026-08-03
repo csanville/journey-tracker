@@ -177,6 +177,18 @@ describe('the detection cache', () => {
     expect((await getDetectionSummary(2))?.detectionId).toBe('live')
   })
 
+  it('says whether there was a detection to forget', async () => {
+    // The answer is what `onUpdated` gates on. That listener fires on every
+    // navigation in every tab, so without a cheap "was this one of ours" it
+    // wakes the worker, paints a badge and broadcasts to the panel every time
+    // the user loads a news article.
+    await recordDetection(1, aReport(), 1000)
+
+    expect(await forgetTab(1)).toBe(true)
+    expect(await forgetTab(1)).toBe(false)
+    expect(await forgetTab(999)).toBe(false)
+  })
+
   it('keeps every tab when a full cache is written concurrently', async () => {
     await Promise.all(
       Array.from({ length: MAX_CACHED_TABS }, (_, tab) =>
@@ -212,7 +224,8 @@ describe('the detection cache', () => {
     await forgetTab(7)
 
     expect(await getDetectionSummary(7)).toBeNull()
-    // And forgetting a tab that was never there is not an error.
-    await expect(forgetTab(99)).resolves.toBeUndefined()
+    // And forgetting a tab that was never there is not an error — it is just a
+    // "no".
+    await expect(forgetTab(99)).resolves.toBe(false)
   })
 })
