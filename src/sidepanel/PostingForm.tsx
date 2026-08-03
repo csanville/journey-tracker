@@ -95,6 +95,8 @@ export function PostingForm({
   const hasContent = dirty || filled !== null
   const busy =
     phase.name === 'checking' || phase.name === 'saving' || phase.name === 'wiping'
+  /** The form is holding a question the user has not answered. See `swapAction`. */
+  const prompting = phase.name === 'duplicate' || phase.name === 'failed'
 
   /**
    * A detection worth offering: one that is not already in the form.
@@ -114,6 +116,24 @@ export function PostingForm({
     if (phase.name === 'duplicate' || phase.name === 'failed') setPhase({ name: 'editing' })
   }
 
+  /**
+   * Empties the form and keeps it empty.
+   *
+   * `dismissed` is set to the current detection rather than cleared, and that is
+   * the whole reason Discard works at all now that the form fills itself.
+   * Clearing it dropped the only suppressor there is: on the very next render
+   * `filled` is `null`, so the page is `offered` again, and a form that is empty
+   * is by definition not `dirty` — so the swap effect below fills it straight
+   * back in. The fields blanked for one frame and repopulated, and no reachable
+   * state kept a posting tab's form empty. That is the failure the decision 13
+   * amendment was written to fix, arriving by a new route.
+   *
+   * The page is not forgotten, only folded away: `DetectedNotice` still renders
+   * as a one-line "Fill from this page", so a discard the user regrets costs one
+   * click. And after a save it is the better banner anyway — the tab is tracked
+   * by then, so a full-height offer to file it again is not what that moment
+   * calls for.
+   */
   const reset = () => {
     setDraft(EMPTY_DRAFT)
     setDraftId(newId())
@@ -121,7 +141,7 @@ export function PostingForm({
     setPhase({ name: 'editing' })
     setFilled(null)
     setConfirmingFill(false)
-    setDismissed(null)
+    setDismissed(detection?.detectionId ?? null)
   }
 
   /**
@@ -169,6 +189,7 @@ export function PostingForm({
       offered: offered !== null,
       dirty,
       busy,
+      prompting,
       dismissed: dismissed === offered?.detectionId,
     })
 
@@ -176,7 +197,7 @@ export function PostingForm({
     // banner below renders from `offered` on its own.
     if (action === 'fill' && offered) applyFill(offered, EMPTY_DRAFT)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [offered?.detectionId, busy, dirty, dismissed])
+  }, [offered?.detectionId, busy, dirty, prompting, dismissed])
 
   /**
    * The revisit warning: "have I been here before", asked on arrival.
@@ -194,10 +215,24 @@ export function PostingForm({
   useEffect(() => {
     const mine = ++latestRevisit.current
 
-    if (!detection) {
-      setRevisit(null)
-      return
-    }
+    /**
+     * Cleared before the question is re-asked, not after it is re-answered.
+     *
+     * This banner asserts something about *this* page, so the instant the page
+     * changes the old answer is false — and it was surviving the change twice
+     * over. For the length of the round trip, which on a cold worker is the
+     * better part of a second, it claimed the previous posting's company and
+     * date about the new one. Worse, if the lookup then failed, the `catch`
+     * below deliberately does nothing, so the wrong claim simply stayed on
+     * screen with nothing left in flight to replace it.
+     *
+     * A success writes the new answer over this, and it costs no flicker: the
+     * dependency is the detection id, so re-reading the same page does not
+     * re-run the effect.
+     */
+    setRevisit(null)
+
+    if (!detection) return
 
     void (async () => {
       try {

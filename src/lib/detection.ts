@@ -334,19 +334,25 @@ export async function findTabForDetection(detectionId: string): Promise<number |
 }
 
 /**
- * Drops a tab's detection. Used when a tab closes.
+ * Drops a tab's detection, and says whether there was one to drop.
  *
  * Serialized for the same reason as `recordDetection`, and against a sharper
  * failure: interleaved with a report from another tab, an unqueued delete
  * writes back a cache snapshot taken before that report — resurrecting the
  * closed tab's entry and losing the live one.
+ *
+ * The return value is what lets `onUpdated` tell an interesting navigation from
+ * the overwhelming majority that are not. Only eight tabs are ever cached, and
+ * only tabs showing a posting are among them, so "was this tab one of ours" is
+ * the cheapest possible filter and it is already answered here.
  */
-export function forgetTab(tabId: number): Promise<void> {
+export function forgetTab(tabId: number): Promise<boolean> {
   return serialized(async () => {
     const cache = await readCache()
-    if (!(String(tabId) in cache)) return
+    if (!(String(tabId) in cache)) return false
 
     delete cache[String(tabId)]
     await writeCache(cache)
+    return true
   })
 }

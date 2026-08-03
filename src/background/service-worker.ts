@@ -167,18 +167,30 @@ chrome.tabs.onRemoved.addListener((tabId) => {
  * No permission. Without `tabs`, `onUpdated` still fires and still carries
  * `status`; it is `url`, `title` and `favIconUrl` that are withheld, and none of
  * those is wanted here (decision 2).
+ *
+ * Everything after the `forgetTab` is gated on it having found something,
+ * because this listener is global in a way the others are not. `onRemoved` fires
+ * when a tab closes, which is rare; this fires on every navigation in every tab,
+ * so a user reading the news wakes the worker on each page load — and decision 9
+ * is built on the worker being idle enough to be torn down. Ungated, each of
+ * those wakeups also painted a badge and broadcast an event, and the broadcast
+ * made every open panel do a full `detection/get` round trip about a tab it has
+ * never heard of. Gated, an uninteresting navigation costs one session-storage
+ * read and stops.
  */
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   if (changeInfo.status !== 'loading') return
 
   void (async () => {
     try {
-      await forgetTab(tabId)
+      if (!(await forgetTab(tabId))) return
+
       // The page that earned the mark is gone. A content script on whatever
       // loads next will re-earn it.
       await setTrackedBadge(tabId, false)
     } catch (error) {
       console.error('[JourneyTracker] could not clear tab', tabId, error)
+      return
     }
 
     await broadcast({ type: 'detection/changed', tabId })

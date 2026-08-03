@@ -92,9 +92,10 @@ export function fieldsFilled(detection: DetectionSummary, base: Draft): Fillable
  *   Pristine means *untouched*, not *empty*: a form auto-filled from the last
  *   posting and left alone is still pristine, and that is exactly the case that
  *   must swap, because it is what tabbing between two postings looks like.
- * - `announce` — the user has typed something, so the posting waits in a banner.
- *   Losing typed notes by tabbing away to check something is the small betrayal
- *   decision 13 exists to prevent.
+ * - `announce` — the form is holding something the user has not finished with,
+ *   so the posting waits in a banner. Losing typed notes by tabbing away to
+ *   check something is the small betrayal decision 13 exists to prevent, and an
+ *   unanswered question is the same betrayal in a different shape.
  * - `nothing` — either there is no new posting, or a save is in flight, or the
  *   user already folded this one away. A save in flight matters more than it
  *   looks: the draft has already been snapshotted for writing, so a fill landing
@@ -109,11 +110,24 @@ export function swapAction(state: {
   dirty: boolean
   /** Whether a save is in flight. */
   busy: boolean
+  /**
+   * Whether the form is waiting on an answer — the duplicate prompt, or a save
+   * that failed.
+   *
+   * Separate from `busy` because nothing is in flight during either: `busy`
+   * protects a draft that has already been snapshotted for writing, and this
+   * protects a *question*. Without it, any re-report — and `watch-url.ts` polls
+   * every second, so a tracking parameter appended by the page is enough —
+   * refills the form and resets the phase, and "You already saved this one:
+   * Discard / Save anyway" vanishes with the draft it was asking about. The user
+   * answered nothing and something happened anyway.
+   */
+  prompting: boolean
   /** Whether this particular detection's banner was folded away. */
   dismissed: boolean
 }): SwapAction {
   if (!state.offered || state.busy) return 'nothing'
-  if (state.dirty) return 'announce'
+  if (state.dirty || state.prompting) return 'announce'
 
   return state.dismissed ? 'nothing' : 'fill'
 }
