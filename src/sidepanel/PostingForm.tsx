@@ -339,8 +339,24 @@ export function PostingForm({
             // "fill from this page" is not the same request as "throw away what
             // I wrote". Live auto-fill, and the swap rules around it, are
             // phase 5.
-            if (dirty && !confirmingFill) setConfirmingFill(true)
-            else applyFill(offered)
+            if (dirty && !confirmingFill) {
+              setConfirmingFill(true)
+              return
+            }
+
+            // A confirmed replace replaces. The button the user just pressed
+            // said "Replace what you have typed?", and layering onto the
+            // current draft answered yes to that question by keeping the
+            // notes, tags, status and applied date — so tabbing to a different
+            // job and confirming the replace carried the previous job's notes
+            // onto it, under a heading naming the new one.
+            //
+            // Unconfirmed, the layering is still right and is the whole point:
+            // no confirmation was asked for because there was nothing to
+            // protect, and "fill this in" means answer what this page knows
+            // about the record in front of me. The two paths want different
+            // bases because they are different requests — see `applyFill`.
+            applyFill(offered, confirmingFill ? EMPTY_DRAFT : draft)
           }}
           onDismiss={() => {
             // Folds the banner down to a one-line offer rather than removing

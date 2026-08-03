@@ -187,6 +187,29 @@ export function App() {
         }}
       />
 
+      {/*
+        The capture gesture cannot be a button here — `activeTab` is granted by
+        an action, a context menu item, a keyboard shortcut or the omnibox, and
+        a click inside an extension page is none of those. So the panel does the
+        only thing it can and says where the gesture lives. Shown only when
+        nothing was detected, which is exactly when somebody would be wondering.
+
+        The second sentence exists because the panel now opens on a refused read
+        as well as a successful one (see `captureAndShow`). Without it, somebody
+        who right-clicked a PDF was answered with a panel telling them to
+        right-click the page — advice they had just taken, which reads as a
+        broken menu item rather than as a limit. Naming the three refusals is
+        cheaper than a channel back from the worker saying which one happened,
+        and it is the same short list every time.
+      */}
+      {detection === null && (
+        <p className="hint hint--capture">
+          Not a board this reads automatically? Right-click the page and choose{' '}
+          <strong>Read this page into JourneyTracker</strong>. Chrome allows no extension to
+          read its own pages, the Web Store, or a PDF.
+        </p>
+      )}
+
       <section className="section">
         <h2 className="section__head">
           Recent

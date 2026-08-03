@@ -49,6 +49,12 @@ Then load it into Chrome:
 `npm run dev` runs Vite with hot reload; point Chrome at `dist/` the same way.
 On WSL, see below — `dist/` is the one path Chrome has trouble reaching.
 
+The right-click capture needs a second bundle that `npm run dev` does not
+build, so run `npm run dev:inject` alongside it in another terminal if you are
+working on that path. Without it, capture fails with `Could not load file:
+'injected.js'` — logged in the service worker console and nowhere else.
+`npm run build` and `npm run build:win` both build it themselves.
+
 ### Loading from WSL
 
 Chrome runs on the Windows host while this code lives in Linux. Chrome's **Load

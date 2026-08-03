@@ -112,6 +112,15 @@ const runtime = {
   sendMessage: vi.fn(async () => undefined),
 }
 
+/**
+ * Injection, as a spy. Resolving by default because that is the ordinary case;
+ * the refusals worth testing — a `chrome://` page, the Web Store, a PDF — are
+ * made explicit per test.
+ */
+const scripting = {
+  executeScript: vi.fn(async () => [] as unknown[]),
+}
+
 vi.stubGlobal('chrome', {
   storage: {
     local: storage.local,
@@ -120,6 +129,7 @@ vi.stubGlobal('chrome', {
   },
   runtime,
   action,
+  scripting,
 })
 
 beforeEach(() => {
@@ -127,4 +137,5 @@ beforeEach(() => {
   action.setBadgeText.mockClear()
   action.setBadgeBackgroundColor.mockClear()
   runtime.sendMessage.mockClear()
+  scripting.executeScript.mockClear()
 })
