@@ -13,7 +13,7 @@ then merged.
 | 2 ✅ | `feat/normalization` | Company normalization, URL canonicalization, `atsReqId`, dedupe | Fixture tests green, no UI |
 | 3 ✅ | `feat/sidepanel-form` | Full form, theme, manual save, dirty tracking, save → wipe → fresh form | Enter a job by hand; it survives a reload |
 | 4 ✅ | `feat/extraction` | Tiered adapters, snapshots, adapter versioning, URL reporting that survives SPA navigation, fixture tests | A real posting fills the form |
-| 5 | `feat/live-sync` | Tab listeners, swap rules, dirty banner, revisit warning, toolbar badge, `activeTab` capture for unknown sites | Tab between postings; the form follows, and a posting already tracked says so before you type |
+| 5 ✅ | `feat/live-sync`, `feat/activetab-capture` | Tab listeners, swap rules, dirty banner, revisit warning, toolbar badge, `activeTab` capture for unknown sites | Tab between postings; the form follows, and a posting already tracked says so before you type |
 | 6 | `feat/export-import` | JSON lean/full round-trip, CSV report, skip-duplicate import | Export, wipe, re-import — data identical |
 | 7 | `feat/dashboard` | `liveQuery`-backed views: status funnel, over time, per-board yield | Patterns visible across saved data |
 | 8 | `feat/submit-detect` | Submission heuristics behind a prompt | Prompt fires on a real submission |
@@ -166,6 +166,27 @@ depends on phase 4 producing a reliable URL.
 **Done when** tabbing between postings moves the form correctly, typed work is
 never clobbered, and returning to a posting already saved says so — in the panel
 and on the badge — before a single field is touched.
+
+**Shipped**, across two branches rather than one: `feat/live-sync` for the panel
+and worker, `feat/activetab-capture` for the long tail, split so the half with
+the most uncertainty in it could be read and reverted on its own. Three things
+turned out differently from the plan above.
+
+The capture gesture is **not a click in the panel**. `activeTab` is granted by
+four gestures and a button inside an extension page is none of them, so the
+feature is a context menu item and a keyboard shortcut, and the panel can only
+point at them (decision 2). This was the phase's one genuine surprise.
+
+The badge is **not limited to matched domains**. The bullet above assumed it
+"only works on domains a content script matches"; it works anywhere a detection
+exists, which now includes any page captured by gesture. The honest limit is
+narrower than the plan expected.
+
+A tab **forgetting its detection on navigation** was not in the plan and had to
+be. Auto-fill is what makes it necessary: in phase 4 a stale detection meant a
+banner offering a page the user had left, which could be ignored, and once the
+form fills itself it means the previous job silently appearing on an unrelated
+site (decision 15).
 
 ## Changes from the original plan
 
