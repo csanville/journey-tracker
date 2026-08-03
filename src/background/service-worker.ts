@@ -94,41 +94,47 @@ chrome.runtime.onInstalled.addListener(() => {
   })()
 })
 
+// Both listeners call straight through, with nothing awaited in between. The
+// user activation that `sidePanel.open` needs belongs to this event and does not
+// outlive the first `await` — see `captureAndShow`.
 chrome.contextMenus.onClicked.addListener((info, tab) => {
   if (info.menuItemId !== CAPTURE_MENU_ID || tab?.id === undefined) return
 
-  void captureAndShow(tab.id)
+  captureAndShow(tab.id)
 })
 
 chrome.commands.onCommand.addListener((command, tab) => {
   if (command !== 'capture-page' || tab?.id === undefined) return
 
-  void captureAndShow(tab.id)
+  captureAndShow(tab.id)
 })
 
 /**
- * Reads the tab, then shows the user what came of it.
+ * Shows the panel, then reads the tab into it.
  *
- * The panel is opened only on a successful read. Opening it after a refusal —
- * a PDF, the Web Store, a `chrome://` page — would answer a request to read
- * this page with a panel that says nothing about it, which reads as a bug
- * rather than as a limit.
+ * The order is not a preference. `sidePanel.open` may only be called while the
+ * gesture that invoked it is still live, and user activation does not survive an
+ * `await` — so opening the panel *after* the `executeScript` round trip, however
+ * briefly, meant `open` rejecting with "may only be called in response to a user
+ * gesture" every single time. Right-clicking a page read it and then appeared to
+ * do nothing, because the rejection landed in a `console.debug` in a worker
+ * nobody has inspected. Nothing is awaited before the `open` call now, and
+ * nothing may be.
  *
- * `sidePanel.open` has to be called while the invoking gesture is still in
- * scope, which is why it is awaited here rather than deferred until the content
- * script has finished its ladder. The panel is listening for the broadcast by
- * then and fills itself in when the report lands.
+ * The cost of that ordering is that the panel also opens when the read is
+ * refused — a PDF, the Web Store, a `chrome://` page. That is the lesser of the
+ * two: an empty panel is a visible answer to a request, and the panel says what
+ * it means when it has nothing (see `App.tsx`), whereas no panel at all is
+ * indistinguishable from a broken menu item.
  */
-async function captureAndShow(tabId: number): Promise<void> {
-  if (!(await captureTab(tabId))) return
-
-  try {
-    await chrome.sidePanel.open({ tabId })
-  } catch (error) {
-    // The gesture expired, or the panel is already open. Neither costs the
-    // read, which has already happened.
+function captureAndShow(tabId: number): void {
+  // First, and synchronously.
+  chrome.sidePanel.open({ tabId }).catch((error: unknown) => {
+    // Already open, or a window Chrome will not attach a panel to.
     console.debug('[JourneyTracker] could not open the panel', error)
-  }
+  })
+
+  void captureTab(tabId)
 }
 
 chrome.runtime.onStartup.addListener(() => {

@@ -64,6 +64,16 @@ fi
 npx tsc --noEmit
 npx vite build --outDir "$out" --emptyOutDir
 
+# The injected capture bundle, which is a second build for the reasons set out
+# in vite.inject.config.ts. It has to run here too, and not only in `npm run
+# build`: this script is the documented way to load the extension on WSL, so
+# skipping it shipped a build where the right-click capture failed on every
+# page with "Could not load file: 'injected.js'" — in a worker console, which
+# is not where anyone would think to look.
+#
+# No --emptyOutDir: this adds to the build above rather than replacing it.
+npx vite build --config vite.inject.config.ts --outDir "$out"
+
 echo
 echo "Built to the Windows filesystem. In chrome://extensions, turn on"
 echo "Developer mode, choose Load unpacked, and select:"
