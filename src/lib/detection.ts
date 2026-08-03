@@ -314,19 +314,45 @@ export async function findSnapshot(detectionId: string): Promise<CachedDetection
 }
 
 /**
- * Drops a tab's detection. Used when a tab closes.
+ * Which tab a detection came from, or `null` if none still holds it.
+ *
+ * Saving a record makes its page tracked, so the tab showing that page has a
+ * badge to light — but the panel has no tab of its own and cannot say which one
+ * it means. The save already carries a `detectionId` so the worker can attach
+ * the snapshot, and the cache is keyed by tab, so the tab is derivable from what
+ * is already being sent. A manual save carries no detection and lights nothing,
+ * which is right: there is no page it came from.
+ */
+export async function findTabForDetection(detectionId: string): Promise<number | null> {
+  const cache = await readCache()
+
+  const entry = Object.entries(cache).find(
+    ([, detection]) => detection.detectionId === detectionId,
+  )
+
+  return entry ? Number(entry[0]) : null
+}
+
+/**
+ * Drops a tab's detection, and says whether there was one to drop.
  *
  * Serialized for the same reason as `recordDetection`, and against a sharper
  * failure: interleaved with a report from another tab, an unqueued delete
  * writes back a cache snapshot taken before that report — resurrecting the
  * closed tab's entry and losing the live one.
+ *
+ * The return value is what lets `onUpdated` tell an interesting navigation from
+ * the overwhelming majority that are not. Only eight tabs are ever cached, and
+ * only tabs showing a posting are among them, so "was this tab one of ours" is
+ * the cheapest possible filter and it is already answered here.
  */
-export function forgetTab(tabId: number): Promise<void> {
+export function forgetTab(tabId: number): Promise<boolean> {
   return serialized(async () => {
     const cache = await readCache()
-    if (!(String(tabId) in cache)) return
+    if (!(String(tabId) in cache)) return false
 
     delete cache[String(tabId)]
     await writeCache(cache)
+    return true
   })
 }

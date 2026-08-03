@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { DetectionSummary } from '../lib/detection'
 import { EMPTY_DRAFT, toPostingInput, type Draft } from './draft'
-import { draftFromDetection, fieldsFilled, saveContextFor } from './fill'
+import { draftFromDetection, fieldsFilled, saveContextFor, swapAction } from './fill'
 
 function aDetection(overrides: Partial<DetectionSummary> = {}): DetectionSummary {
   return {
@@ -176,5 +176,84 @@ describe('saveContextFor', () => {
     const posting = toPostingInput({ ...EMPTY_DRAFT, company: 'Acme', jobTitle: 'Eng' })
 
     expect(posting).toMatchObject({ source: 'manual', adapterVersion: 'manual@1' })
+  })
+})
+
+describe('swapAction', () => {
+  const base = {
+    offered: true,
+    dirty: false,
+    busy: false,
+    prompting: false,
+    dismissed: false,
+  }
+
+  it('fills a pristine form without asking', () => {
+    expect(swapAction(base)).toBe('fill')
+  })
+
+  it('fills a form that was auto-filled and left alone', () => {
+    // The case the whole rule exists for. After a fill the draft equals its own
+    // baseline, so `dirty` is false while the form is full — and tabbing from
+    // one posting to another must move the form, not announce at it.
+    expect(swapAction({ ...base, dirty: false })).toBe('fill')
+  })
+
+  it('announces rather than overwriting typed work', () => {
+    expect(swapAction({ ...base, dirty: true })).toBe('announce')
+  })
+
+  it('does nothing while a save is in flight', () => {
+    // The draft has already been snapshotted for writing. A fill landing in the
+    // gap is saved as the pre-fill values and then wiped by the reset — which
+    // is worse than not filling, because it looks like it worked.
+    expect(swapAction({ ...base, busy: true })).toBe('nothing')
+    expect(swapAction({ ...base, busy: true, dirty: true })).toBe('nothing')
+  })
+
+  it('does not resurrect a banner the user folded away', () => {
+    expect(swapAction({ ...base, dismissed: true })).toBe('nothing')
+  })
+
+  it('leaves a discarded form empty on a page that is still offering itself', () => {
+    // The exact state a Discard leaves behind, which is why `reset()` marks the
+    // current detection dismissed instead of clearing the mark. Empty is not
+    // dirty and nothing is in flight, so every other guard here is false — and
+    // with `dismissed` cleared this returned `fill`, which refilled the form
+    // one frame after the user emptied it. There was no reachable state that
+    // kept a posting tab's form empty.
+    expect(swapAction({ ...base, dirty: false, dismissed: true })).toBe('nothing')
+  })
+
+  it('still announces a dismissed posting once work has been typed', () => {
+    // Dismissing says "not this one, not now". It does not license overwriting
+    // what was typed afterwards, and the fall-through must not reach `fill`.
+    expect(swapAction({ ...base, dismissed: true, dirty: true })).toBe('announce')
+  })
+
+  it('does nothing when there is nothing on offer', () => {
+    expect(swapAction({ ...base, offered: false })).toBe('nothing')
+  })
+
+  it('announces rather than answering an open question for the user', () => {
+    // The duplicate prompt and a failed save are both the form waiting on the
+    // user. Nothing is in flight, so `busy` is false, and a form that was
+    // auto-filled and not typed into is not `dirty` either — which left the
+    // page free to refill the form and clear the phase, taking the question
+    // with it. `watch-url.ts` polls every second, so a tracking parameter the
+    // page appends to its own URL is enough to trigger it.
+    expect(swapAction({ ...base, prompting: true })).toBe('announce')
+  })
+
+  it('protects an open question even on a form the user dismissed', () => {
+    // Same fall-through as the dirty case: dismissing is about a banner, and
+    // must not become permission to discard an unanswered prompt.
+    expect(swapAction({ ...base, prompting: true, dismissed: true })).toBe('announce')
+  })
+
+  it('still does nothing while a save is in flight, question or not', () => {
+    // `busy` outranks `prompting`: the phases are mutually exclusive in the
+    // component, but the rule must not depend on that to stay safe.
+    expect(swapAction({ ...base, prompting: true, busy: true })).toBe('nothing')
   })
 })

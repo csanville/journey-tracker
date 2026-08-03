@@ -168,6 +168,17 @@ body {
   background: transparent;
 }
 
+/*
+ * The revisit banner is a statement of fact, not a caution and not an offer.
+ * Nothing has gone wrong and nothing is being proposed — the user is simply
+ * being told they have been here before, so it takes neither the amber nor the
+ * indigo and sits quietly above whatever else the page has to say.
+ */
+.notice--revisit {
+  border-color: var(--rule);
+  background: transparent;
+}
+
 .detected--quiet {
   display: flex;
   justify-content: flex-start;
