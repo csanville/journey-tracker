@@ -123,11 +123,19 @@ export function parseBundle(text: string): ParseResult {
     return { ok: false, error: 'not a JourneyTracker export file' }
   }
 
-  if (raw.formatVersion !== BUNDLE_FORMAT_VERSION) {
+  // Refuses what it cannot open, not what it did not write. An earlier version
+  // tested `!==`, which contradicted the reasoning three blocks up: the whole
+  // point of versioning the envelope apart from the records is that an importer
+  // can take a file older than itself. On the first bump that check would have
+  // orphaned every backup already on disk — for a format whose entire purpose
+  // is surviving this extension, and with no way to fix it retroactively for a
+  // user holding the only copy of their history.
+  const formatVersion = raw.formatVersion
+  if (typeof formatVersion !== 'number' || formatVersion > BUNDLE_FORMAT_VERSION) {
     return {
       ok: false,
       error:
-        `this export is in format v${String(raw.formatVersion)} and this build reads ` +
+        `this export is in format v${String(formatVersion)} and this build reads ` +
         `v${BUNDLE_FORMAT_VERSION}`,
     }
   }

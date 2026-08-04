@@ -3,7 +3,8 @@ import { aPosting, freshDb } from '../test/factories'
 import type { DetectionReport } from './detection'
 import { handleRequest } from './handler'
 import { allowedFromContentScript, type Request } from './messages'
-import { patchSettings } from './settings'
+import { SNAPSHOT_RETENTION } from './repository'
+import { patchSettings, readSettings } from './settings'
 import { SCHEMA_VERSION } from './types'
 
 describe('handleRequest', () => {
@@ -337,5 +338,148 @@ describe('allowedFromContentScript', () => {
     expect(allowedFromContentScript('posting/delete')).toBe(false)
     expect(allowedFromContentScript('posting/upsert')).toBe(false)
     expect(allowedFromContentScript('detection/get')).toBe(false)
+  })
+})
+
+describe('importing a backup', () => {
+  const bundlePosting = (id: string, overrides: Record<string, unknown> = {}) => ({
+    ...aPosting({ id }),
+    schemaVersion: SCHEMA_VERSION,
+    createdAt: 1_000,
+    updatedAt: 1_000,
+    companyNormalized: 'initech',
+    canonicalUrl: 'https://boards.greenhouse.io/initech/jobs/4021',
+    ...overrides,
+  })
+
+  const aPage = (postingId: string, capturedAt: number) => ({
+    postingId,
+    capturedAt,
+    adapterVersion: 'jsonld@1',
+    trimmedSource: `<html>${postingId}</html>`,
+    truncated: false,
+  })
+
+  it('reports records written and records left alone', async () => {
+    const db = await freshDb()
+
+    const first = await handleRequest(db, {
+      kind: 'backup/import-postings',
+      postings: [bundlePosting('a'), bundlePosting('b')],
+      schemaVersion: SCHEMA_VERSION,
+      final: true,
+    })
+    const again = await handleRequest(db, {
+      kind: 'backup/import-postings',
+      postings: [bundlePosting('a')],
+      schemaVersion: SCHEMA_VERSION,
+      final: true,
+    })
+
+    expect(first.ok && first.data).toEqual({ imported: 2, skipped: 0, dropped: 0 })
+    expect(again.ok && again.data).toEqual({ imported: 0, skipped: 1, dropped: 0 })
+  })
+
+  /**
+   * Pages the retention cap reclaims moments after they are written must not be
+   * counted as imported. Restoring an old `full` backup into a database of
+   * newer captures is exactly this: every page is inserted and immediately
+   * swept, and reporting them as added claims pages the database does not have.
+   */
+  it('counts only the pages that survived the retention sweep', async () => {
+    const db = await freshDb()
+    await handleRequest(db, {
+      kind: 'backup/import-postings',
+      postings: [bundlePosting('old')],
+      schemaVersion: SCHEMA_VERSION,
+      final: true,
+    })
+
+    // The database is already at the cap with newer captures, which is what a
+    // year-old `full` backup lands in. Written directly: the point is the
+    // retention boundary, not how they got there.
+    await db.snapshots.bulkPut(
+      Array.from({ length: SNAPSHOT_RETENTION }, (_, index) =>
+        aPage(`recent-${index}`, 5_000 + index),
+      ),
+    )
+
+    const response = await handleRequest(db, {
+      kind: 'backup/import-snapshots',
+      snapshots: [aPage('old', 1_000)],
+    })
+
+    // Inserted, then swept for being older than everything already held. The
+    // count has to say so — claiming it as imported would promise a page the
+    // database does not have.
+    expect(response.ok && response.data).toEqual({ imported: 0, skipped: 0, dropped: 1 })
+    expect(await db.snapshots.get('old')).toBeUndefined()
+  })
+
+  /**
+   * The migration of records that arrived behind the current version rewrites
+   * the whole table, so running it per batch would do it once per two hundred
+   * records imported. The panel says which batch is last.
+   */
+  it('defers the migration of old records to the final batch', async () => {
+    const db = await freshDb()
+
+    await handleRequest(db, {
+      kind: 'backup/import-postings',
+      postings: [bundlePosting('old', { schemaVersion: 1, companyNormalized: 'wrong' })],
+      schemaVersion: 1,
+      final: false,
+    })
+
+    // The debt is recorded but not yet paid.
+    expect((await readSettings()).importedBelowVersion).toBe(1)
+    expect((await db.postings.get('old'))?.schemaVersion).toBe(1)
+
+    await handleRequest(db, {
+      kind: 'backup/import-postings',
+      postings: [],
+      schemaVersion: 1,
+      final: true,
+    })
+
+    expect((await readSettings()).importedBelowVersion).toBeNull()
+    expect((await db.postings.get('old'))?.schemaVersion).toBe(SCHEMA_VERSION)
+  })
+
+  // Keying this on the envelope's version instead made re-importing an old
+  // backup rewrite the entire table once per batch of records it did not write.
+  it('records no debt when a batch imported nothing', async () => {
+    const db = await freshDb()
+    await handleRequest(db, {
+      kind: 'backup/import-postings',
+      postings: [bundlePosting('a')],
+      schemaVersion: SCHEMA_VERSION,
+      final: true,
+    })
+
+    await handleRequest(db, {
+      kind: 'backup/import-postings',
+      postings: [bundlePosting('a', { schemaVersion: 1 })],
+      schemaVersion: 1,
+      final: false,
+    })
+
+    expect((await readSettings()).importedBelowVersion).toBeNull()
+  })
+
+  it('empties both stores on a wipe and says how much it took', async () => {
+    const db = await freshDb()
+    await handleRequest(db, {
+      kind: 'backup/import-postings',
+      postings: [bundlePosting('a')],
+      schemaVersion: SCHEMA_VERSION,
+      final: true,
+    })
+    await handleRequest(db, { kind: 'snapshot/put', snapshot: aPage('a', 1) })
+
+    const response = await handleRequest(db, { kind: 'backup/wipe' })
+
+    expect(response.ok && response.data).toEqual({ postings: 1, snapshots: 1 })
+    expect(await db.postings.count()).toBe(0)
   })
 })
