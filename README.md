@@ -8,17 +8,26 @@ There is no server and no account. Nothing is transmitted anywhere.
 
 ## Status
 
-**Phase 4 — extraction.** Open a Greenhouse or Lever posting and the panel offers
-to fill the form from it: employer, role, location, work mode and salary where the
-board states one, plus the posting's URL. The page it read is kept alongside the
-record, trimmed, so a parser fix can be replayed against it later.
+**Phase 6 — export and import.** The panel has a Backup drawer that writes your
+whole history to a file and reads it back.
 
-Filling is a button, not yet automatic — the panel checks the current tab when it
-opens and when you click back into it. Following tabs as you switch between
-postings is phase 5.
+- **Export records** — JSON, records only. This is the portable one: no page
+  content, safe to keep anywhere.
+- **Export with pages** — the same records plus the trimmed pages they were read
+  from, so a future parser fix can be replayed against what the page actually
+  said. These came off logged-in sessions, so it is the copy to keep to yourself.
+- **Spreadsheet** — a CSV report that opens straight in Excel. One-way: it is for
+  reading, and cannot be imported.
+- **Import** — records already on this machine are kept exactly as they are; a
+  backup never overwrites them.
+- **Erase everything** — behind a confirmation, because the way to find out a
+  backup is real is to wipe and restore it.
 
-Everything from phase 3 is unchanged: a full form with dirty tracking, a
-duplicate check before saving, and a save that clears the form for the next one.
+Before that: postings are read off Greenhouse and Lever automatically, any other
+page by right-clicking it, the form follows as you tab between postings without
+ever clobbering what you have typed, and a page you have already tracked says so
+— in the panel and on the toolbar badge — before you type a thing.
+
 See `docs/ROADMAP.md` for the phase plan and `docs/DECISIONS.md` for the
 architecture decisions behind it.
 
@@ -93,6 +102,7 @@ src/sidepanel/             the panel UI
 src/lib/                   schema, storage, message layer
 src/lib/normalize/         join-key derivation — company, URL, ATS req id
 src/lib/extract/           tiered adapters, snapshot trimming
+src/lib/backup/            the export file format, its validator, the CSV report
 src/test/fixtures/         real captured job pages the adapters are tested against
 tools/make-icons.py        regenerates public/icons/*.png
 tools/build-win.sh         builds to the Windows filesystem, for WSL
@@ -103,22 +113,25 @@ docs/DECISIONS.md          architecture decisions and their revisit conditions
 
 ## Privacy
 
-The manifest requests three permissions, and no host permissions at all:
+The manifest requests six permissions, and no host permissions at all:
 
 | Permission | Why |
 |---|---|
 | `sidePanel` | the UI surface |
 | `storage` | settings (records live in IndexedDB) |
 | `unlimitedStorage` | exempts the extension from storage quota **and** from Chrome's LRU eviction, so a job-search history that exists nowhere else cannot be silently cleared under disk pressure |
+| `activeTab` | reading a page you explicitly asked to have read, and only that page |
+| `scripting` | injecting the reader into it |
+| `contextMenus` | the right-click item that asks for the read — the only discoverable gesture Chrome grants `activeTab` through |
 
-None of these grant access to page content. There are no content scripts yet;
-when extraction lands in phase 4 they will be matched against specific job-board
-domains rather than all sites, and anywhere else capture will be click-initiated
-through `activeTab`, which needs no host permission at all.
+None of these grants standing access to page content. Automatic reading happens
+only on the three job-board hosts named in `content_scripts.matches`; anywhere
+else it is click-initiated through `activeTab`, which reaches one tab, once, at
+your request.
 
 Nothing is sent off the machine, and there is no analytics of any kind.
 
 Captured records stay in IndexedDB on your device. Exports are the only way data
-leaves, they are initiated by you, and the `lean` variant omits the raw page
-snapshots so a backup can be shared without carrying anything scraped from a
+leaves, they are initiated by you, and the records-only variant omits the raw
+page snapshots so a backup can be shared without carrying anything scraped from a
 logged-in session.

@@ -14,7 +14,7 @@ then merged.
 | 3 ✅ | `feat/sidepanel-form` | Full form, theme, manual save, dirty tracking, save → wipe → fresh form | Enter a job by hand; it survives a reload |
 | 4 ✅ | `feat/extraction` | Tiered adapters, snapshots, adapter versioning, URL reporting that survives SPA navigation, fixture tests | A real posting fills the form |
 | 5 ✅ | `feat/live-sync`, `feat/activetab-capture` | Tab listeners, swap rules, dirty banner, revisit warning, toolbar badge, `activeTab` capture for unknown sites | Tab between postings; the form follows, and a posting already tracked says so before you type |
-| 6 | `feat/export-import` | JSON lean/full round-trip, CSV report, skip-duplicate import | Export, wipe, re-import — data identical |
+| 6 ✅ | `feat/export-import` | JSON lean/full round-trip, CSV report, skip-duplicate import, snapshot retention sweep | Export, wipe, re-import — data identical |
 | 7 | `feat/dashboard` | `liveQuery`-backed views: status funnel, over time, per-board yield | Patterns visible across saved data |
 | 8 | `feat/submit-detect` | Submission heuristics behind a prompt | Prompt fires on a real submission |
 | later | — | Workday, Ashby, iCIMS, SmartRecruiters adapters; diagnostics action | — |
@@ -187,6 +187,96 @@ be. Auto-fill is what makes it necessary: in phase 4 a stale detection meant a
 banner offering a page the user had left, which could be ignored, and once the
 form fills itself it means the previous job silently appearing on an unrelated
 site (decision 15).
+
+## Phase 6 — export and import
+
+The backup phase. Decision 1 puts the data on exactly one device, which makes
+the export file the whole of the backup and portability story rather than a
+convenience feature.
+
+- **JSON, in `lean` and `full` variants** (decision 14). `lean` is records only
+  and is the one that can be shared or archived; `full` adds the trimmed page
+  snapshots so a restored database can still be re-parsed after a future adapter
+  fix. The variant is enforced when the bundle is built, not trusted from the
+  caller — a `lean` file with snapshots in it would carry exactly the
+  page-derived content the variant exists to leave behind.
+- **Skip-duplicate import.** A record whose id is already stored is left exactly
+  as it is, and the summary says how many were kept that way. Import is
+  deliberately *not* `upsertPosting`: that path stamps `updatedAt` with the
+  present, which is right for a save and wrong for a restore.
+- **CSV as a one-way report.** UTF-8 BOM, CRLF, RFC 4180 quoting, and a
+  formula-injection guard on every cell — every string in a record came off a
+  web page, and a title beginning `=` is a formula the moment the file opens.
+- **Erase everything**, behind a confirmation. It is in scope because a backup
+  nobody has ever restored is a backup nobody can trust, and wiping is how a
+  person finds out theirs is real.
+- **The 500-snapshot retention sweep** from decision 6, deferred out of phase 4
+  and built here where the storage picture was already open. Records are never
+  dropped, only their snapshots.
+
+**Done when** exporting, erasing and re-importing leaves the data identical.
+There is a test that does exactly that, through the real message layer rather
+than against the repository — the batching, the envelope and the validator are
+half of what could go wrong.
+
+**Shipped.** Four things are worth recording.
+
+**Backup traffic is batched, and everything goes through the worker.** A `full`
+export is records plus up to 500 pages of up to 256KB each, so handing it over
+in one message would serialize tens of megabytes and hold them in two contexts
+at once. Letting the panel open its own database connection for the read half
+was the obvious alternative and was rejected: import is unambiguously a write
+(decision 4), and a panel that opened the database would also be the context
+performing Dexie's structural upgrade on the next release that adds an index.
+
+**The importer has to migrate what it imports.** A backup restored after an
+upgrade carries records written by whatever build the user had, and nothing else
+would ever bring them forward — the migration harness keys off `dataVersion`,
+which the worker brought up to date at startup, so from its point of view there
+is nothing pending. This is decision 9's silent-loss shape arriving through the
+one door that does not go past the version stamp. `migrateImportedRecords`
+closes it. Unreachable today, since the exporter always writes at the current
+version, which is precisely why it had to be built before it was needed.
+
+**A restore must preserve timestamps.** Writing an import through the ordinary
+save path would arrive with every record edited today, in one indistinguishable
+block, and "newest first" would mean nothing ever after. It is the kind of loss
+that leaves no trace to notice.
+
+**CSV needed a security decision.** Formula injection is a real hazard here
+rather than a theoretical one, because the strings in a record are chosen by
+whoever wrote the job posting. The guard fires on ordinary text too — a note
+beginning "- called back" gets an apostrophe — which is the right direction to
+be wrong in for a report that is never parsed back.
+
+### What review changed
+
+Fifteen defects across two rounds, and the useful thing about them is that they
+clustered. Almost none were in the storage layer; they were in **what the code
+said about what it had done**.
+
+- A count that promised more than the database held — pages inserted and swept
+  by the retention cap in the same breath, reported as added.
+- A summary that under-reported a partial import, because the refresh sat on the
+  success path only, so four hundred records genuinely written showed as
+  nothing.
+- A destructive dialog that said "Erase 0 records" over a full database, because
+  the count falls back to zero before the worker answers.
+- A `lastBackupAt` asserting a file had been written when all that can be
+  observed is that one was offered.
+- Two checks that contradicted their own comments: `formatVersion !==` refusing
+  older files the comment above it promised to accept, and a formula guard
+  naming `\t` and `\r` where the docs claimed all leading whitespace.
+- A uniqueness check that read before the loop, so it tested the batch against
+  the past and not against itself.
+- A migration that ran but recorded nothing, so an interrupted chain could never
+  be resumed — a protection that executed without leaving evidence it had, which
+  is decision 3's recurring pattern wearing a new face.
+- Badges left asserting records a wipe had just deleted.
+
+Worth carrying into phase 7: the dashboard is nothing *but* claims about the
+record set, and every defect above was a claim that outran what was actually
+true.
 
 ## Changes from the original plan
 
