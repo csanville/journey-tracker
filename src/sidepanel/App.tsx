@@ -5,6 +5,7 @@ import { isEvent } from '../lib/events'
 import type { StatusReport } from '../lib/messages'
 import { requestPersistence } from '../lib/persistence'
 import type { Posting } from '../lib/types'
+import { BackupSection } from './BackupSection'
 import { activeTabDetection } from './detection-client'
 import { PostingForm } from './PostingForm'
 import { RecentPostings } from './RecentPostings'
@@ -220,6 +221,13 @@ export function App() {
         <RecentPostings postings={postings} />
       </section>
 
+      {/*
+        Above the diagnostics because it is a thing people do deliberately, and
+        below the list because the list is the answer to "is my data still
+        there" — which is the question that makes somebody go looking for this.
+      */}
+      <BackupSection status={status} onChanged={() => void refresh()} />
+
       <details className="diagnostics">
         <summary>Diagnostics</summary>
         <dl className="probes">
@@ -253,7 +261,7 @@ export function App() {
         </dl>
       </details>
 
-      <footer className="panel__foot">Phase 5 · live sync</footer>
+      <footer className="panel__foot">Phase 6 · export &amp; import</footer>
     </div>
   )
 }
