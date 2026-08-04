@@ -73,6 +73,84 @@ dedupe quality lives here.
 **Done when** a fixture set of messy real-world URLs and company strings collapses
 to the expected records, including the near-miss cases that should *not* merge.
 
+## Phase 3 — the side panel form
+
+Written up after the fact, in phase 7, when it turned out to be the one phase
+with no section. Reconstructed from the branch (`a634a7f`, `ce3ccdb`) and the
+code rather than from memory.
+
+The panel stops being a diagnostic readout and becomes the thing the extension is
+for: fill in a job, save it, watch the form clear itself for the next one. No
+parsing and no tab awareness — everything here is typed by hand, which is what
+makes it the honest floor under the four phases that automate it.
+
+- **The form's logic lives outside React.** `sidepanel/draft.ts` is plain
+  functions over plain data: what counts as dirty, what an empty field means,
+  and what shape reaches the database. Those are the parts worth getting right
+  and they are far easier to test as functions than through a component, which
+  leaves `PostingForm.tsx` thin enough to verify by using it. The same split is
+  what phase 7's `lib/dashboard/aggregate.ts` does, for the same reason.
+- **The draft id is fixed for the life of the draft**, not generated at save. A
+  save retried after the duplicate prompt or after a failure must reuse it, or
+  the retry writes a second record instead of being the no-op `upsertPosting` is
+  built to make it (decision 4).
+- **Saving checks for a duplicate first**, using the phase 2 keys, and offers the
+  existing record rather than silently writing a second copy or silently
+  refusing. The first place that work is visible — and the realisation that the
+  same check is far more useful *before* the form is filled in is what put the
+  revisit warning into phase 5.
+- **Dirty tracking compares against a baseline, not against empty**, even though
+  the baseline is always empty here. From phase 5 a pristine form is one that
+  still matches what was auto-filled into it rather than one that is blank
+  (decision 13), and this is the seam that makes that possible without rewriting
+  the form. Whitespace-only edits do not count: tabbing through the fields is
+  not work worth protecting.
+- **Salary is kept as typed.** Splitting `$120k–150k, DOE` into a range with a
+  currency and a period is parsing, and parsing belongs with the extraction
+  adapters. A weaker version here would have left two of them to reconcile.
+- **Only company and job title are required.** A job heard about by email is
+  still worth tracking, and `findDuplicate` already declines to key on a URL that
+  is not one.
+- **The wipe is driven by a timer**, not `animationend`, which does not reliably
+  fire for the zero-length animation that reduced motion turns this into.
+- **The theme follows the OS.** One `prefers-color-scheme` block over a set of
+  tokens, with no toggle and no stored preference — there is nothing to persist,
+  and a setting would be a thing to migrate.
+
+A read-only list of recent saves sits below the form, which is what makes the
+phase gate checkable without opening devtools. The diagnostics that used to be
+the whole panel fold into a `<details>`: still worth having, since a storage or
+migration problem is otherwise invisible, but no longer the point.
+
+**Done when** a job entered by hand survives a reload.
+
+### What review changed
+
+Recorded here because two of the five are the shapes named under "Recurring
+shapes" below, which means those patterns predate phase 6 by three phases — they
+were simply not being counted yet.
+
+- **A claim that outran what was true.** The panel said "Nothing saved yet"
+  alongside its own error banner, when all that had happened was that the list
+  failed to load — a false statement about someone's records in the one place
+  meant to reassure them the records are still there. `postings` became `null`
+  until answered. Phase 7's dashboard has the identical fix, arrived at
+  independently, as three read states rather than two.
+- **A check-then-act spanning an await.** `toPostingInput` snapshotted the draft
+  before the save round-trip, and on a cold worker that round-trip is not
+  instant. A correction typed into the gap was checked against the old values,
+  written as the old values, and then wiped by the reset. The fields lock while a
+  save is in flight.
+- A failing `storage/reassess` became a silent unhandled rejection that left the
+  panel showing pre-persist state — the worker dying between the status reply and
+  that call is ordinary for MV3 and the reason the client retries at all.
+- Stale migration-flag recovery moved to the paths that do no work. Clearing it
+  on entry released readers parked in `waitForMigration` moments before the same
+  call raised it again and began rewriting records — the half-migrated read the
+  flag exists to prevent (decision 9).
+- `formatWhen` counted elapsed hours rather than calendar days, so something
+  saved at 23:00 and read at 08:00 said "today".
+
 ## Phase 4 — extraction
 
 Reading a posting off the page. Adapters are tiered, generic first, so a new
@@ -412,29 +490,41 @@ fields together will not catch a bug that needs them to disagree.
 
 ## Recurring shapes
 
-Two phases of review have now found the same two shapes, which is enough to start
-writing them down. Both are about the gap between what code does and what it
-says it did, and both are cheap to look for deliberately.
+Two shapes account for most of what review has found, across every phase that
+has had a UI. Both are about the gap between what code does and what it says it
+did, and both are cheap to look for deliberately.
 
-**A claim that outruns what is true.** Phase 6 found nine of these — a count of
-pages inserted and swept in the same breath reported as added, a summary that
-under-reported a partial import, a dialog offering to erase zero records over a
-full database, a `lastBackupAt` asserting a file had been written when all that
-can be observed is that one was offered. Phase 7 was built to resist them and
+They were noticed in phase 7 and written down then, which is later than they
+started. Writing phase 3's section afterwards turned up both of them in *its*
+review as well — so the count below begins at phase 3, not at phase 6 where they
+were first named. That is itself the useful part: they had been recurring for
+four phases before anyone was counting.
+
+**A claim that outruns what is true.** Phase 3: "Nothing saved yet" shown
+alongside the panel's own error banner, when the list had merely failed to load.
+Phase 6 found nine — a count of pages inserted and swept in the same breath
+reported as added, a summary that under-reported a partial import, a dialog
+offering to erase zero records over a full database, a `lastBackupAt` asserting
+a file had been written when all that can be observed is that one was offered.
+Phase 7 was built specifically to resist them, said so in three places, and
 still shipped one: a residual that hid itself when only half of it was non-zero.
 
-The check: for every number rendered, ask what makes it true, and whether it is
-still true when the thing it counts is zero, partial, or split across two fields.
+The check: for every number or status rendered, ask what makes it true, and
+whether it is still true when the thing it describes is zero, partial, absent,
+or split across two fields that move independently.
 
-**A check-then-act spanning an await.** Phase 6: a uniqueness check that read
-before the loop, so it tested the batch against the past and not against itself.
-Phase 7: a tab lookup that read before a create, so a second click read the same
-empty storage as the first. In both, the read and the act were individually
-correct and the gap between them was not held.
+**A check-then-act spanning an await.** Phase 3: `toPostingInput` snapshotted
+the draft before the save round-trip, so a correction typed into the gap was
+checked against the old values and written as the old values. Phase 6: a
+uniqueness check that read before the loop, so it tested the batch against the
+past and not against itself. Phase 7: a tab lookup that read before a create, so
+a second click read the same empty storage as the first. In all three the read
+and the act were individually correct and the gap between them was not held.
 
 The check: wherever an `await` sits between deciding and doing, ask what else
 could run in the gap — and note that in an extension the answer is rarely
-another thread, but usually the same user clicking twice.
+another thread. It is usually the same person clicking twice, or a service
+worker dying mid-conversation.
 
 ## Changes from the original plan
 
