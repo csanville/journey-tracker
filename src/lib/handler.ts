@@ -1,5 +1,7 @@
+import { validatePosting, validateSnapshot } from './backup/bundle'
 import type { JourneyTrackerDb } from './db'
 import {
+  cachedTabIds,
   findSnapshot,
   findTabForDetection,
   getDetectionSummary,
@@ -7,12 +9,22 @@ import {
   sanitizeReport,
 } from './detection'
 import { broadcast } from './events'
-import type { Request, RequestKind, Response, Result, StatusReport } from './messages'
+import { now } from './ids'
+import type {
+  ImportBatchResult,
+  Request,
+  RequestKind,
+  Response,
+  Result,
+  StatusReport,
+} from './messages'
+import { noteImportedVersion, resumeImportMigration } from './migrations'
 import { recordStorageProtection } from './persistence'
 import * as repo from './repository'
-import { readSettings } from './settings'
+import { patchSettings, readSettings } from './settings'
 import { postingInputFromDetection, setTrackedBadge } from './tracked'
 import { SCHEMA_VERSION } from './types'
+import type { Posting, Snapshot } from './types'
 
 /**
  * Who sent the request, as far as the worker can tell for itself.
@@ -70,6 +82,24 @@ async function dispatch(
       return { postingId: request.snapshot.postingId }
     case 'snapshot/get':
       return repo.getSnapshot(db, request.postingId)
+    case 'snapshot/ids':
+      return repo.listSnapshotIds(db)
+    case 'snapshot/list':
+      return repo.listSnapshots(db, request.postingIds)
+    case 'backup/import-postings':
+      return importPostings(db, request.postings, request.schemaVersion, request.final)
+    case 'backup/import-snapshots':
+      return importSnapshots(db, request.snapshots)
+    case 'backup/wipe': {
+      const wiped = await repo.wipeAll(db)
+      // Nothing is tracked any more, and every badge saying otherwise is now a
+      // claim about records that no longer exist.
+      await repaintTrackedTabs(db, false)
+      return wiped
+    }
+    case 'backup/recorded':
+      await patchSettings({ lastBackupAt: now() })
+      return status(db)
     case 'detection/report': {
       // No tab means this did not come from a content script, and a detection
       // that is not attached to a tab is one the panel could never ask for.
@@ -139,6 +169,29 @@ async function announceDetection(
   await broadcast({ type: 'detection/changed', tabId })
 }
 
+/**
+ * Re-answers "is this page tracked" for every tab holding a detection.
+ *
+ * The badge is painted from a detection-to-record match (decision 16), so it is
+ * a claim about the *record set* as much as about the page — and a wipe or a
+ * restore moves the record set under every tab at once. Without this, erasing
+ * everything left tabs wearing badges asserting records that had just been
+ * deleted, contradicting the panel's own revisit banner, which re-queries and
+ * would say otherwise; a restore left them dark on pages it had just tracked.
+ *
+ * Bounded by the detection cache's own eight-tab limit, so this is at most
+ * eight lookups however large the import was. `tracked` is passed when the
+ * caller already knows — after a wipe nothing is tracked, and asking is both
+ * wasteful and, on an empty database, a query that can only return one answer.
+ */
+async function repaintTrackedTabs(db: JourneyTrackerDb, tracked?: boolean): Promise<void> {
+  const tabs = await cachedTabIds()
+
+  // Sequential rather than parallel: each one paints a badge and broadcasts,
+  // and there is no deadline here worth racing eight session-storage reads for.
+  for (const tabId of tabs) await announceDetection(db, tabId, tracked)
+}
+
 /** Whether what a tab is showing is already in the database. */
 async function isTracked(db: JourneyTrackerDb, tabId: number): Promise<boolean> {
   const detection = await getDetectionSummary(tabId)
@@ -183,12 +236,102 @@ async function upsert(
         trimmedSource: detection.snapshot.trimmedSource,
         truncated: detection.snapshot.truncated,
       })
+
+      // Decision 6's retention cap, swept where snapshots are actually created.
+      // A count and nothing else until the cap is passed, which is several
+      // hundred captures away for anyone who has just installed this.
+      await repo.pruneSnapshots(db)
     }
   } catch (error) {
     console.error('[JourneyTracker] could not store the snapshot', error)
   }
 
   return posting
+}
+
+/**
+ * One batch of records from an export file.
+ *
+ * Validated again here, and not because the panel is untrusted — it is this
+ * extension's own page. It is because everything in the payload came out of a
+ * file the user picked, and the worker is the single writer (decision 4): the
+ * guarantee that nothing malformed reaches the database has to hold at the
+ * place that writes, not at the place that happened to read the file. It is the
+ * same reasoning that validates a content script's report on arrival
+ * (decision 15), and it costs one pass over an array.
+ *
+ * A record that fails is dropped from the batch rather than failing it. The
+ * panel has already told the user how many the file offered, so a record lost
+ * here would show up as a discrepancy in the summary — which is the point.
+ */
+async function importPostings(
+  db: JourneyTrackerDb,
+  postings: Posting[],
+  schemaVersion: number,
+  final: boolean,
+): Promise<ImportBatchResult> {
+  const valid = postings
+    .map(validatePosting)
+    .filter((posting): posting is Posting => typeof posting !== 'string')
+
+  const outcome = await repo.insertMissingPostings(db, valid)
+
+  // Gated on what was actually *written*, not on what the file claims. A batch
+  // that imported nothing — re-importing a backup already restored — has
+  // nothing to migrate, and keying this on the envelope's version instead made
+  // an old file rewrite the whole table for every batch of records it did not
+  // insert.
+  //
+  // Recorded now and run at the end. The record survives a worker that dies
+  // in between, which is what stops a half-imported old backup sitting at an
+  // intermediate version forever.
+  const lowest = Math.min(schemaVersion, outcome.lowestVersion ?? SCHEMA_VERSION)
+  if (outcome.lowestVersion !== null && lowest < SCHEMA_VERSION) {
+    await noteImportedVersion(lowest)
+  }
+
+  if (final) {
+    const applied = await resumeImportMigration(db)
+    if (applied.length > 0) {
+      console.info('[JourneyTracker] migrated imported records', applied)
+    }
+
+    // Once, at the end, and after any migration — the join keys a restored
+    // record matches on are exactly what a migration might have rewritten. A
+    // page open in another tab may be tracked now that its record is back.
+    await repaintTrackedTabs(db)
+  }
+
+  return { imported: outcome.imported.length, skipped: outcome.skipped.length, dropped: 0 }
+}
+
+async function importSnapshots(
+  db: JourneyTrackerDb,
+  snapshots: Snapshot[],
+): Promise<ImportBatchResult> {
+  const valid = snapshots
+    .map(validateSnapshot)
+    .filter((snapshot): snapshot is Snapshot => typeof snapshot !== 'string')
+
+  const outcome = await repo.insertMissingSnapshots(db, valid)
+
+  // The restore is subject to the same cap as ordinary capture (decision 6):
+  // importing a full backup taken before the sweep existed should not be a way
+  // to reinstate a thousand snapshots.
+  await repo.pruneSnapshots(db)
+
+  // Counted *after* the sweep, because the sweep may have taken some of what
+  // was just written — restoring an old backup into a database of newer
+  // captures inserts pages the cap immediately reclaims. Reporting them as
+  // imported would claim pages the database does not have, and the number is
+  // the only way the user learns the retention cap exists at all.
+  const survived = await repo.countSnapshotsAmong(db, outcome.imported)
+
+  return {
+    imported: survived,
+    skipped: outcome.skipped.length,
+    dropped: outcome.imported.length - survived,
+  }
 }
 
 async function status(db: JourneyTrackerDb): Promise<StatusReport> {
@@ -201,5 +344,7 @@ async function status(db: JourneyTrackerDb): Promise<StatusReport> {
     storageUnlimited: settings.storageUnlimited,
     evictionSafe: Boolean(settings.storageUnlimited || settings.storagePersisted),
     postingCount: await repo.countPostings(db),
+    snapshotCount: await repo.countSnapshots(db),
+    lastBackupAt: settings.lastBackupAt,
   }
 }

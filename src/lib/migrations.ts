@@ -165,3 +165,103 @@ export async function runPendingMigrations(
 
   return { from: dataVersion, to: targetVersion, applied, freshInstall: false }
 }
+
+/**
+ * Brings records that arrived from an older export up to the current schema.
+ *
+ * A backup restored after an upgrade is the ordinary case for this: the file
+ * was written by whatever build the user had, and the records inside it have
+ * missed every migration since. Nothing else would ever apply them — the
+ * harness above keys off `dataVersion`, which the worker brought up to date at
+ * startup, so from its point of view there is nothing pending. This is the same
+ * silent-loss shape decision 9 exists for, arriving through the one door that
+ * does not go past the version stamp.
+ *
+ * It runs each migration across the **whole table**, not just the imported
+ * rows, because a `Migration` is defined over the database and narrowing it to
+ * a subset would be a second implementation of every migration ever written.
+ * Safe because they are all required to be idempotent, and cheap because it
+ * only runs at all when a file turns out to be behind — which today it never
+ * is, since the exporter always writes at the current version.
+ *
+ * `dataVersion` is deliberately not touched. It records what this *database*
+ * has been through, and it is already current; the imported records were the
+ * only things behind.
+ */
+export async function migrateImportedRecords(
+  db: JourneyTrackerDb,
+  fromVersion: number,
+  options: MigrationOptions = {},
+): Promise<number[]> {
+  const { migrations = MIGRATIONS, targetVersion = SCHEMA_VERSION } = options
+
+  const pending = migrations
+    .filter((m) => m.to > fromVersion && m.to <= targetVersion)
+    .sort((a, b) => a.to - b.to)
+
+  if (pending.length === 0) {
+    // Nothing owed, so nothing should be left recorded as owed.
+    await patchSettings({ importedBelowVersion: null })
+    return []
+  }
+
+  // Same guard as a startup migration: a panel reading through a half-rewritten
+  // table gets the same wrong answer whichever door the rewrite came in by.
+  await patchSettings({ migrationInProgress: true })
+  const applied: number[] = []
+
+  try {
+    for (const migration of pending) {
+      await migration.run(db)
+      // Recorded one at a time, exactly as `runPendingMigrations` records
+      // `dataVersion`, and for exactly the same reason: an MV3 worker can be
+      // killed between two steps of the chain. Without this the survivor has no
+      // idea how far the chain got — and it cannot ask `dataVersion`, which was
+      // already current before the import began — so the records would sit at an
+      // intermediate version permanently, with nothing that would ever finish
+      // them. That is the silent loss decision 9 exists to prevent, and this
+      // function is the one place it could arrive from.
+      await patchSettings({ importedBelowVersion: migration.to })
+      applied.push(migration.to)
+    }
+
+    await patchSettings({ importedBelowVersion: null })
+  } finally {
+    await patchSettings({ migrationInProgress: false })
+  }
+
+  return applied
+}
+
+/**
+ * Records that records below the current schema version have been imported.
+ *
+ * Written before the migration rather than after it, so a worker torn down
+ * between the write and the rewrite still knows there is a debt. Takes the
+ * lowest version seen, since a file may carry records from more than one era.
+ */
+export async function noteImportedVersion(version: number): Promise<void> {
+  const { importedBelowVersion } = await readSettings()
+
+  if (importedBelowVersion !== null && importedBelowVersion <= version) return
+
+  await patchSettings({ importedBelowVersion: version })
+}
+
+/**
+ * Finishes any import migration that was recorded and not completed.
+ *
+ * Called at the end of an import, and again at every worker start — the second
+ * is what makes a panel that closed mid-import, or a batch that failed, a delay
+ * rather than a permanent loss. A no-op when nothing is owed, which is every
+ * ordinary start.
+ */
+export async function resumeImportMigration(
+  db: JourneyTrackerDb,
+  options: MigrationOptions = {},
+): Promise<number[]> {
+  const { importedBelowVersion } = await readSettings()
+  if (importedBelowVersion === null) return []
+
+  return migrateImportedRecords(db, importedBelowVersion, options)
+}

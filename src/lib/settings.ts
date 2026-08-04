@@ -21,6 +21,18 @@ export interface Settings {
   /** Whether `unlimitedStorage` is granted, which alone exempts from eviction. */
   storageUnlimited: boolean | null
   lastBackupAt: number | null
+  /**
+   * The schema version of the oldest records an import has brought in and not
+   * yet finished migrating, or `null` when there is no such debt.
+   *
+   * This is the durable half of importing a backup written by an older build.
+   * `dataVersion` cannot carry it — that records what this *database* has been
+   * through, and it is already current — so without somewhere to write the debt
+   * down, an import interrupted between two migration steps would leave records
+   * at an intermediate version with nothing that would ever finish them. The
+   * worker checks this at every start and resumes (decision 9).
+   */
+  importedBelowVersion: number | null
 }
 
 export const SETTINGS_KEY = 'jt:settings'
@@ -31,6 +43,7 @@ export const DEFAULT_SETTINGS: Settings = {
   storagePersisted: null,
   storageUnlimited: null,
   lastBackupAt: null,
+  importedBelowVersion: null,
 }
 
 export async function readSettings(): Promise<Settings> {
