@@ -1,4 +1,5 @@
 import { validatePosting, validateSnapshot } from './backup/bundle'
+import { confirmationTarget } from './confirmation'
 import type { JourneyTrackerDb } from './db'
 import {
   cachedTabIds,
@@ -118,6 +119,11 @@ async function dispatch(
 
       return { detectionId: report.detectionId }
     }
+    case 'application/submitted': {
+      if (context.tabId === undefined) return { matched: false }
+
+      return { matched: await announceSubmission(db, context.tabId, request.url) }
+    }
     case 'detection/get':
       return getDetectionSummary(request.tabId)
     case 'status':
@@ -168,6 +174,74 @@ async function announceDetection(
 
   await broadcast({ type: 'detection/changed', tabId })
 }
+
+/**
+ * Resolves a confirmation page back to the record it confirms, and tells the
+ * panel.
+ *
+ * The join runs **URL-first against the stored records**, never against the
+ * detection cache, and that is forced rather than chosen. Decision 15's
+ * `onUpdated` listener drops a tab's detection on `status === 'loading'`, and
+ * a confirmation page is a real page load — so by the time this runs, the
+ * detection for the posting being confirmed is already gone. The worker cannot
+ * special-case it either: `changeInfo.url` is withheld without the `tabs`
+ * permission decision 2 keeps out of the manifest.
+ *
+ * `confirmationTarget` is re-run here rather than trusting the derived URL the
+ * content script could have sent. The content script's filtering keeps ordinary
+ * navigation from costing a message; deciding that somebody applied to
+ * something is the worker's call.
+ *
+ * Nothing is written. Decision 12 is explicit that detection prompts rather
+ * than writes, and this respects it in the strong sense — no record changes
+ * until the user answers, so a wrong match costs one dismissed prompt.
+ *
+ * Silent by design in two cases, both of which are the right answer:
+ *
+ * - **No record for the page.** The user applied without ever saving it, and
+ *   manufacturing a posting from a confirmation page — which carries no job
+ *   description, employer or title worth trusting — would put a junk record in
+ *   a tracker to save one click.
+ * - **The record already says `applied`.** There is nothing to ask.
+ */
+async function announceSubmission(
+  db: JourneyTrackerDb,
+  tabId: number,
+  reportedUrl: string,
+): Promise<boolean> {
+  const target = confirmationTarget(reportedUrl)
+  if (target === null) return false
+
+  const match = await repo.findDuplicate(
+    db,
+    postingInputFromDetection({ ...BLANK, url: target }),
+  )
+
+  // Only an identity match counts. `findDuplicate` will also answer on company
+  // and title, which is right for "you may have seen this before" and far too
+  // loose for "you applied to this" — and the query carries no company anyway.
+  if (!match || match.matchedOn !== 'url') return false
+  if (match.posting.state === 'applied') return false
+
+  await broadcast({ type: 'application/submitted', tabId, postingId: match.posting.id })
+
+  return true
+}
+
+/** A detection-shaped query carrying nothing but the URL it is asking about. */
+const BLANK = {
+  fields: {
+    company: null,
+    jobTitle: null,
+    location: null,
+    workMode: null,
+    atsReqId: null,
+    salary: null,
+  },
+  source: 'confirmation',
+  confidence: 0,
+  adapterVersion: 'confirmation@1',
+} as const
 
 /**
  * Re-answers "is this page tracked" for every tab holding a detection.

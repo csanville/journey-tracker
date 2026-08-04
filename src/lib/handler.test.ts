@@ -335,9 +335,107 @@ describe('allowedFromContentScript', () => {
     // Not a wall against an attacker — a web page cannot reach `onMessage` at
     // all. A wall against an ambient capability nothing uses.
     expect(allowedFromContentScript('detection/report')).toBe(true)
+    expect(allowedFromContentScript('application/submitted')).toBe(true)
     expect(allowedFromContentScript('posting/delete')).toBe(false)
     expect(allowedFromContentScript('posting/upsert')).toBe(false)
     expect(allowedFromContentScript('detection/get')).toBe(false)
+  })
+})
+
+/**
+ * The confirmation-page signal.
+ *
+ * Nothing here writes: decision 12 says detection prompts rather than writes,
+ * and `matched` is the worker reporting what it found, not what the panel will
+ * do about it. So every case asserts the record is unchanged as well.
+ */
+describe('a submitted application', () => {
+  const CONFIRMATION =
+    'https://boards.greenhouse.io/initech/jobs/4021/confirmation?gh_src=abc'
+
+  const submit = (db: Parameters<typeof handleRequest>[0], url = CONFIRMATION) =>
+    handleRequest(db, { kind: 'application/submitted', url }, { tabId: 7 })
+
+  it('matches a confirmation page back to the record it confirms', async () => {
+    const db = await freshDb()
+    // `aPosting`'s URL carries a tracking parameter its canonical form lacks,
+    // so this only matches if the join goes through canonicalization.
+    await handleRequest(db, { kind: 'posting/upsert', posting: aPosting({ id: 'p1' }) })
+
+    const response = await submit(db)
+
+    expect(response.ok && response.data).toEqual({ matched: true })
+
+    // Announced, not written. The user has not answered yet.
+    const read = await handleRequest(db, { kind: 'posting/get', id: 'p1' })
+    expect(read.ok && read.data?.state).toBe('viewed')
+  })
+
+  it('says nothing about a page with no record behind it', async () => {
+    const db = await freshDb()
+
+    // Manufacturing a posting from a confirmation page — which carries no
+    // employer, title or description worth trusting — would put a junk record
+    // in the tracker to save one click.
+    const response = await submit(db)
+
+    expect(response.ok && response.data).toEqual({ matched: false })
+  })
+
+  it('does not ask again about a record already marked applied', async () => {
+    const db = await freshDb()
+    await handleRequest(db, {
+      kind: 'posting/upsert',
+      posting: aPosting({ id: 'p1', state: 'applied', appliedAt: 1_000 }),
+    })
+
+    const response = await submit(db)
+
+    expect(response.ok && response.data).toEqual({ matched: false })
+  })
+
+  it('re-derives the target itself rather than trusting the sender', async () => {
+    const db = await freshDb()
+    await handleRequest(db, { kind: 'posting/upsert', posting: aPosting({ id: 'p1' }) })
+
+    // The posting URL rather than a confirmation URL. The content script only
+    // sends the latter, so this is a message that could only be malformed or
+    // forged — and the worker declines it on its own reading, not on trust.
+    const response = await submit(db, 'https://boards.greenhouse.io/initech/jobs/4021')
+
+    expect(response.ok && response.data).toEqual({ matched: false })
+  })
+
+  it('ignores a submission that arrived without a tab', async () => {
+    const db = await freshDb()
+    await handleRequest(db, { kind: 'posting/upsert', posting: aPosting({ id: 'p1' }) })
+
+    const response = await handleRequest(db, {
+      kind: 'application/submitted',
+      url: CONFIRMATION,
+    })
+
+    expect(response.ok && response.data).toEqual({ matched: false })
+  })
+
+  /**
+   * `findDuplicate` also answers on company and title, which is right for "you
+   * may have seen this before" and far too loose for "you applied to this" —
+   * so only an identity match on the URL counts.
+   */
+  it('will not match a different posting at the same employer', async () => {
+    const db = await freshDb()
+    await handleRequest(db, {
+      kind: 'posting/upsert',
+      posting: aPosting({
+        id: 'other',
+        url: 'https://boards.greenhouse.io/initech/jobs/9999',
+      }),
+    })
+
+    const response = await submit(db)
+
+    expect(response.ok && response.data).toEqual({ matched: false })
   })
 })
 
