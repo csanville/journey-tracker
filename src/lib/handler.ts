@@ -1,6 +1,7 @@
 import { validatePosting, validateSnapshot } from './backup/bundle'
 import type { JourneyTrackerDb } from './db'
 import {
+  cachedTabIds,
   findSnapshot,
   findTabForDetection,
   getDetectionSummary,
@@ -17,7 +18,7 @@ import type {
   Result,
   StatusReport,
 } from './messages'
-import { migrateImportedRecords } from './migrations'
+import { noteImportedVersion, resumeImportMigration } from './migrations'
 import { recordStorageProtection } from './persistence'
 import * as repo from './repository'
 import { patchSettings, readSettings } from './settings'
@@ -86,11 +87,16 @@ async function dispatch(
     case 'snapshot/list':
       return repo.listSnapshots(db, request.postingIds)
     case 'backup/import-postings':
-      return importPostings(db, request.postings, request.schemaVersion)
+      return importPostings(db, request.postings, request.schemaVersion, request.final)
     case 'backup/import-snapshots':
       return importSnapshots(db, request.snapshots)
-    case 'backup/wipe':
-      return repo.wipeAll(db)
+    case 'backup/wipe': {
+      const wiped = await repo.wipeAll(db)
+      // Nothing is tracked any more, and every badge saying otherwise is now a
+      // claim about records that no longer exist.
+      await repaintTrackedTabs(db, false)
+      return wiped
+    }
     case 'backup/recorded':
       await patchSettings({ lastBackupAt: now() })
       return status(db)
@@ -161,6 +167,29 @@ async function announceDetection(
   }
 
   await broadcast({ type: 'detection/changed', tabId })
+}
+
+/**
+ * Re-answers "is this page tracked" for every tab holding a detection.
+ *
+ * The badge is painted from a detection-to-record match (decision 16), so it is
+ * a claim about the *record set* as much as about the page — and a wipe or a
+ * restore moves the record set under every tab at once. Without this, erasing
+ * everything left tabs wearing badges asserting records that had just been
+ * deleted, contradicting the panel's own revisit banner, which re-queries and
+ * would say otherwise; a restore left them dark on pages it had just tracked.
+ *
+ * Bounded by the detection cache's own eight-tab limit, so this is at most
+ * eight lookups however large the import was. `tracked` is passed when the
+ * caller already knows — after a wipe nothing is tracked, and asking is both
+ * wasteful and, on an empty database, a query that can only return one answer.
+ */
+async function repaintTrackedTabs(db: JourneyTrackerDb, tracked?: boolean): Promise<void> {
+  const tabs = await cachedTabIds()
+
+  // Sequential rather than parallel: each one paints a badge and broadcasts,
+  // and there is no deadline here worth racing eight session-storage reads for.
+  for (const tabId of tabs) await announceDetection(db, tabId, tracked)
 }
 
 /** Whether what a tab is showing is already in the database. */
@@ -239,6 +268,7 @@ async function importPostings(
   db: JourneyTrackerDb,
   postings: Posting[],
   schemaVersion: number,
+  final: boolean,
 ): Promise<ImportBatchResult> {
   const valid = postings
     .map(validatePosting)
@@ -246,19 +276,33 @@ async function importPostings(
 
   const outcome = await repo.insertMissingPostings(db, valid)
 
-  // Only when the file really was behind, which today it never is — the
-  // exporter always writes at the current version. It is here for the upgrade
-  // that has not happened yet, because by then the file will already exist on
-  // somebody's disk and nothing else would ever bring it forward.
+  // Gated on what was actually *written*, not on what the file claims. A batch
+  // that imported nothing — re-importing a backup already restored — has
+  // nothing to migrate, and keying this on the envelope's version instead made
+  // an old file rewrite the whole table for every batch of records it did not
+  // insert.
+  //
+  // Recorded now and run at the end. The record survives a worker that dies
+  // in between, which is what stops a half-imported old backup sitting at an
+  // intermediate version forever.
   const lowest = Math.min(schemaVersion, outcome.lowestVersion ?? SCHEMA_VERSION)
-  if (lowest < SCHEMA_VERSION) {
-    const applied = await migrateImportedRecords(db, lowest)
+  if (outcome.lowestVersion !== null && lowest < SCHEMA_VERSION) {
+    await noteImportedVersion(lowest)
+  }
+
+  if (final) {
+    const applied = await resumeImportMigration(db)
     if (applied.length > 0) {
       console.info('[JourneyTracker] migrated imported records', applied)
     }
+
+    // Once, at the end, and after any migration — the join keys a restored
+    // record matches on are exactly what a migration might have rewritten. A
+    // page open in another tab may be tracked now that its record is back.
+    await repaintTrackedTabs(db)
   }
 
-  return { imported: outcome.imported.length, skipped: outcome.skipped.length }
+  return { imported: outcome.imported.length, skipped: outcome.skipped.length, dropped: 0 }
 }
 
 async function importSnapshots(
@@ -276,7 +320,18 @@ async function importSnapshots(
   // to reinstate a thousand snapshots.
   await repo.pruneSnapshots(db)
 
-  return { imported: outcome.imported.length, skipped: outcome.skipped.length }
+  // Counted *after* the sweep, because the sweep may have taken some of what
+  // was just written — restoring an old backup into a database of newer
+  // captures inserts pages the cap immediately reclaims. Reporting them as
+  // imported would claim pages the database does not have, and the number is
+  // the only way the user learns the retention cap exists at all.
+  const survived = await repo.countSnapshotsAmong(db, outcome.imported)
+
+  return {
+    imported: survived,
+    skipped: outcome.skipped.length,
+    dropped: outcome.imported.length - survived,
+  }
 }
 
 async function status(db: JourneyTrackerDb): Promise<StatusReport> {

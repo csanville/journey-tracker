@@ -3,6 +3,7 @@ import { aPosting, freshDb } from '../test/factories'
 import {
   SNAPSHOT_RETENTION,
   countPostings,
+  countSnapshotsAmong,
   deletePosting,
   getPosting,
   getSnapshot,
@@ -382,3 +383,50 @@ function aSnapshotFor(postingId: string): Snapshot {
     truncated: false,
   }
 }
+
+/**
+ * The never-overwrite rule has to hold against the *file* as well as against
+ * the store. The batch's existence check is one `bulkGet` taken before any
+ * write, so without an intra-batch guard two records sharing an id both look
+ * absent, both count as imported, and the later one wins — a record lost, and
+ * the summary reporting it as restored.
+ */
+describe('duplicate ids inside one batch', () => {
+  it('keeps the first record and skips the repeat', async () => {
+    const db = await freshDb()
+
+    const outcome = await insertMissingPostings(db, [
+      aStored({ id: 'a', notes: 'the first one' }),
+      aStored({ id: 'a', notes: 'the second one' }),
+    ])
+
+    expect(outcome.imported).toEqual(['a'])
+    expect(outcome.skipped).toEqual(['a'])
+    expect(await countPostings(db)).toBe(1)
+    expect((await getPosting(db, 'a'))?.notes).toBe('the first one')
+  })
+
+  it('does the same for snapshots', async () => {
+    const db = await freshDb()
+    await upsertPosting(db, aPosting({ id: 'a' }))
+
+    const outcome = await insertMissingSnapshots(db, [
+      { ...aSnapshotFor('a'), trimmedSource: 'first' },
+      { ...aSnapshotFor('a'), trimmedSource: 'second' },
+    ])
+
+    expect(outcome.imported).toEqual(['a'])
+    expect(outcome.skipped).toEqual(['a'])
+    expect((await getSnapshot(db, 'a'))?.trimmedSource).toBe('first')
+  })
+})
+
+describe('countSnapshotsAmong', () => {
+  it('counts only the ids that still have a page', async () => {
+    const db = await freshDb()
+    await putSnapshot(db, aSnapshotFor('a'))
+
+    expect(await countSnapshotsAmong(db, ['a', 'b'])).toBe(1)
+    expect(await countSnapshotsAmong(db, [])).toBe(0)
+  })
+})

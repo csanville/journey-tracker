@@ -99,6 +99,12 @@ export function cell(value: string): string {
  * running when the user opens their own backup. Tab and carriage return lead
  * the same way once a cell is being parsed.
  *
+ * The test is on **any** leading whitespace as well as the four characters,
+ * which an earlier version got wrong by naming `\t` and `\r` specifically.
+ * Spreadsheets trim a field before deciding what it is, so a title of
+ * `" =HYPERLINK(…)"` — one space, entirely ordinary in scraped markup — walked
+ * straight through the guard written to stop it.
+ *
  * The fix is the one spreadsheets themselves use: a leading apostrophe, which
  * marks the cell as text and is hidden in the grid. It is visible to a plain
  * text reader, which is the honest cost — and cheaper than the alternative,
@@ -109,7 +115,7 @@ export function cell(value: string): string {
  * direction to be wrong in.
  */
 function neutralize(value: string): string {
-  return /^[=+\-@\t\r]/.test(value) ? `'${value}` : value
+  return /^[\s=+\-@]/.test(value) ? `'${value}` : value
 }
 
 /** A number a spreadsheet can compute with, or an empty cell. */

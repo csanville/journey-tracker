@@ -112,8 +112,17 @@ describe('cell', () => {
       expect(cell('@SUM(A1)')).toBe("'@SUM(A1)")
     })
 
+    /**
+     * Any leading whitespace, not the two characters an earlier version named.
+     * Spreadsheets trim a field before deciding what it is, so a single leading
+     * space — entirely ordinary in scraped markup — walked straight through the
+     * guard written to stop exactly this.
+     */
     it('disarms leading whitespace that would lead into one', () => {
       expect(cell('\t=1+1')).toMatch(/^'/)
+      expect(cell(' =HYPERLINK("http://evil","click")')).toMatch(/^"?'/)
+      expect(cell('  +1234')).toBe("'  +1234")
+      expect(cell('\n=1+1')).toMatch(/^"'/)
     })
 
     /**

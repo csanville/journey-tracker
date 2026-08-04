@@ -11,7 +11,7 @@ import { forgetTab } from '../lib/detection'
 import { broadcast } from '../lib/events'
 import { handleRequest } from '../lib/handler'
 import { allowedFromContentScript, isRequest } from '../lib/messages'
-import { runPendingMigrations } from '../lib/migrations'
+import { resumeImportMigration, runPendingMigrations } from '../lib/migrations'
 import { recordStorageProtection } from '../lib/persistence'
 import { setTrackedBadge } from '../lib/tracked'
 
@@ -30,6 +30,12 @@ function ready(): Promise<JourneyTrackerDb> {
 
     try {
       await runPendingMigrations(db)
+      // An import of a backup written by an older build records how far behind
+      // its records were and migrates them at the end. This is what finishes
+      // the job when there was no end — a panel closed mid-import, a batch that
+      // failed, a worker killed between two steps of the chain. A no-op on
+      // every ordinary start, which is all of them.
+      await resumeImportMigration(db)
       // Assessed once per worker lifetime rather than only at install, so the
       // reported value cannot go stale after a permission change or a Chrome
       // decision that went the other way.

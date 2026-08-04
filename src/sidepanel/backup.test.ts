@@ -95,8 +95,8 @@ describe('export, wipe, re-import', () => {
     expect(result.ok).toBe(true)
     if (!result.ok) return
 
-    expect(result.summary.postings).toEqual({ imported: 5, skipped: 0 })
-    expect(result.summary.snapshots).toEqual({ imported: 3, skipped: 0 })
+    expect(result.summary.postings).toEqual({ imported: 5, skipped: 0, dropped: 0 })
+    expect(result.summary.snapshots).toEqual({ imported: 3, skipped: 0, dropped: 0 })
     expect(result.summary.rejected).toEqual([])
     expect(await contents(db)).toEqual(before)
   })
@@ -151,7 +151,8 @@ describe('importing over data that is already here', () => {
     const result = await importBundle(file)
 
     expect(result.ok).toBe(true)
-    if (result.ok) expect(result.summary.postings).toEqual({ imported: 0, skipped: 1 })
+    if (result.ok)
+      expect(result.summary.postings).toEqual({ imported: 0, skipped: 1, dropped: 0 })
 
     const stored = await repo.getPosting(db, seeded!.id)
     expect(stored?.notes).toBe('Rejected — do not reapply')
@@ -185,8 +186,8 @@ describe('importing over data that is already here', () => {
 
     expect(result.ok).toBe(true)
     if (result.ok) {
-      expect(result.summary.postings).toEqual({ imported: 0, skipped: 1 })
-      expect(result.summary.snapshots).toEqual({ imported: 1, skipped: 0 })
+      expect(result.summary.postings).toEqual({ imported: 0, skipped: 1, dropped: 0 })
+      expect(result.summary.snapshots).toEqual({ imported: 1, skipped: 0, dropped: 0 })
     }
   })
 
@@ -212,7 +213,7 @@ describe('importing over data that is already here', () => {
     if (!result.ok) return
 
     expect(result.summary.postings.imported).toBe(0)
-    expect(result.summary.snapshots).toEqual({ imported: 0, skipped: 1 })
+    expect(result.summary.snapshots).toEqual({ imported: 0, skipped: 1, dropped: 0 })
     expect(result.summary.rejected).toEqual([{ at: 'orphan', reason: 'no company' }])
     expect(await db.snapshots.count()).toBe(0)
   })

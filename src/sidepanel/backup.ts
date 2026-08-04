@@ -140,17 +140,24 @@ export async function importBundle(
   const summary: ImportSummary = {
     variant: bundle.variant,
     exportedAt: bundle.exportedAt,
-    postings: { imported: 0, skipped: 0 },
-    snapshots: { imported: 0, skipped: 0 },
+    postings: { imported: 0, skipped: 0, dropped: 0 },
+    snapshots: { imported: 0, skipped: 0, dropped: 0 },
     rejected,
   }
 
   let done = 0
+  const batches = chunk(bundle.postings, POSTING_BATCH)
 
-  for (const batch of chunk(bundle.postings, POSTING_BATCH)) {
+  for (const [index, batch] of batches.entries()) {
     const result = await send('backup/import-postings', {
       postings: batch,
       schemaVersion: bundle.schemaVersion,
+      // Only the panel knows where the file ends, and the worker needs to be
+      // told: migrating records that arrived behind the current version
+      // rewrites the whole table, so it is deferred to here rather than run
+      // once per batch. A run that never reaches this — a failed batch, a panel
+      // closed mid-import — is finished by the worker at its next start.
+      final: index === batches.length - 1,
     })
     add(summary.postings, result)
     done += batch.length
@@ -170,6 +177,7 @@ export async function importBundle(
 function add(into: ImportBatchResult, result: ImportBatchResult): void {
   into.imported += result.imported
   into.skipped += result.skipped
+  into.dropped += result.dropped
 }
 
 export function chunk<T>(items: T[], size: number): T[][] {

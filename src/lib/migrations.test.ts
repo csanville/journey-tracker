@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import { aPosting, freshDb } from '../test/factories'
-import { migrateImportedRecords, runPendingMigrations, type Migration } from './migrations'
+import {
+  migrateImportedRecords,
+  noteImportedVersion,
+  resumeImportMigration,
+  runPendingMigrations,
+  type Migration,
+} from './migrations'
 import { upsertPosting } from './repository'
 import { patchSettings, readSettings, waitForMigration } from './settings'
 import { SCHEMA_VERSION } from './types'
@@ -433,5 +439,109 @@ describe('migrateImportedRecords', () => {
     // Correcting a key is not an edit the user made; bumping this would reorder
     // their list.
     expect(migrated?.updatedAt).toBe(1)
+  })
+})
+
+/**
+ * The durable half of importing a backup from an older build.
+ *
+ * `dataVersion` cannot carry this debt — it records what the *database* has
+ * been through, and it is already current when an import begins — so without a
+ * separate note, a chain interrupted between two steps leaves records at an
+ * intermediate version with nothing that would ever finish them. That is
+ * decision 9's silent loss arriving through the one door that skips the version
+ * stamp.
+ */
+describe('resuming an import migration', () => {
+  it('records progress after each step, not only at the end', async () => {
+    const db = await freshDb()
+    const seen: (number | null)[] = []
+
+    await migrateImportedRecords(db, 0, {
+      targetVersion: 3,
+      migrations: [1, 2, 3].map((to) => ({
+        to,
+        description: `to ${to}`,
+        run: async () => {
+          seen.push((await readSettings()).importedBelowVersion)
+        },
+      })),
+    })
+
+    // Each migration sees the version the one before it completed at, which is
+    // what a worker restarting mid-chain would read.
+    expect(seen).toEqual([null, 1, 2])
+    expect((await readSettings()).importedBelowVersion).toBeNull()
+  })
+
+  it('leaves the debt recorded when a step throws', async () => {
+    const db = await freshDb()
+    await noteImportedVersion(1)
+
+    await expect(
+      migrateImportedRecords(db, 1, {
+        targetVersion: 3,
+        migrations: [
+          { to: 2, description: 'works', run: async () => {} },
+          {
+            to: 3,
+            description: 'dies',
+            run: async () => {
+              throw new Error('worker torn down')
+            },
+          },
+        ],
+      }),
+    ).rejects.toThrow('worker torn down')
+
+    // Step 2 finished, step 3 did not — so the survivor picks up from 2 rather
+    // than replaying from 1 or, worse, believing there is nothing left to do.
+    expect((await readSettings()).importedBelowVersion).toBe(2)
+    expect((await readSettings()).migrationInProgress).toBe(false)
+  })
+
+  it('finishes the chain on the next start', async () => {
+    const db = await freshDb()
+    await noteImportedVersion(2)
+    const ran: number[] = []
+
+    const applied = await resumeImportMigration(db, {
+      targetVersion: 3,
+      migrations: [migration(2, ran), migration(3, ran)],
+    })
+
+    expect(applied).toEqual([3])
+    expect(ran).toEqual([3])
+    expect((await readSettings()).importedBelowVersion).toBeNull()
+  })
+
+  it('does nothing when no debt was recorded, which is every ordinary start', async () => {
+    const db = await freshDb()
+    const ran: number[] = []
+
+    expect(await resumeImportMigration(db, { migrations: [migration(2, ran)] })).toEqual([])
+    expect(ran).toEqual([])
+  })
+
+  it('clears a debt that turns out to need no migration', async () => {
+    const db = await freshDb()
+    await noteImportedVersion(SCHEMA_VERSION)
+
+    await resumeImportMigration(db)
+
+    expect((await readSettings()).importedBelowVersion).toBeNull()
+  })
+})
+
+describe('noteImportedVersion', () => {
+  it('keeps the lowest version seen across batches', async () => {
+    await noteImportedVersion(2)
+    await noteImportedVersion(1)
+    expect((await readSettings()).importedBelowVersion).toBe(1)
+
+    // A later, higher batch must not raise the debt and strand the older
+    // records a previous batch already brought in.
+    await noteImportedVersion(2)
+    expect((await readSettings()).importedBelowVersion).toBe(1)
   })
 })
