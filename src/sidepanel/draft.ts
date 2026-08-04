@@ -10,7 +10,15 @@
  * stored shape happens once, at save.
  */
 import { newId } from '../lib/ids'
-import type { PostingInput, PostingState, Salary, WorkMode } from '../lib/types'
+import { resolveProgress } from '../lib/normalize/progress'
+import type {
+  Outcome,
+  PostingInput,
+  PostingState,
+  Salary,
+  Stage,
+  WorkMode,
+} from '../lib/types'
 
 export interface Draft {
   company: string
@@ -23,6 +31,10 @@ export interface Draft {
   state: PostingState
   /** `YYYY-MM-DD` from a date input, or empty. */
   appliedAt: string
+  /** Empty is "nothing heard", which is the ordinary state, not a missing answer. */
+  stage: Stage | ''
+  /** Empty is "still open". */
+  outcome: Outcome | ''
   resumeUsed: string
   notes: string
   /** Comma-separated as typed. */
@@ -39,6 +51,8 @@ export const EMPTY_DRAFT: Draft = {
   url: '',
   state: 'viewed',
   appliedAt: '',
+  stage: '',
+  outcome: '',
   resumeUsed: '',
   notes: '',
   tags: '',
@@ -187,6 +201,16 @@ export function toPostingInput(
     state: draft.state,
     // A date only means anything once the application has actually gone in.
     appliedAt: draft.state === 'applied' ? parseAppliedAt(draft.appliedAt) : null,
+    // Same rule, through the shared resolver rather than repeated: what happened
+    // after an application is meaningless on a posting only looked at. The
+    // repository applies this again on the way in, which is where it binds
+    // (decision 4) — doing it here as well keeps what the panel shows and what
+    // gets stored from disagreeing in the moment before the round trip.
+    ...resolveProgress({
+      state: draft.state,
+      stage: draft.stage || null,
+      outcome: draft.outcome || null,
+    }),
     resumeUsed: blankToNull(draft.resumeUsed),
     notes: blankToNull(draft.notes),
     tags: parseTags(draft.tags),

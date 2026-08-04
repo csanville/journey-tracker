@@ -17,13 +17,16 @@
  * Everything here is pure. Reading the database is the repository's job and
  * handing the user a file is the panel's; this module owns what the file *is*.
  */
+import { resolveProgress, STAGE_ORDER } from '../normalize/progress'
 import { SCHEMA_VERSION } from '../types'
 import type {
+  Outcome,
   Posting,
   PostingState,
   Salary,
   SalaryPeriod,
   Snapshot,
+  Stage,
   WorkMode,
 } from '../types'
 
@@ -273,6 +276,15 @@ export function validatePosting(value: unknown): Posting | string {
     // Only meaningful once the application has gone in, which is the same rule
     // the form applies on save.
     appliedAt: state === 'applied' ? finiteNumber(value.appliedAt) : null,
+    // Through `resolveProgress` rather than repeated here, so a hand-edited file
+    // meets exactly the rules a save does. It is the enforcement point for this
+    // path: an import writes records verbatim apart from the join keys
+    // (decision 14), so nothing downstream will correct these two.
+    ...resolveProgress({
+      state,
+      stage: stage(value.stage),
+      outcome: outcome(value.outcome),
+    }),
     resumeUsed: nullableString(value.resumeUsed),
     notes: nullableString(value.notes),
     tags: Array.isArray(value.tags)
@@ -344,6 +356,16 @@ const WORK_MODES: readonly WorkMode[] = ['onsite', 'hybrid', 'remote']
 
 function workMode(value: unknown): WorkMode | null {
   return WORK_MODES.find((mode) => mode === value) ?? null
+}
+
+const OUTCOMES: readonly Outcome[] = ['rejected', 'withdrawn', 'accepted']
+
+function stage(value: unknown): Stage | null {
+  return STAGE_ORDER.find((name) => name === value) ?? null
+}
+
+function outcome(value: unknown): Outcome | null {
+  return OUTCOMES.find((name) => name === value) ?? null
 }
 
 const PERIODS: readonly SalaryPeriod[] = ['hour', 'day', 'week', 'month', 'year']

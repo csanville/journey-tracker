@@ -11,11 +11,20 @@
 import type { NormalizedPostingInput, PostingInput } from '../types'
 import { extractAtsReqId } from './ats'
 import { normalizeCompany } from './company'
+import { resolveProgress } from './progress'
 import { canonicalizeUrl } from './url'
 
 export { identifyAts, extractAtsReqId, type AtsIdentity, type AtsName } from './ats'
 export { normalizeCompany } from './company'
 export { canonicalizeUrl, isUsableUrlKey } from './url'
+export {
+  resolveProgress,
+  heardBack,
+  stageAtLeast,
+  STAGE_ORDER,
+  type Progress,
+  type ProgressSource,
+} from './progress'
 
 /** What a record needs for its join keys to be derivable. */
 export interface JoinKeySource {
@@ -52,9 +61,13 @@ export function deriveJoinKeys(source: JoinKeySource): JoinKeys {
  * the page has better information than a URL pattern. The URL is only the
  * fallback.
  *
+ * `resolveProgress` rides along for the same single-writer reason the keys do —
+ * it settles the two `stage`/`outcome` combinations that cannot mean anything,
+ * and a rule the panel also applied would eventually be two rules.
+ *
  * Idempotent — every underlying normalizer is — so re-normalizing a stored
  * record is safe, which is what makes it usable from a migration.
  */
 export function normalizePostingInput(input: PostingInput): NormalizedPostingInput {
-  return { ...input, ...deriveJoinKeys(input) }
+  return { ...input, ...deriveJoinKeys(input), ...resolveProgress(input) }
 }

@@ -38,6 +38,8 @@ export function aPosting(overrides: Partial<PostingInput> = {}): PostingInput {
     adapterVersion: 'manual@1',
     state: 'viewed',
     appliedAt: null,
+    stage: null,
+    outcome: null,
     resumeUsed: null,
     notes: null,
     tags: [],

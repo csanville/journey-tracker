@@ -29,6 +29,8 @@ function aRecord(overrides: Partial<Posting> = {}): Posting {
     adapterVersion: 'greenhouse@1',
     state: 'applied',
     appliedAt: new Date(2026, 2, 15).getTime(),
+    stage: 'interviewing',
+    outcome: null,
     resumeUsed: 'backend-2026',
     notes: null,
     tags: ['backend', 'remote-ok'],

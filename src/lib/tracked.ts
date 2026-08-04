@@ -58,6 +58,8 @@ export function postingInputFromDetection(
     adapterVersion: detection.adapterVersion,
     state: 'viewed',
     appliedAt: null,
+    stage: null,
+    outcome: null,
     resumeUsed: null,
     notes: null,
     tags: [],

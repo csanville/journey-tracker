@@ -5,7 +5,7 @@
  * migrations and cross-version imports stay possible (decision 10). Bump it in
  * lockstep with adding a migration to `migrations.ts` — never on its own.
  */
-export const SCHEMA_VERSION = 2
+export const SCHEMA_VERSION = 3
 
 /**
  * Whether the user merely looked at a posting or actually applied to it.
@@ -15,6 +15,31 @@ export const SCHEMA_VERSION = 2
  * conversion are unreconstructable if the distinction is lost (decision 8).
  */
 export type PostingState = 'viewed' | 'applied'
+
+/**
+ * How far the employer took it — the *furthest* stage reached, never the current
+ * one, so it only ever moves forward.
+ *
+ * This is a separate axis from `outcome` rather than more values on one enum,
+ * and the reason is the commonest real result there is: rejected after two
+ * interviews. A single ladder (`applied | interviewing | rejected | …`) can only
+ * say one of those, so such a record would drop out of the interview count the
+ * moment the rejection arrived — silently understating the interview rate. That
+ * is the "claim that outruns what is true" shape the roadmap has been counting
+ * since phase 3. Two fields, one question each, cannot lose it.
+ *
+ * `null` means nothing has been heard. It is deliberately not a value: how long
+ * a thing has been silent is derived from `appliedAt`, and a field the user has
+ * to maintain by hand to stay true will go stale, because nobody returns to a
+ * record to tick "still no reply".
+ */
+export type Stage = 'screening' | 'interviewing' | 'offer'
+
+/**
+ * How it ended: they said no, you said no, you said yes. `null` while it is
+ * still live, which is the ordinary state of a recent application.
+ */
+export type Outcome = 'rejected' | 'withdrawn' | 'accepted'
 
 export type WorkMode = 'onsite' | 'hybrid' | 'remote'
 
@@ -58,6 +83,14 @@ export interface Posting {
 
   state: PostingState
   appliedAt: number | null
+  /**
+   * Furthest stage reached, or `null` for nothing heard. Meaningful only on an
+   * `applied` record; the repository nulls it otherwise, exactly as it does
+   * `appliedAt`.
+   */
+  stage: Stage | null
+  /** How it ended, or `null` while still open. Same `applied`-only rule. */
+  outcome: Outcome | null
   /** A label, never a file. The extension stores no resumes (decision 11). */
   resumeUsed: string | null
   notes: string | null
@@ -135,6 +168,8 @@ export const POSTING_INPUT_FIELDS = [
   'adapterVersion',
   'state',
   'appliedAt',
+  'stage',
+  'outcome',
   'resumeUsed',
   'notes',
   'tags',

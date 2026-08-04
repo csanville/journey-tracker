@@ -37,6 +37,8 @@ function aRecord(overrides: Partial<Posting> = {}): Posting {
     adapterVersion: 'greenhouse@1',
     state: 'applied',
     appliedAt: 1_700_000_400_000,
+    stage: null,
+    outcome: null,
     resumeUsed: 'backend-2026',
     notes: 'Referred by Milton',
     tags: ['backend', 'remote-ok'],
