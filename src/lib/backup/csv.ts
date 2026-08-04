@@ -41,6 +41,12 @@ const COLUMNS: Column[] = [
   { header: 'Job title', value: (p) => p.jobTitle },
   { header: 'Status', value: (p) => p.state },
   { header: 'Applied on', value: (p) => day(p.appliedAt) },
+  // Empty means two different things here and the report does not try to say
+  // which: no stage is "nothing heard yet", no outcome is "still open". Writing
+  // words for them would put a claim in every row of a spreadsheet that is only
+  // ever read, and a stale one in most of them.
+  { header: 'Stage', value: (p) => p.stage ?? '' },
+  { header: 'Outcome', value: (p) => p.outcome ?? '' },
   { header: 'Location', value: (p) => p.location ?? '' },
   { header: 'Work mode', value: (p) => p.workMode ?? '' },
   { header: 'Salary min', value: (p) => number(p.salary?.min) },

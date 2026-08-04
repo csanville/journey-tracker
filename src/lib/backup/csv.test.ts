@@ -76,9 +76,36 @@ describe('toCsv', () => {
   })
 
   it('leaves the date empty on a record that was never applied to', () => {
-    const line = rows(toCsv([aRecord({ state: 'viewed', appliedAt: null })]))[1] ?? ''
+    const line =
+      rows(
+        toCsv([aRecord({ state: 'viewed', appliedAt: null, stage: null, outcome: null })]),
+      )[1] ?? ''
 
-    expect(line).toMatch(/^Initech,Staff Engineer,viewed,,"Austin, TX"/)
+    // Date, stage and outcome are all empty here, which is three commas before
+    // the location — the record was only looked at, so none of the three has
+    // anything to say.
+    expect(line).toMatch(/^Initech,Staff Engineer,viewed,,,,"Austin, TX"/)
+  })
+
+  /**
+   * Empty is the ordinary reading for both, and it means two different things:
+   * no stage is nothing heard yet, no outcome is still open. Neither gets a
+   * word in the file — see the comment on the columns.
+   */
+  it('leaves an unanswered application blank in both progress columns', () => {
+    const line =
+      rows(toCsv([aRecord({ state: 'applied', stage: null, outcome: null })]))[1] ?? ''
+
+    expect(line).toMatch(/^Initech,Staff Engineer,applied,2026-03-15,,,"Austin, TX"/)
+  })
+
+  it('writes a stage and an outcome that survived a rejection', () => {
+    const line =
+      rows(
+        toCsv([aRecord({ state: 'applied', stage: 'interviewing', outcome: 'rejected' })]),
+      )[1] ?? ''
+
+    expect(line).toContain('applied,2026-03-15,interviewing,rejected')
   })
 
   it('splits a structured salary into columns a spreadsheet can total', () => {
