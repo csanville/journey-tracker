@@ -347,10 +347,23 @@ outright: no snapshot, no marker, nothing to say anything had been dropped. The
 head is cut too, keeping its front, where `<title>` and the first JSON-LD block
 sit.
 
-The 500-posting retention sweep is **not built** — snapshots are
-one-per-posting and replaced on re-capture, so nothing grows without bound
-per record, but nothing prunes old ones either. It belongs with export/import in
-phase 6, where the storage picture is already on the table.
+**Amended — the 500-posting retention sweep is now built.** It was deferred out
+of phase 4 with the note that it belonged with export/import, and phase 6 built
+it. Two details settled in the doing:
+
+- It orders by the snapshot's own `capturedAt` rather than by the posting's
+  `updatedAt`. That index already exists, it needs no join, and the two only
+  disagree for a record edited long after its page was read — where keeping the
+  older capture is not obviously better anyway.
+- **Records are never dropped, only their snapshots**, exactly as this entry
+  said. A swept posting still lists, still dedupes, still exports; it has lost
+  only the ability to be re-parsed after a future adapter fix, which is the one
+  thing this decision is willing to trade away.
+
+It sweeps where snapshots are created — after a capture is stored, and after an
+import — and costs a single `count()` until the cap is actually passed. The
+import path is swept for a reason: restoring a `full` backup taken before the
+sweep existed should not be a way to reinstate a thousand snapshots.
 
 **Amended — what "trimmed" excludes, and the PII was not hypothetical.** The
 whole application form goes: `form`, `input`, `textarea`, `select`, `option`.
@@ -687,6 +700,71 @@ destroys the newer record.
 **Consequences.** Merging genuinely divergent histories is not supported. The
 `lean` variant exists so a backup can be shared or archived without carrying the
 page-derived PII that snapshots contain (decision 6).
+
+**Amended — a restore is not a save, and the difference is the timestamps.**
+Phase 6 built this, and the first thing implementing it exposed is that import
+cannot go through `upsertPosting`. That path stamps `updatedAt` with the present,
+which is correct for a save and wrong for a restore: a re-imported history
+arrives with every record edited today, in one indistinguishable block, and
+"newest first" means nothing ever after. Nothing fails, nothing warns, and the
+information is gone. So the import path writes records verbatim — ids,
+`createdAt` and `updatedAt` as the file carried them — and that is what makes
+export-wipe-import a round trip rather than a copy.
+
+The join keys are the exception, re-derived on the way in like every other write
+(decision 4). A file is the one input that could carry keys computed by a
+different build, or edited by hand.
+
+**Amended — the importer has to migrate what it imports.** A backup restored
+after an upgrade holds records written by whatever build the user had, and
+**nothing else would ever bring them forward.** The migration harness keys off
+`dataVersion`, which the worker brought up to date at startup, so from its point
+of view there is nothing pending; the records arrive stale and stay stale. That
+is decision 9's failure exactly — silent, on someone else's machine, with no
+telemetry — reaching the database through the one door that does not go past the
+version stamp.
+
+`migrateImportedRecords` runs every migration between the file's declared version
+and the current one, across the whole table rather than the imported rows, since
+a `Migration` is defined over the database and narrowing it would be a second
+implementation of every migration ever written. Safe because they are all
+required to be idempotent. It is unreachable today — the exporter always writes
+at the current version, so no file can be behind — and that is exactly why it had
+to be built now: by the time one exists it will already be on somebody's disk.
+
+**Amended — the export needs a wipe next to it.** "Erase everything" is in
+scope, which the original entry did not consider. An export nobody has ever
+restored is a backup of unknown shape, and wiping and re-importing is the only
+way a person finds out theirs is real. On a build whose data lives in exactly one
+place (decision 1), that is not a power-user feature.
+
+**Amended — batching, and where the code runs.** A `full` export is records plus
+up to 500 snapshots of up to 256KB, so it is tens of megabytes; handed over in
+one `sendMessage` it would be serialized and held in two contexts at once. Every
+export and import message therefore carries a slice, sized by bytes rather than
+by rows — 200 records or 4 snapshots.
+
+The alternative considered and rejected was letting the panel open its own Dexie
+connection for the read half, which decision 4 permits: it forbids *writes* from
+the dashboard, and phase 7's `liveQuery` views will read directly. It was
+rejected because a panel that opens the database is also the context that
+performs Dexie's structural upgrade on the next release adding an index — and
+that upgrade would then be racing the worker's own connection. The read half
+being marginally cheaper is not worth putting a schema upgrade in the UI.
+
+**Amended — the CSV needed a security decision the entry did not anticipate.**
+Every string in a record was chosen by whoever wrote the job posting. Excel and
+Sheets evaluate a cell that opens with `=`, `+`, `-` or `@`, and a formula is not
+inert — `=HYPERLINK` and `=IMPORTDATA` reach the network — so a hostile job title
+would execute when the user opened their own backup. Every cell is prefixed with
+the apostrophe that spreadsheets use to mark text. It fires on ordinary text as
+well (a note beginning "- called back" gets one), which is the right direction to
+be wrong in for a file that is never parsed back.
+
+The file also carries a UTF-8 BOM, without which Excel decodes it as the system
+codepage and mangles every accented company name, and uses CRLF per RFC 4180.
+None of this makes CSV a format — the leading zeros in a requisition id are still
+lost, which is the concession this decision started from.
 
 **Revisit when.** A real merge case appears — the same history edited on two
 machines. That needs `updatedAt` (decision 10) and an explicit conflict UI, not a
