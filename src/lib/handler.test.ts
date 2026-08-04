@@ -352,6 +352,22 @@ describe('importing a backup', () => {
     ...overrides,
   })
 
+  /** A record matching the page `aReport()` describes, so the tab is tracked. */
+  const trackedPosting = () => ({
+    ...aPosting({
+      id: 'tracked-1',
+      company: 'Acme',
+      jobTitle: 'Staff Engineer',
+      atsReqId: null,
+      url: 'https://jobs.lever.co/acme/00000000-0000-4000-8000-000000000000',
+    }),
+    schemaVersion: SCHEMA_VERSION,
+    createdAt: 1,
+    updatedAt: 1,
+    companyNormalized: 'acme',
+    canonicalUrl: 'https://jobs.lever.co/acme/00000000-0000-4000-8000-000000000000',
+  })
+
   const aPage = (postingId: string, capturedAt: number) => ({
     postingId,
     capturedAt,
@@ -465,6 +481,47 @@ describe('importing a backup', () => {
     })
 
     expect((await readSettings()).importedBelowVersion).toBeNull()
+  })
+
+  /**
+   * The badge is a claim about the record set as much as about the page
+   * (decision 16), and a wipe moves the record set under every open tab at
+   * once. Left alone, tabs went on asserting records that had just been
+   * deleted — while the panel's revisit banner, which re-queries, said
+   * otherwise.
+   */
+  it('clears the badges of tabs still showing a tracked page', async () => {
+    const db = await freshDb()
+    await handleRequest(db, { kind: 'detection/report', report: aReport() }, { tabId: 7 })
+    await handleRequest(db, {
+      kind: 'posting/upsert',
+      posting: trackedPosting(),
+      detectionId: 'det-1',
+    })
+
+    vi.mocked(chrome.action.setBadgeText).mockClear()
+    await handleRequest(db, { kind: 'backup/wipe' })
+
+    expect(vi.mocked(chrome.action.setBadgeText)).toHaveBeenCalledWith(
+      expect.objectContaining({ tabId: 7, text: '' }),
+    )
+  })
+
+  it('lights the badge of a tab whose record a restore brought back', async () => {
+    const db = await freshDb()
+    await handleRequest(db, { kind: 'detection/report', report: aReport() }, { tabId: 7 })
+
+    vi.mocked(chrome.action.setBadgeText).mockClear()
+    await handleRequest(db, {
+      kind: 'backup/import-postings',
+      postings: [trackedPosting()],
+      schemaVersion: SCHEMA_VERSION,
+      final: true,
+    })
+
+    expect(vi.mocked(chrome.action.setBadgeText)).toHaveBeenCalledWith(
+      expect.objectContaining({ tabId: 7, text: expect.not.stringMatching(/^$/) }),
+    )
   })
 
   it('empties both stores on a wipe and says how much it took', async () => {

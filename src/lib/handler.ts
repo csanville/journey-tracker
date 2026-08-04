@@ -1,6 +1,7 @@
 import { validatePosting, validateSnapshot } from './backup/bundle'
 import type { JourneyTrackerDb } from './db'
 import {
+  cachedTabIds,
   findSnapshot,
   findTabForDetection,
   getDetectionSummary,
@@ -89,8 +90,13 @@ async function dispatch(
       return importPostings(db, request.postings, request.schemaVersion, request.final)
     case 'backup/import-snapshots':
       return importSnapshots(db, request.snapshots)
-    case 'backup/wipe':
-      return repo.wipeAll(db)
+    case 'backup/wipe': {
+      const wiped = await repo.wipeAll(db)
+      // Nothing is tracked any more, and every badge saying otherwise is now a
+      // claim about records that no longer exist.
+      await repaintTrackedTabs(db, false)
+      return wiped
+    }
     case 'backup/recorded':
       await patchSettings({ lastBackupAt: now() })
       return status(db)
@@ -161,6 +167,29 @@ async function announceDetection(
   }
 
   await broadcast({ type: 'detection/changed', tabId })
+}
+
+/**
+ * Re-answers "is this page tracked" for every tab holding a detection.
+ *
+ * The badge is painted from a detection-to-record match (decision 16), so it is
+ * a claim about the *record set* as much as about the page — and a wipe or a
+ * restore moves the record set under every tab at once. Without this, erasing
+ * everything left tabs wearing badges asserting records that had just been
+ * deleted, contradicting the panel's own revisit banner, which re-queries and
+ * would say otherwise; a restore left them dark on pages it had just tracked.
+ *
+ * Bounded by the detection cache's own eight-tab limit, so this is at most
+ * eight lookups however large the import was. `tracked` is passed when the
+ * caller already knows — after a wipe nothing is tracked, and asking is both
+ * wasteful and, on an empty database, a query that can only return one answer.
+ */
+async function repaintTrackedTabs(db: JourneyTrackerDb, tracked?: boolean): Promise<void> {
+  const tabs = await cachedTabIds()
+
+  // Sequential rather than parallel: each one paints a badge and broadcasts,
+  // and there is no deadline here worth racing eight session-storage reads for.
+  for (const tabId of tabs) await announceDetection(db, tabId, tracked)
 }
 
 /** Whether what a tab is showing is already in the database. */
@@ -266,6 +295,11 @@ async function importPostings(
     if (applied.length > 0) {
       console.info('[JourneyTracker] migrated imported records', applied)
     }
+
+    // Once, at the end, and after any migration — the join keys a restored
+    // record matches on are exactly what a migration might have rewritten. A
+    // page open in another tab may be tracked now that its record is back.
+    await repaintTrackedTabs(db)
   }
 
   return { imported: outcome.imported.length, skipped: outcome.skipped.length, dropped: 0 }
