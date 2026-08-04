@@ -20,7 +20,8 @@
  * earned the right to say it.
  */
 
-import type { Posting, PostingState } from '../types'
+import type { Outcome, Posting, PostingState } from '../types'
+import { heardBack, stageAtLeast } from '../normalize/progress'
 import { urlHost } from '../normalize/url'
 
 /** How the two states divide the record set. */
@@ -55,6 +56,172 @@ export function funnel(postings: readonly Posting[]): Funnel {
     applied,
     appliedRate: tracked === 0 ? null : applied / tracked,
   }
+}
+
+/**
+ * What the employer did, for the applications that were actually sent.
+ *
+ * Every count here is out of `applied` — the same number `funnel` reports — so
+ * the three rates are comparable with each other and with the view above them.
+ * Dividing the later stages by the earlier ones would answer a different and
+ * narrower question ("of those who replied, how many interviewed"), and mixing
+ * the two denominators in one funnel is how a chart ends up disagreeing with
+ * itself.
+ *
+ * `interviewed` and `offers` are cumulative rather than exclusive, because
+ * `stage` is the *furthest* point reached: an offer was interviewed for. That is
+ * what makes this a funnel — each row is a subset of the one above it, and the
+ * counts fall monotonically by construction rather than by luck.
+ */
+export interface ResponseFunnel {
+  applied: number
+  /** Applications that got any answer at all. A rejection counts. */
+  heardBack: number
+  interviewed: number
+  offers: number
+  /** All out of `applied`, and `null` when nothing has been applied to. */
+  responseRate: number | null
+  interviewRate: number | null
+  offerRate: number | null
+}
+
+export function responseFunnel(postings: readonly Posting[]): ResponseFunnel {
+  let applied = 0
+  let answered = 0
+  let interviewed = 0
+  let offers = 0
+
+  for (const posting of postings) {
+    if (posting.state !== 'applied') continue
+
+    applied++
+    if (heardBack(posting)) answered++
+    if (stageAtLeast(posting.stage, 'interviewing')) interviewed++
+    if (stageAtLeast(posting.stage, 'offer')) offers++
+  }
+
+  const rate = (count: number) => (applied === 0 ? null : count / applied)
+
+  return {
+    applied,
+    heardBack: answered,
+    interviewed,
+    offers,
+    responseRate: rate(answered),
+    interviewRate: rate(interviewed),
+    offerRate: rate(offers),
+  }
+}
+
+/**
+ * How the applications ended, or that they have not.
+ *
+ * Exactly one bucket per applied record — `open + rejected + withdrawn +
+ * accepted === applied` — which is this file's rule stated as arithmetic. There
+ * is no residual because there is nowhere for a record to fall: `outcome` is
+ * either null or one of three values, and the repository guarantees it.
+ */
+export interface Outcomes {
+  applied: number
+  /** Still live: no outcome recorded. The ordinary state of a recent send. */
+  open: number
+  rejected: number
+  withdrawn: number
+  accepted: number
+}
+
+export function outcomes(postings: readonly Posting[]): Outcomes {
+  const counts: Record<Outcome, number> = { rejected: 0, withdrawn: 0, accepted: 0 }
+  let applied = 0
+  let open = 0
+
+  for (const posting of postings) {
+    if (posting.state !== 'applied') continue
+
+    applied++
+    if (posting.outcome === null) open++
+    else counts[posting.outcome]++
+  }
+
+  return { applied, open, ...counts }
+}
+
+/** Three weeks with no reply is the point at which silence is the answer. */
+export const SILENCE_THRESHOLD_DAYS = 21
+
+const DAY_MS = 24 * 60 * 60 * 1000
+
+/**
+ * The applications still open that nobody has ever answered.
+ *
+ * The one view in this file that needed no new field — it is `appliedAt` and
+ * the absence of everything else. That is deliberate: "no response" is not
+ * stored as a value precisely so that this number cannot go stale (see `Stage`
+ * in `types.ts`).
+ *
+ * `waiting + recent + undateable === unanswered`, and the three are exclusive.
+ * Records that heard back, and records already closed, are not in this view at
+ * all — they are not waiting for anything.
+ */
+export interface Silence {
+  /** Applied, never answered, still open. The total the three below divide. */
+  unanswered: number
+  /** Unanswered for at least `thresholdDays`. */
+  waiting: number
+  /** Unanswered but too recent to read anything into. */
+  recent: number
+  /**
+   * Unanswered with no `appliedAt`, so it cannot be aged.
+   *
+   * The same residual `overTime` carries as `appliedWithoutDate` and for the
+   * same reason: the date and the status are two different controls, and the
+   * importer takes records written by any earlier build. Dropping these
+   * silently would make `waiting + recent` disagree with `unanswered` with no
+   * way to tell which was wrong.
+   */
+  undateable: number
+  thresholdDays: number
+  /** Days since the oldest unanswered application, or `null` if there are none. */
+  longestWaitDays: number | null
+}
+
+export interface SilenceOptions {
+  thresholdDays?: number
+  now?: number
+}
+
+export function silence(
+  postings: readonly Posting[],
+  { thresholdDays = SILENCE_THRESHOLD_DAYS, now = Date.now() }: SilenceOptions = {},
+): Silence {
+  let unanswered = 0
+  let waiting = 0
+  let recent = 0
+  let undateable = 0
+  let oldest: number | null = null
+
+  for (const posting of postings) {
+    // Closed is not waiting, and an answer already arrived is not silence.
+    if (posting.state !== 'applied') continue
+    if (posting.outcome !== null || heardBack(posting)) continue
+
+    unanswered++
+
+    if (posting.appliedAt === null) {
+      undateable++
+      continue
+    }
+
+    // Clamped at zero so a hand-typed future date reads as "sent today" rather
+    // than as a negative wait, which would drag `longestWaitDays` below zero.
+    const days = Math.max(0, Math.floor((now - posting.appliedAt) / DAY_MS))
+    if (days >= thresholdDays) waiting++
+    else recent++
+
+    if (oldest === null || days > oldest) oldest = days
+  }
+
+  return { unanswered, waiting, recent, undateable, thresholdDays, longestWaitDays: oldest }
 }
 
 export type BucketSize = 'week' | 'month'

@@ -47,9 +47,16 @@ export function stageAtLeast(stage: Stage | null, minimum: Stage): boolean {
  * *after* a conversation, `stage` records it and this returns true on that.
  *
  * `accepted` needs no clause of its own: it floors `stage` to `offer` below.
+ *
+ * Asked as "reached at least the first stage" rather than as `stage !== null`,
+ * which is the same question for well-formed data and a safer one for anything
+ * else: a record that somehow carries `undefined` — a migration that did not
+ * run, a table read by a build that never wrote it — answers false here, where
+ * the negative test would answer true and quietly inflate the one rate this
+ * exists to report. Wrong low is recoverable; wrong high reads as good news.
  */
 export function heardBack(progress: Pick<ProgressSource, 'stage' | 'outcome'>): boolean {
-  return progress.stage !== null || progress.outcome === 'rejected'
+  return stageAtLeast(progress.stage, 'screening') || progress.outcome === 'rejected'
 }
 
 /**
