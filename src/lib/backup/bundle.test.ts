@@ -104,7 +104,7 @@ describe('parseBundle', () => {
       if (!result.ok) expect(result.error).toMatch(/not a JourneyTracker export/)
     })
 
-    it('the envelope is a shape this build does not read', () => {
+    it('the envelope is newer than this build reads', () => {
       const result = round({
         format: BUNDLE_FORMAT,
         formatVersion: BUNDLE_FORMAT_VERSION + 1,
@@ -115,6 +115,11 @@ describe('parseBundle', () => {
       expect(result).toMatchObject({ ok: false })
     })
 
+    it('the envelope version is missing or not a number', () => {
+      expect(
+        round({ format: BUNDLE_FORMAT, schemaVersion: SCHEMA_VERSION, postings: [] }),
+      ).toMatchObject({ ok: false })
+    })
     /**
      * The same refusal `runPendingMigrations` makes. Loading a previous build
      * is ordinary here, and importing records it cannot understand would let
@@ -131,6 +136,25 @@ describe('parseBundle', () => {
       expect(result).toMatchObject({ ok: false })
       if (!result.ok) expect(result.error).toMatch(/newer build/)
     })
+  })
+
+  /**
+   * Refuse what cannot be opened, not what this build did not write. The whole
+   * reason the envelope is versioned apart from the records is that an importer
+   * can take a file older than itself — testing `!==` would orphan every backup
+   * on disk at the first bump, for a format whose purpose is surviving this
+   * extension.
+   */
+  it('accepts an envelope older than this build', () => {
+    const result = round({
+      format: BUNDLE_FORMAT,
+      formatVersion: BUNDLE_FORMAT_VERSION - 1,
+      schemaVersion: SCHEMA_VERSION,
+      postings: [aRecord()],
+    })
+
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.parsed.bundle.postings).toHaveLength(1)
   })
 
   /**

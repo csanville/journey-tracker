@@ -325,12 +325,29 @@ export async function insertMissingPostings(
     const existing = await db.postings.bulkGet(postings.map((posting) => posting.id))
     const fresh: Posting[] = []
 
+    /**
+     * Ids claimed earlier in this same batch.
+     *
+     * Without it the never-overwrite rule held against the database and not
+     * against the file: the `bulkGet` above runs before any write, so two
+     * records sharing an id both see nothing stored, both are counted as
+     * imported, and `bulkPut` keeps whichever came last. One record silently
+     * lost, and the summary reporting both as restored — which is precisely the
+     * failure decision 14 forbids, arriving from inside the batch instead of
+     * from the store.
+     *
+     * An export cannot produce this, since ids are keys there. A file
+     * hand-merged from two machines, or two backups concatenated, can.
+     */
+    const claimed = new Set<string>()
+
     postings.forEach((posting, index) => {
-      if (existing[index]) {
+      if (existing[index] || claimed.has(posting.id)) {
         outcome.skipped.push(posting.id)
         return
       }
 
+      claimed.add(posting.id)
       fresh.push({ ...posting, ...deriveJoinKeys(posting) })
       outcome.imported.push(posting.id)
       outcome.lowestVersion =
@@ -372,13 +389,16 @@ export async function insertMissingSnapshots(
     ])
 
     const fresh: Snapshot[] = []
+    /** Same intra-batch hole as above, and closed the same way. */
+    const claimed = new Set<string>()
 
     snapshots.forEach((snapshot, index) => {
-      if (existing[index] || !owners[index]) {
+      if (existing[index] || !owners[index] || claimed.has(snapshot.postingId)) {
         outcome.skipped.push(snapshot.postingId)
         return
       }
 
+      claimed.add(snapshot.postingId)
       fresh.push(snapshot)
       outcome.imported.push(snapshot.postingId)
     })
@@ -417,4 +437,19 @@ export async function wipeAll(
 
 export async function countSnapshots(db: JourneyTrackerDb): Promise<number> {
   return db.snapshots.count()
+}
+
+/**
+ * How many of these posting ids still have a snapshot.
+ *
+ * Counted through the index rather than by fetching the rows, because the rows
+ * are the reason snapshots live in their own store — up to 256KB each, and this
+ * wants a number.
+ */
+export async function countSnapshotsAmong(
+  db: JourneyTrackerDb,
+  postingIds: string[],
+): Promise<number> {
+  if (postingIds.length === 0) return 0
+  return db.snapshots.where('postingId').anyOf(postingIds).count()
 }

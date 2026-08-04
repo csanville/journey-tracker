@@ -63,6 +63,21 @@ export interface RequestMap {
       postings: Posting[]
       /** The version the file declares, so records behind it can be migrated. */
       schemaVersion: number
+      /**
+       * Whether this is the last batch of records in the file.
+       *
+       * The migration of records that arrived behind the current version runs
+       * across the whole table, so running it per batch would rewrite every
+       * record once per two hundred imported — 25 full passes for a 5,000-record
+       * restore, each flapping `migrationInProgress` at any reader waiting on
+       * it. The panel is the only party that knows where the file ends, so it
+       * says.
+       *
+       * A panel that never says — a closed side panel, a failed batch — does not
+       * strand the records: the version they came in at is recorded in settings,
+       * and the worker finishes the job at its next start.
+       */
+      final: boolean
     }
     result: ImportBatchResult
   }
@@ -113,9 +128,22 @@ export interface RequestMap {
  * something it needs back.
  */
 export interface ImportBatchResult {
+  /** Written, and — for snapshots — still present after the retention sweep. */
   imported: number
   /** Already present, and therefore left exactly as they were (decision 14). */
   skipped: number
+  /**
+   * Written and then swept by decision 6's retention cap. Always 0 for records,
+   * which are never dropped.
+   *
+   * Reported separately rather than folded into either count above, because it
+   * is neither: the file offered them, they were stored, and the cap decided
+   * they were not among the 500 most recent. Counting them as imported claimed
+   * pages the database does not have — a restore of a year-old `full` backup
+   * into a database of newer captures could report hundreds of pages added
+   * while keeping almost none.
+   */
+  dropped: number
 }
 
 export type RequestKind = keyof RequestMap

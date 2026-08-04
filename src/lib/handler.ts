@@ -17,7 +17,7 @@ import type {
   Result,
   StatusReport,
 } from './messages'
-import { migrateImportedRecords } from './migrations'
+import { noteImportedVersion, resumeImportMigration } from './migrations'
 import { recordStorageProtection } from './persistence'
 import * as repo from './repository'
 import { patchSettings, readSettings } from './settings'
@@ -86,7 +86,7 @@ async function dispatch(
     case 'snapshot/list':
       return repo.listSnapshots(db, request.postingIds)
     case 'backup/import-postings':
-      return importPostings(db, request.postings, request.schemaVersion)
+      return importPostings(db, request.postings, request.schemaVersion, request.final)
     case 'backup/import-snapshots':
       return importSnapshots(db, request.snapshots)
     case 'backup/wipe':
@@ -239,6 +239,7 @@ async function importPostings(
   db: JourneyTrackerDb,
   postings: Posting[],
   schemaVersion: number,
+  final: boolean,
 ): Promise<ImportBatchResult> {
   const valid = postings
     .map(validatePosting)
@@ -246,19 +247,28 @@ async function importPostings(
 
   const outcome = await repo.insertMissingPostings(db, valid)
 
-  // Only when the file really was behind, which today it never is — the
-  // exporter always writes at the current version. It is here for the upgrade
-  // that has not happened yet, because by then the file will already exist on
-  // somebody's disk and nothing else would ever bring it forward.
+  // Gated on what was actually *written*, not on what the file claims. A batch
+  // that imported nothing — re-importing a backup already restored — has
+  // nothing to migrate, and keying this on the envelope's version instead made
+  // an old file rewrite the whole table for every batch of records it did not
+  // insert.
+  //
+  // Recorded now and run at the end. The record survives a worker that dies
+  // in between, which is what stops a half-imported old backup sitting at an
+  // intermediate version forever.
   const lowest = Math.min(schemaVersion, outcome.lowestVersion ?? SCHEMA_VERSION)
-  if (lowest < SCHEMA_VERSION) {
-    const applied = await migrateImportedRecords(db, lowest)
+  if (outcome.lowestVersion !== null && lowest < SCHEMA_VERSION) {
+    await noteImportedVersion(lowest)
+  }
+
+  if (final) {
+    const applied = await resumeImportMigration(db)
     if (applied.length > 0) {
       console.info('[JourneyTracker] migrated imported records', applied)
     }
   }
 
-  return { imported: outcome.imported.length, skipped: outcome.skipped.length }
+  return { imported: outcome.imported.length, skipped: outcome.skipped.length, dropped: 0 }
 }
 
 async function importSnapshots(
@@ -276,7 +286,18 @@ async function importSnapshots(
   // to reinstate a thousand snapshots.
   await repo.pruneSnapshots(db)
 
-  return { imported: outcome.imported.length, skipped: outcome.skipped.length }
+  // Counted *after* the sweep, because the sweep may have taken some of what
+  // was just written — restoring an old backup into a database of newer
+  // captures inserts pages the cap immediately reclaims. Reporting them as
+  // imported would claim pages the database does not have, and the number is
+  // the only way the user learns the retention cap exists at all.
+  const survived = await repo.countSnapshotsAmong(db, outcome.imported)
+
+  return {
+    imported: survived,
+    skipped: outcome.skipped.length,
+    dropped: outcome.imported.length - survived,
+  }
 }
 
 async function status(db: JourneyTrackerDb): Promise<StatusReport> {
