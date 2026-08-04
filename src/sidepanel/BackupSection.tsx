@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { send } from '../lib/client'
 import type { BundleVariant } from '../lib/backup/bundle'
 import type { StatusReport } from '../lib/messages'
+import { SNAPSHOT_RETENTION } from '../lib/repository'
 import {
   CSV_MIME,
   JSON_MIME,
@@ -49,7 +50,21 @@ export function BackupSection({
 
   const postingCount = status?.postingCount ?? 0
   const snapshotCount = status?.snapshotCount ?? 0
-  const nothingStored = status !== null && postingCount === 0
+
+  /**
+   * Nothing may be offered until the worker has answered.
+   *
+   * `status` is null on a cold worker and after a failed status call, and every
+   * count above falls back to 0 — so the erase confirmation asked "Erase 0
+   * records and 0 pages?" over a full database, understating the stakes in the
+   * one dialog that must not. Guarding only the button left the dialog itself
+   * reachable, since `confirmingErase` survives a status that goes away.
+   *
+   * Exporting is gated on the same answer for a smaller reason: an export
+   * offered before the count is known is one that might write an empty file.
+   */
+  const ready = status !== null
+  const nothingStored = ready && postingCount === 0
 
   /**
    * Every action funnels through here so that "something is running" is one
@@ -86,9 +101,18 @@ export function BackupSection({
       const filename = backupFilename(variant, at)
       const size = download(filename, serializeBundle(bundle), JSON_MIME)
 
-      // Only after the file has actually been handed over, and only for JSON —
-      // a CSV cannot be imported, so letting one set this would be a "last
-      // backed up" date behind which there is no backup.
+      // JSON only. A CSV cannot be imported, so letting one set this would be a
+      // "last backed up" date behind which there is no backup.
+      //
+      // What this records is that a file was *offered*, which is all a blob and
+      // an anchor click can know — there is no completion signal, and acquiring
+      // one would mean the `downloads` permission and an install warning
+      // (decision 2). So a download the user cancelled at the Save-As dialog,
+      // or one a policy blocked, still stamps the date. That matters because
+      // the only consumer is the erase confirmation, where a phantom backup
+      // would silence exactly the warning it exists to raise — which is why the
+      // dialog names the date and asks the user to check the file is still
+      // there rather than asserting a restore is possible.
       try {
         await send('backup/recorded', {})
         onChanged()
@@ -124,18 +148,30 @@ export function BackupSection({
 
   const importFile = (file: File) =>
     run('Importing', async (report) => {
-      const result = await importBundle(await file.text(), report)
+      /**
+       * Refreshed on every path, including the throwing one.
+       *
+       * An import is many batches and the early ones are committed before a
+       * later one can fail — a quota error on batch three of five leaves four
+       * hundred records genuinely imported. Refreshing only on success showed
+       * that user a failure notice above a stale count and an unchanged Recent
+       * list, with nothing to suggest anything had landed at all. The one thing
+       * a restore must never do is understate what it wrote.
+       */
+      try {
+        const result = await importBundle(await file.text(), report)
 
-      if (!result.ok) {
-        return { tone: 'bad', message: `Could not read ${file.name} — ${result.error}` }
-      }
+        if (!result.ok) {
+          return { tone: 'bad', message: `Could not read ${file.name} — ${result.error}` }
+        }
 
-      onChanged()
-
-      return {
-        tone: 'good',
-        message: summarize(result.summary),
-        detail: rejectionsOf(result.summary),
+        return {
+          tone: 'good',
+          message: summarize(result.summary),
+          detail: rejectionsOf(result.summary),
+        }
+      } finally {
+        onChanged()
       }
     })
 
@@ -169,7 +205,7 @@ export function BackupSection({
           type="button"
           className="button"
           onClick={() => void exportJson('lean')}
-          disabled={busy !== null || nothingStored}
+          disabled={busy !== null || !ready || nothingStored}
         >
           Export records
         </button>
@@ -177,7 +213,7 @@ export function BackupSection({
           type="button"
           className="button"
           onClick={() => void exportJson('full')}
-          disabled={busy !== null || nothingStored}
+          disabled={busy !== null || !ready || nothingStored}
         >
           Export with pages
         </button>
@@ -185,7 +221,7 @@ export function BackupSection({
           type="button"
           className="button button--quiet"
           onClick={() => void exportCsv()}
-          disabled={busy !== null || nothingStored}
+          disabled={busy !== null || !ready || nothingStored}
         >
           Spreadsheet
         </button>
@@ -248,7 +284,12 @@ export function BackupSection({
       )}
 
       <div className="backup__danger">
-        {confirmingErase ? (
+        {/*
+          `ready` as well as `confirmingErase`: a status that goes away while
+          the dialog is open — a worker torn down mid-question — would otherwise
+          leave it asking about the 0 records its fallbacks invent.
+        */}
+        {confirmingErase && status !== null ? (
           /*
             The confirmation is where the weight goes, which is why the resting
             state is a quiet button and this is a full alert. It says the counts
@@ -261,9 +302,11 @@ export function BackupSection({
               Erase {count(postingCount, 'record')} and {count(snapshotCount, 'page')}?
             </p>
             <p className="notice__detail">
-              {status?.lastBackupAt === null
+              {status.lastBackupAt === null
                 ? 'Nothing has ever been exported, so this cannot be undone by any means.'
-                : 'This cannot be undone. Only an exported file can bring it back.'}
+                : `This cannot be undone. Only the file exported ${formatWhen(
+                    status.lastBackupAt,
+                  )} can bring it back — check you still have it.`}
             </p>
             <div className="notice__actions">
               <button
@@ -289,7 +332,7 @@ export function BackupSection({
             type="button"
             className="button button--quiet"
             onClick={() => setConfirmingErase(true)}
-            disabled={busy !== null || nothingStored}
+            disabled={busy !== null || !ready || nothingStored}
           >
             Erase everything
           </button>
@@ -315,6 +358,15 @@ function summarize(summary: ImportSummary): string {
   }
   if (summary.snapshots.imported > 0) {
     parts.push(`added ${count(summary.snapshots.imported, 'page')}`)
+  }
+  // Pages the retention cap reclaimed on the way in. Said out loud because it
+  // is the only place the cap is ever visible, and because a `full` restore
+  // that silently kept none of its pages would look identical to one that kept
+  // them all.
+  if (summary.snapshots.dropped > 0) {
+    parts.push(
+      `set aside ${count(summary.snapshots.dropped, 'older page')} beyond the ${SNAPSHOT_RETENTION}-page limit`,
+    )
   }
 
   return `${parts.join(', ')}.`
