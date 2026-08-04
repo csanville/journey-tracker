@@ -248,10 +248,18 @@ function Residuals({ timeline }: { timeline: OverTime }) {
   const { appliedWithoutDate, beforeWindow } = timeline
   const notes: string[] = []
 
-  if (beforeWindow.tracked > 0) {
-    notes.push(
-      `${beforeWindow.tracked} tracked and ${beforeWindow.applied} applied before this window`,
-    )
+  // Either count on its own is enough to require the note, because the two move
+  // independently: `overTime` places `createdAt` and `appliedAt` separately, so
+  // a job saved today and applied to six months ago — back-filled by hand, or
+  // restored from a backup — lands in `beforeWindow.applied` with
+  // `beforeWindow.tracked` still at zero. Gating on `tracked` alone dropped it,
+  // leaving the funnel claiming an application the chart did not show.
+  if (beforeWindow.tracked > 0 || beforeWindow.applied > 0) {
+    const parts: string[] = []
+    if (beforeWindow.tracked > 0) parts.push(`${beforeWindow.tracked} tracked`)
+    if (beforeWindow.applied > 0) parts.push(`${beforeWindow.applied} applied`)
+
+    notes.push(`${parts.join(' and ')} before this window`)
   }
   if (appliedWithoutDate > 0) {
     notes.push(

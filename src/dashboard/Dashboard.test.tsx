@@ -150,6 +150,31 @@ describe('Dashboard', () => {
     expect(el.textContent).not.toContain('1 postings')
   })
 
+  it('discloses an application made before the window even when nothing else is', async () => {
+    // Back-filling an old application: saved today, so `createdAt` is inside the
+    // window, with a hand-typed `appliedAt` from six months ago. `place` handles
+    // the two timestamps independently, so this lands in `beforeWindow.applied`
+    // while `beforeWindow.tracked` stays at zero — and gating the note on
+    // `tracked` alone drops it. The funnel then says one applied over a chart
+    // showing none, with nothing to explain the gap.
+    const db = new JourneyTrackerDb(DB_NAME)
+    await db.open()
+    await upsertPosting(
+      db,
+      aPosting({
+        id: 'backfilled',
+        state: 'applied',
+        appliedAt: Date.now() - 180 * 86_400_000,
+      }),
+    )
+    db.close()
+
+    const el = await render()
+    await waitForText(el, 'Where things stand')
+
+    expect(el.querySelector('.note')?.textContent).toContain('before this window')
+  })
+
   it('re-renders when a record is saved while it is open', async () => {
     // The reactivity the whole read path exists for. Without it the dashboard
     // would need the polling decision 4 ruled out.

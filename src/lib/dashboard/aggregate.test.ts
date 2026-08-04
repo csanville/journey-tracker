@@ -123,6 +123,21 @@ describe('overTime', () => {
     expect(result.buckets.reduce((n, b) => n + b.tracked, 0)).toBe(1)
   })
 
+  it('counts an application older than the record that carries it', () => {
+    // Back-filling: saved today, applied to months ago. The two timestamps are
+    // placed independently, so the residuals genuinely diverge — tracked is in
+    // a visible bucket while applied is not. Anything reading only one of them
+    // will drop the other.
+    const result = overTime(
+      [record({ createdAt: at(2026, 3, 10), state: 'applied', appliedAt: at(2025, 9, 1) })],
+      { limit: 4, now },
+    )
+
+    expect(result.beforeWindow).toEqual({ tracked: 0, applied: 1 })
+    expect(result.buckets.reduce((n, b) => n + b.tracked, 0)).toBe(1)
+    expect(result.buckets.reduce((n, b) => n + b.applied, 0)).toBe(0)
+  })
+
   it('accounts for every record exactly once', () => {
     const postings = [
       record({ createdAt: at(2026, 3, 10), state: 'applied', appliedAt: at(2026, 3, 11) }),

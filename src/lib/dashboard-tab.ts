@@ -20,12 +20,23 @@
 
 const KEY = 'dashboardTabId'
 
-/** Called by the dashboard on load, about itself. */
+async function setDashboardTabId(id: number): Promise<void> {
+  await chrome.storage.session.set({ [KEY]: id })
+}
+
+/**
+ * Called by the dashboard on load, about itself.
+ *
+ * `openDashboard` already registers the tab it creates, so this is the backstop
+ * rather than the main path: it covers a tab Chrome restored across a browser
+ * restart, which has an id nobody recorded because `chrome.storage.session` was
+ * cleared underneath it.
+ */
 export async function registerDashboardTab(): Promise<void> {
   const tab = await chrome.tabs.getCurrent()
   if (tab?.id === undefined) return
 
-  await chrome.storage.session.set({ [KEY]: tab.id })
+  await setDashboardTabId(tab.id)
 }
 
 export async function getDashboardTabId(): Promise<number | null> {
@@ -42,6 +53,17 @@ export async function forgetDashboardTab(): Promise<void> {
 export const DASHBOARD_PATH = 'src/dashboard/index.html'
 
 /**
+ * In-flight `openDashboard`, so two clicks cannot both decide to open a tab.
+ *
+ * The check-then-create in `open` spans two awaits, and a second click landing
+ * between them reads the same empty session storage the first one did. Sharing
+ * one promise is enough because a panel is a single JavaScript context — there
+ * is no second one racing it, and if the panel is torn down mid-flight the tab
+ * has already been created and registered.
+ */
+let opening: Promise<void> | null = null
+
+/**
  * Focuses the dashboard if it is open, and opens it otherwise.
  *
  * The stored id can be stale in the ordinary course of things — the user closed
@@ -50,6 +72,14 @@ export const DASHBOARD_PATH = 'src/dashboard/index.html'
  * worth reporting.
  */
 export async function openDashboard(): Promise<void> {
+  opening ??= open().finally(() => {
+    opening = null
+  })
+
+  return opening
+}
+
+async function open(): Promise<void> {
   const url = chrome.runtime.getURL(DASHBOARD_PATH)
   const existing = await getDashboardTabId()
 
@@ -66,5 +96,12 @@ export async function openDashboard(): Promise<void> {
     }
   }
 
-  await chrome.tabs.create({ url })
+  // Registered here, from the id `tabs.create` hands back, rather than left to
+  // the new tab's own `registerDashboardTab`. That runs after the bundle has
+  // loaded and React has mounted, and until it does the session storage still
+  // reads empty — so a click in that window would open a second tab, each one
+  // holding its own `liveQuery` over the whole record set. The tab announces
+  // itself as well, which covers the ids this path never sees (decision 17).
+  const created = await chrome.tabs.create({ url })
+  if (created?.id !== undefined) await setDashboardTabId(created.id)
 }

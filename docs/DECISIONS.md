@@ -1057,6 +1057,28 @@ rejecting on it is the signal to open a fresh one, not an error worth reporting.
 The link is a `<button>` styled as a link, not an `<a href>`. An anchor inside the
 side panel navigates the panel itself, which has no back button.
 
+**Amended — the tab is registered by whoever opens it, not only by itself.**
+Review found the invariant above held in the steady state and not during
+warm-up. Registration originally happened once, in the new tab's own
+`main.tsx`, which runs after the bundle has loaded and React has mounted; until
+then session storage still read empty, so a second click — an impatient
+re-click, most likely — read the same nothing the first one did and opened
+another tab. The failure this decision exists to prevent, reached by a different
+route.
+
+Two changes close it. `openDashboard` registers the id `tabs.create` hands back,
+which is known immediately, and a module-scope in-flight promise makes
+concurrent calls share one attempt rather than each running the check-then-create
+across two awaits. The tab still announces itself, now as the backstop rather
+than the main path: it covers a tab Chrome restored across a browser restart,
+whose id nobody recorded because session storage was cleared underneath it.
+
+The general shape is worth naming alongside phase 6's, because it is the same
+family: **a check-then-act spanning an await is a race unless something holds the
+gap.** Phase 6 found it as a uniqueness check that read before the loop and so
+tested a batch against the past rather than against itself; here it is a lookup
+that read before a create.
+
 **Revisit when.** The extension needs `tabs` for some other reason, at which
 point `tabs.query` becomes the simpler implementation and this bookkeeping can
 go. Adding the permission *for* this would be the wrong trade — it is a
