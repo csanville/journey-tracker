@@ -1,0 +1,50 @@
+/*
+ * JourneyTracker — shared design tokens.
+ *
+ * Slate neutrals carrying a slight indigo bias, with a single indigo accent.
+ * Lifted out of the side panel's stylesheet in phase 7, when the dashboard
+ * became a second surface: two copies of a palette drift, and the drift shows
+ * up as one window's "applied" green not matching the other's.
+ *
+ * Add to this palette rather than introducing loose colour values.
+ */
+
+:root {
+  --ground: #f6f7fa;
+  --surface: #ffffff;
+  --ink: #14161f;
+  --ink-soft: #454a5c;
+  --ink-faint: #6f7589;
+  --rule: #dfe2ec;
+  --indigo: #4c50c4;
+  --positive: #1c7a5e;
+  --caution: #8a5a12;
+  --caution-soft: #fdf3e0;
+  --negative: #b23b32;
+
+  --step: 0.75rem;
+  --radius: 6px;
+
+  --font: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: ui-monospace, 'Cascadia Mono', 'SF Mono', Menlo, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ground: #101219;
+    --surface: #171a24;
+    --ink: #e9eaf2;
+    --ink-soft: #b0b4c6;
+    --ink-faint: #7c8296;
+    --rule: #272b38;
+    --indigo: #9aa2f5;
+    --positive: #4fbf9b;
+    --caution: #d9a441;
+    --caution-soft: #2a2113;
+    --negative: #ef7f76;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}

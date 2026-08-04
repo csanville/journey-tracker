@@ -8,8 +8,18 @@ There is no server and no account. Nothing is transmitted anywhere.
 
 ## Status
 
-**Phase 6 — export and import.** The panel has a Backup drawer that writes your
-whole history to a file and reads it back.
+**Phase 7 — the dashboard.** The panel's **Dashboard** link opens a tab showing
+what the saved records add up to: how many you have applied to against how many
+you only looked at, tracking and applying week by week or month by month, and
+which boards your applications actually came from. It updates as you save,
+without a refresh.
+
+Anything the charts cannot place is stated rather than dropped — an application
+with no date recorded, or records older than the window shown — so the figures
+never quietly disagree with each other.
+
+Before that: a Backup drawer that writes your whole history to a file and reads
+it back.
 
 - **Export records** — JSON, records only. This is the portable one: no page
   content, safe to keep anywhere.
@@ -99,7 +109,10 @@ vite.config.ts             Vite + CRXJS
 src/background/            service worker
 src/content/               the reader that runs on a job page
 src/sidepanel/             the panel UI
+src/dashboard/             the dashboard page, and its read-only DB connection
+src/styles/tokens.css      the palette, shared by both surfaces
 src/lib/                   schema, storage, message layer
+src/lib/dashboard/         the dashboard's arithmetic, apart from its rendering
 src/lib/normalize/         join-key derivation — company, URL, ATS req id
 src/lib/extract/           tiered adapters, snapshot trimming
 src/lib/backup/            the export file format, its validator, the CSV report

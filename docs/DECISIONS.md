@@ -241,6 +241,24 @@ and every mutation message is idempotent so a retry cannot double-write.
 **Revisit when.** Never, realistically. If a write path from the dashboard seems
 necessary, add a worker message instead.
 
+**Amended — the reader declares no schema.** "The dashboard reads directly" was
+written here before decision 14 worked out what opening the database costs: the
+context that declares a version is the context that performs Dexie's structural
+upgrade, and a dashboard open in three tabs would race the worker for it. Phase 7
+resolves it by having the dashboard construct its `Dexie` with **no `version()`
+call at all**, which opens in dynamic mode — it adopts whatever stores and
+indexes are on disk, and having no version of its own, it has nothing to upgrade
+*to*. Reads and `liveQuery` work unchanged; the worker keeps sole possession of
+the schema.
+
+Two consequences fall out of it, both pinned by tests in `src/dashboard/db.test.ts`
+because both would otherwise fail silently on someone's real data. A dynamic
+connection **cannot create** the database, so the first-ever dashboard open on a
+fresh profile has to ask the worker to — one `status` message, which is enough
+because every request is dispatched through `await ready()`. And the tables it
+returns are **untyped**, so there is exactly one cast at the boundary in
+`readPostings`.
+
 ---
 
 ## 5. Extraction is tiered, JSON-LD first
@@ -752,6 +770,13 @@ performs Dexie's structural upgrade on the next release adding an index — and
 that upgrade would then be racing the worker's own connection. The read half
 being marginally cheaper is not worth putting a schema upgrade in the UI.
 
+> **Since amended by phase 7.** The objection above is to *declaring a schema*,
+> not to opening the database, and the two are separable: a connection built
+> with no `version()` call reads without ever upgrading. See decision 4's
+> amendment. It does not change the conclusion here — export still batches
+> through the worker, because import is a write either way and splitting the two
+> halves across two paths buys nothing.
+
 **Amended — "never overwrites" has to hold against the file, not just the
 store.** Review found the rule enforced by a single `bulkGet` taken before any
 write, so two records sharing an id *within one batch* both saw nothing stored,
@@ -993,3 +1018,68 @@ badge stayed dark on a tab the save itself had just tracked.
 is built to grow, but every addition is a thing the panel must decide whether to
 act on, and "refresh everything" stops being the right answer once events mean
 different things.
+
+---
+
+## 17. The dashboard is a tab, and it finds itself without `tabs`
+
+**Decision.** The dashboard is a full extension page opened in its own tab, not a
+view inside the side panel. The panel links to it, and the link focuses the tab
+already open rather than opening another. Finding that tab uses a tab id the
+dashboard registers about itself in `chrome.storage.session` — not
+`chrome.tabs.query`.
+
+**Why.** The panel is about 360px wide. A status funnel, a twelve-column timeline
+and a per-board table do not fit in it, and decision 4 already assumed a
+dashboard that "may be open in several tabs at once", which is not something a
+side panel can be. Opening a tab and focusing a tab are both permission-free, so
+the surface costs nothing against decision 2's posture.
+
+The lookup is where the cost hides. `chrome.tabs.query({ url })` is the obvious
+way to find an existing dashboard, and its `url` filter is **silently ignored**
+unless the extension holds `tabs` or a host permission matching it — the query
+resolves to an empty array, which is indistinguishable from "no dashboard open".
+The manifest holds neither and decision 2 says it should not start. So the
+failure would not be a refusal; it would be a link that opened a new tab every
+time it was clicked, each one holding its own `liveQuery` over the whole record
+set.
+
+What needs no permission is `tabs.getCurrent()`, which an extension page may
+always call about itself, and `tabs.update(id, …)`, which is not gated at all.
+So the dashboard registers its own id on load and the panel focuses it.
+
+**Consequences.** `chrome.storage.session` is the right home for the id and
+`local` would be wrong: a tab id is meaningless once the browser restarts, and
+this is the same scoping the detection cache uses (decision 15). A stale id is
+ordinary rather than exceptional — the user closed the tab — and `tabs.update`
+rejecting on it is the signal to open a fresh one, not an error worth reporting.
+
+The link is a `<button>` styled as a link, not an `<a href>`. An anchor inside the
+side panel navigates the panel itself, which has no back button.
+
+**Amended — the tab is registered by whoever opens it, not only by itself.**
+Review found the invariant above held in the steady state and not during
+warm-up. Registration originally happened once, in the new tab's own
+`main.tsx`, which runs after the bundle has loaded and React has mounted; until
+then session storage still read empty, so a second click — an impatient
+re-click, most likely — read the same nothing the first one did and opened
+another tab. The failure this decision exists to prevent, reached by a different
+route.
+
+Two changes close it. `openDashboard` registers the id `tabs.create` hands back,
+which is known immediately, and a module-scope in-flight promise makes
+concurrent calls share one attempt rather than each running the check-then-create
+across two awaits. The tab still announces itself, now as the backstop rather
+than the main path: it covers a tab Chrome restored across a browser restart,
+whose id nobody recorded because session storage was cleared underneath it.
+
+The general shape is worth naming alongside phase 6's, because it is the same
+family: **a check-then-act spanning an await is a race unless something holds the
+gap.** Phase 6 found it as a uniqueness check that read before the loop and so
+tested a batch against the past rather than against itself; here it is a lookup
+that read before a create.
+
+**Revisit when.** The extension needs `tabs` for some other reason, at which
+point `tabs.query` becomes the simpler implementation and this bookkeeping can
+go. Adding the permission *for* this would be the wrong trade — it is a
+broad-reading permission bought to save twenty lines.
