@@ -15,7 +15,7 @@ then merged.
 | 4 ✅ | `feat/extraction` | Tiered adapters, snapshots, adapter versioning, URL reporting that survives SPA navigation, fixture tests | A real posting fills the form |
 | 5 ✅ | `feat/live-sync`, `feat/activetab-capture` | Tab listeners, swap rules, dirty banner, revisit warning, toolbar badge, `activeTab` capture for unknown sites | Tab between postings; the form follows, and a posting already tracked says so before you type |
 | 6 ✅ | `feat/export-import` | JSON lean/full round-trip, CSV report, skip-duplicate import, snapshot retention sweep | Export, wipe, re-import — data identical |
-| 7 | `feat/dashboard` | `liveQuery`-backed views: status funnel, over time, per-board yield | Patterns visible across saved data |
+| 7 | `feat/dashboard` | Extension-page dashboard; `liveQuery` over a schema-less read connection; status funnel, over time, per-board yield | Patterns visible across saved data |
 | 8 | `feat/submit-detect` | Submission heuristics behind a prompt | Prompt fires on a real submission |
 | later | — | Workday, Ashby, iCIMS, SmartRecruiters adapters; diagnostics action | — |
 
@@ -278,6 +278,78 @@ Worth carrying into phase 7: the dashboard is nothing *but* claims about the
 record set, and every defect above was a claim that outran what was actually
 true.
 
+## Phase 7 — the dashboard
+
+The phase that makes the saved data say something. Everything before it was
+about getting records in and keeping them; this is the first that reads them
+back for their own sake.
+
+- **A full extension page, not a panel view.** The panel is ~360px and a status
+  funnel, a twelve-column timeline and a per-board table do not fit in it. The
+  panel links to a tab, and the link focuses the tab already open rather than
+  opening another — which needs a tab id the dashboard registers about itself,
+  because `tabs.query`'s `url` filter is silently ignored without the `tabs`
+  permission the manifest does not have (decision 17).
+- **`liveQuery` over a connection that declares no schema.** The roadmap table
+  above says "`liveQuery`-backed views" and decision 14's amendment says the
+  dashboard "will read directly", but that same amendment rejected a panel-side
+  Dexie connection because whichever context declares a version is the one that
+  performs Dexie's structural upgrade. Both hold at once: a `Dexie` constructed
+  with no `version()` call opens in dynamic mode, adopting whatever is on disk,
+  with no version of its own to upgrade *to*. The worker keeps sole possession
+  of the schema and the dashboard still gets reactivity without polling
+  (decision 4, amended).
+- **Three views.** A status funnel over `viewed` / `applied`; tracking and
+  applying over time in weekly or monthly buckets; and per-board yield, grouped
+  by host so one board does not split across two rows.
+- **The arithmetic is a separate, tested module.** `lib/dashboard/aggregate.ts`
+  is pure functions and `Dashboard.tsx` renders what they return. This is the
+  direct answer to what phase 6's review turned up: the dashboard is nothing but
+  claims about the record set, so the claims are where the tests go.
+
+**Done when** patterns are visible across saved data — and, specific to this
+phase, when every record is either in a bucket somebody can see or in a residual
+somebody is told about.
+
+### The rule this phase is built on
+
+Phase 6's fifteen defects clustered on statements that outran the truth, and a
+dashboard is nothing else. So the aggregation obeys one rule everywhere:
+**every record is either counted in a visible bucket or counted in a named
+residual.**
+
+Two residuals exist because two real cases need them, and both are ordinarily
+zero:
+
+- `appliedWithoutDate` — a record whose `state` is `applied` but whose
+  `appliedAt` is null. `state` and the date are two different controls on the
+  form, `PostingForm.tsx` already guards for the pair, and the importer accepts
+  records written by any earlier build. Such a record is in the funnel's
+  `applied` and cannot be placed on a timeline. Dropping it silently would make
+  the chart disagree with the figures above it with no way to tell which lied.
+- `beforeWindow` — records older than the oldest bucket shown. The window is
+  capped so a two-year history does not render a hundred columns three pixels
+  wide, and what the cap excludes is stated rather than discarded.
+
+Two smaller applications of the same idea. Rates are `null` rather than `0` when
+there is nothing to divide, because zero percent is a finding — it says you
+applied to nothing — and an empty database has not earned the right to say it.
+And the read path has three states rather than two: "still loading", "loaded and
+empty" and "could not read" are three different statements about someone's
+records, and only one of them should ever render as "nothing here yet".
+
+### Deliberately not in phase 7
+
+- **Editing from the dashboard.** It reads. Decision 4 forbids the write, and the
+  panel is where a record is edited.
+- **Response and outcome tracking.** A funnel from `applied` to *heard back* is
+  the obvious next view and there is nowhere to store the answer: the schema has
+  two states (decision 8) and adding a third is a schema change with a migration,
+  not a dashboard feature.
+- **Salary distributions.** Structured salary is read only where a board states
+  it structurally, so the field is null on most records and any chart over it
+  would be a chart of the minority that happened to parse.
+
 ## Changes from the original plan
 
 - **Records moved from `chrome.storage.local` to IndexedDB** (decision 3). The
@@ -303,6 +375,17 @@ true.
 - **The permission allowlist is `content_scripts.matches`, and the manifest
   declares no `host_permissions` at all** (decision 2) — less than the original
   plan asked for, at no cost.
+- **The dashboard reads directly *and* never owns the schema** (decisions 4, 14,
+  both amended). This file and decision 14 disagreed about phase 7 for the whole
+  of phase 6: the roadmap promised `liveQuery` views reading directly, and the
+  amendment that promised it had just finished rejecting a panel-side connection
+  for the export. The disagreement was real and dissolved rather than settled —
+  the objection is to *declaring a schema*, not to opening the database, and a
+  connection with no `version()` call does the second without the first.
+- **The dashboard is a tab, and it costs no permission** (decision 17). Not in
+  the original plan, which said nothing about where the views would live.
+  `tabs.query({ url })` is the trap: its filter is ignored without the `tabs`
+  permission and returns an empty array rather than an error.
 - **A third dedupe key, and the revisit warning that uses it** (decision 7). Came
   out of using phase 3: two hand-entered applications for one role at one
   employer saved as separate records without comment. The fix was a weaker

@@ -11,5 +11,14 @@ export default defineConfig({
     // loading it unpacked.
     minify: false,
     sourcemap: true,
+    rollupOptions: {
+      // CRXJS discovers HTML entry points by reading the manifest, and the
+      // dashboard is not in it: it is not the side panel, not a popup and not
+      // an options page — it is a tab the panel opens by URL. Naming it here is
+      // what gets it built at all. Without this the panel's link resolves to a
+      // path that does not exist in `dist/`, which fails as a blank tab and
+      // nowhere else.
+      input: { dashboard: 'src/dashboard/index.html' },
+    },
   },
 })

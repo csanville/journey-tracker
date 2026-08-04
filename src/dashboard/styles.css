@@ -1,0 +1,345 @@
+/*
+ * JourneyTracker dashboard.
+ *
+ * A full tab rather than the ~360px panel, so this is the one surface with room
+ * for a chart. Tokens are shared with the panel — see `src/styles/tokens.css`.
+ */
+
+@import '../styles/tokens.css';
+
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--font);
+  font-size: 15px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+
+.dash {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--step) * 1.5);
+  max-width: 60rem;
+  margin: 0 auto;
+  padding: calc(var(--step) * 2);
+}
+
+.dash__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--step);
+  padding-bottom: var(--step);
+  border-bottom: 1px solid var(--rule);
+}
+
+.wordmark {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 620;
+  letter-spacing: -0.01em;
+}
+
+.dash__count {
+  margin: 0;
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.card {
+  padding: calc(var(--step) * 1.5);
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+}
+
+.card__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--step);
+}
+
+.card h2 {
+  margin: 0 0 var(--step);
+  font-size: 0.95rem;
+  font-weight: 620;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+
+.card__head h2 {
+  margin-bottom: var(--step);
+}
+
+.empty {
+  max-width: 34rem;
+  padding: calc(var(--step) * 2);
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  color: var(--ink-faint);
+}
+
+.alert {
+  padding: var(--step) calc(var(--step) * 1.25);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.alert--negative {
+  border-color: var(--negative);
+}
+
+.alert p {
+  margin: 0 0 0.35rem;
+}
+
+.alert__detail {
+  margin: 0;
+  color: var(--ink-faint);
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+}
+
+/* Headline figures ------------------------------------------------------- */
+
+.figures {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  gap: var(--step);
+  margin-bottom: calc(var(--step) * 1.5);
+}
+
+.figure {
+  display: flex;
+  flex-direction: column;
+}
+
+.figure__value {
+  font-size: 1.9rem;
+  font-weight: 640;
+  line-height: 1.15;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+
+.figure__value--positive {
+  color: var(--positive);
+}
+
+.figure__label {
+  color: var(--ink-faint);
+  font-size: 0.85rem;
+}
+
+/* Funnel ----------------------------------------------------------------- */
+
+.funnel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.funnel__row {
+  display: grid;
+  grid-template-columns: 5rem 1fr 3rem;
+  align-items: center;
+  gap: var(--step);
+}
+
+.funnel__label {
+  color: var(--ink-soft);
+  font-size: 0.85rem;
+}
+
+.funnel__track {
+  height: 0.75rem;
+  background: var(--ground);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.funnel__bar {
+  display: block;
+  height: 100%;
+  background: var(--indigo);
+  border-radius: 999px;
+}
+
+.funnel__bar--positive {
+  background: var(--positive);
+}
+
+.funnel__value {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-soft);
+}
+
+/* Timeline --------------------------------------------------------------- */
+
+.timeline {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.5rem;
+  height: 11rem;
+  padding-top: var(--step);
+}
+
+.timeline__bucket {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.35rem;
+  height: 100%;
+  min-width: 0;
+}
+
+.timeline__columns {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 2px;
+  width: 100%;
+  height: 100%;
+}
+
+.timeline__column {
+  width: 40%;
+  min-height: 1px;
+  background: var(--indigo);
+  border-radius: 2px 2px 0 0;
+}
+
+.timeline__column--positive {
+  background: var(--positive);
+}
+
+.timeline__label {
+  color: var(--ink-faint);
+  font-size: 0.7rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.legend {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin: var(--step) 0 0;
+  color: var(--ink-faint);
+  font-size: 0.8rem;
+}
+
+.legend__swatch {
+  width: 0.65rem;
+  height: 0.65rem;
+  border-radius: 2px;
+  background: var(--indigo);
+}
+
+.legend__swatch--positive {
+  margin-left: var(--step);
+  background: var(--positive);
+}
+
+.note {
+  margin: var(--step) 0 0;
+  color: var(--ink-faint);
+  font-size: 0.82rem;
+}
+
+/* Per board -------------------------------------------------------------- */
+
+.boards {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.boards th,
+.boards td {
+  padding: 0.45rem 0.5rem;
+  text-align: left;
+  border-bottom: 1px solid var(--rule);
+}
+
+.boards thead th {
+  color: var(--ink-faint);
+  font-size: 0.78rem;
+  font-weight: 560;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.boards tbody th {
+  font-weight: 500;
+}
+
+.boards__num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  width: 6rem;
+}
+
+.boards__name {
+  display: block;
+}
+
+.boards__track {
+  display: block;
+  height: 0.3rem;
+  margin-top: 0.2rem;
+  background: var(--ground);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.boards__bar {
+  display: block;
+  height: 100%;
+  background: var(--indigo);
+  border-radius: 999px;
+}
+
+/* Toggle ----------------------------------------------------------------- */
+
+.toggle {
+  display: inline-flex;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.toggle__option {
+  padding: 0.25rem 0.7rem;
+  border: 0;
+  background: var(--surface);
+  color: var(--ink-soft);
+  font: inherit;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+
+.toggle__option[aria-pressed='true'] {
+  background: var(--indigo);
+  color: #fff;
+}
+
+@media (prefers-color-scheme: dark) {
+  .toggle__option[aria-pressed='true'] {
+    color: var(--ground);
+  }
+}
+
+.toggle__option:focus-visible {
+  outline: 2px solid var(--indigo);
+  outline-offset: -2px;
+}

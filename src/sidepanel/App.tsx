@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { send } from '../lib/client'
+import { openDashboard } from '../lib/dashboard-tab'
 import type { DetectionSummary } from '../lib/detection'
 import { isEvent } from '../lib/events'
 import type { StatusReport } from '../lib/messages'
@@ -217,6 +218,21 @@ export function App() {
           {status && status.postingCount > 0 && (
             <span className="section__count">{status.postingCount}</span>
           )}
+          {/*
+            The dashboard is a tab rather than a view in here: a status funnel
+            and a per-board table do not fit in 360px. Neither opening a tab nor
+            focusing one is permission-gated — see `lib/dashboard-tab.ts` for the
+            lookup that is, and why this does not use it (decision 2).
+
+            Offered only once something is saved, because a dashboard over an
+            empty database is a page of dashes and an invitation to wonder what
+            broke.
+          */}
+          {status && status.postingCount > 0 && (
+            <button type="button" className="link" onClick={() => void openDashboard()}>
+              Dashboard
+            </button>
+          )}
         </h2>
         <RecentPostings postings={postings} />
       </section>
@@ -261,7 +277,7 @@ export function App() {
         </dl>
       </details>
 
-      <footer className="panel__foot">Phase 6 · export &amp; import</footer>
+      <footer className="panel__foot">Phase 7 · dashboard</footer>
     </div>
   )
 }
