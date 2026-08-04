@@ -429,6 +429,93 @@ body {
   color: var(--indigo);
 }
 
+/* ---- backup -------------------------------------------------------------- */
+
+/*
+ * A drawer rather than a section, for the same reason as the diagnostics: this
+ * is deliberate, occasional work and the panel's everyday job is the form. It
+ * carries more visual weight than the diagnostics do — a surface and a border —
+ * because what is behind it is the only copy of the user's data leaving the
+ * machine, not a set of probes.
+ */
+.backup {
+  padding: calc(var(--step) * 0.6) var(--step);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.backup > summary {
+  color: var(--ink-soft);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.backup > summary:focus-visible {
+  outline: 2px solid var(--indigo);
+  outline-offset: 2px;
+}
+
+.backup > *:not(summary) {
+  margin: var(--step) 0 0;
+}
+
+.backup__last {
+  color: var(--ink-faint);
+  font-size: 0.8rem;
+}
+
+/* Wraps rather than scrolls: at 320px the three of them do not fit in a row. */
+.backup__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(var(--step) * 0.5);
+}
+
+.backup__import {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--step) * 0.35);
+  padding-top: var(--step);
+  border-top: 1px solid var(--rule);
+}
+
+/*
+ * Chrome's own file button, left alone. A styled label pretending to be one is
+ * a keyboard trap waiting to happen, and the native control already says
+ * "no file chosen" more clearly than anything invented here would.
+ */
+.backup__file {
+  font-size: 0.8rem;
+  color: var(--ink-soft);
+}
+
+.backup__progress {
+  color: var(--ink-faint);
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/*
+ * Set apart by a rule rather than by colour. Painting the whole area red would
+ * make it the loudest thing in the panel, which is the wrong emphasis for a
+ * control that is collapsed inside a drawer — the confirmation step is what
+ * carries the weight, and it is one click away.
+ */
+.backup__danger {
+  padding-top: var(--step);
+  border-top: 1px solid var(--rule);
+}
+
+.button--danger {
+  border-color: color-mix(in srgb, var(--negative) 45%, var(--rule));
+  color: var(--negative);
+}
+
+.button--danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--negative) 12%, transparent);
+}
+
 /* ---- diagnostics --------------------------------------------------------- */
 
 .diagnostics {
