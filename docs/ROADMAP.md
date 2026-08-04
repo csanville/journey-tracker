@@ -15,7 +15,7 @@ then merged.
 | 4 ✅ | `feat/extraction` | Tiered adapters, snapshots, adapter versioning, URL reporting that survives SPA navigation, fixture tests | A real posting fills the form |
 | 5 ✅ | `feat/live-sync`, `feat/activetab-capture` | Tab listeners, swap rules, dirty banner, revisit warning, toolbar badge, `activeTab` capture for unknown sites | Tab between postings; the form follows, and a posting already tracked says so before you type |
 | 6 ✅ | `feat/export-import` | JSON lean/full round-trip, CSV report, skip-duplicate import, snapshot retention sweep | Export, wipe, re-import — data identical |
-| 7 | `feat/dashboard` | Extension-page dashboard; `liveQuery` over a schema-less read connection; status funnel, over time, per-board yield | Patterns visible across saved data |
+| 7 ✅ | `feat/dashboard` | Extension-page dashboard; `liveQuery` over a schema-less read connection; status funnel, over time, per-board yield | Patterns visible across saved data |
 | 8 | `feat/submit-detect` | Submission heuristics behind a prompt | Prompt fires on a real submission |
 | later | — | Workday, Ashby, iCIMS, SmartRecruiters adapters; diagnostics action | — |
 
@@ -349,6 +349,92 @@ records, and only one of them should ever render as "nothing here yet".
 - **Salary distributions.** Structured salary is read only where a board states
   it structurally, so the field is null on most records and any chart over it
   would be a chart of the minority that happened to parse.
+
+**Shipped.** Three things are worth recording.
+
+**The contradiction was dissolved, not settled.** This file and decision 14
+disagreed about phase 7 for the whole of phase 6 — the roadmap promised
+`liveQuery` views reading directly, and the amendment that promised it had just
+finished rejecting a panel-side connection for the export. Both turned out to be
+right, because the objection was to *declaring a schema* and not to opening the
+database. A `Dexie` built with no `version()` call opens in dynamic mode: it
+adopts whatever is on disk and has no version of its own to upgrade *to*. Worth
+recording as a method rather than as a fact about Dexie — the disagreement had
+sat there for a phase because both sides read as flat contradictions, and neither
+was.
+
+Two things fell out of it that the plan had not anticipated, both now pinned by
+tests because both would have failed silently on real data: a dynamic connection
+**cannot create** the database, so the first open on a fresh profile has to ask
+the worker to, and its tables are **untyped**, so there is exactly one cast at
+the boundary.
+
+**`tabs.query({ url })` fails by returning an empty array.** The obvious way to
+find an already-open dashboard, and its `url` filter is ignored without the
+`tabs` permission decision 2 keeps out of the manifest. Not a refusal, not an
+error — an empty result, indistinguishable from "no dashboard open". The link
+would have opened a new tab on every click, each holding its own `liveQuery`
+over the whole record set. The page registers its own id instead (decision 17).
+
+**No component in this project had ever been executed.** The suite included only
+`src/**/*.test.ts`, which was a sound arrangement while the panel's logic lived
+in tested `.ts` modules and the `.tsx` files were thin. The dashboard is a page
+of branches — loading, failed, empty, populated — and three of the four are the
+unhappy ones nobody sees while building. Vitest now includes `.tsx`, and the
+first thing the new tests caught was a real defect (below).
+
+### What review changed
+
+Two defects, and the useful thing is that they were **the same defect**.
+
+- The timeline's residual note was gated on `beforeWindow.tracked`, but
+  `overTime` places `createdAt` and `appliedAt` independently, so the two counts
+  diverge. A job saved today and applied to six months ago lands in
+  `beforeWindow.applied` with `tracked` still at zero — the note vanished, and
+  the funnel claimed an application the chart did not show. Back-filling an old
+  application is all it takes. The aggregation was correct throughout; only the
+  rendering gate was wrong, which is why the sums in `aggregate.test.ts` all
+  balanced.
+- The dashboard tab was registered only by the tab itself, in `main.tsx`, which
+  runs after its bundle loads and React mounts. A second click before that read
+  the same empty session storage as the first and opened another tab — the exact
+  outcome decision 17 exists to prevent, reached by a route it had not
+  considered.
+
+Both are a **check-then-act spanning an await**, and so was the worst of phase
+6's: a uniqueness check taken before the loop, which tested a batch against the
+past rather than against itself. See "Recurring shapes" below.
+
+Also worth noting about the first one: the tests missed it because the only
+`beforeWindow` case in the suite had *both* timestamps outside the window, so a
+non-zero `tracked` masked the asymmetric path. A fixture that exercises two
+fields together will not catch a bug that needs them to disagree.
+
+## Recurring shapes
+
+Two phases of review have now found the same two shapes, which is enough to start
+writing them down. Both are about the gap between what code does and what it
+says it did, and both are cheap to look for deliberately.
+
+**A claim that outruns what is true.** Phase 6 found nine of these — a count of
+pages inserted and swept in the same breath reported as added, a summary that
+under-reported a partial import, a dialog offering to erase zero records over a
+full database, a `lastBackupAt` asserting a file had been written when all that
+can be observed is that one was offered. Phase 7 was built to resist them and
+still shipped one: a residual that hid itself when only half of it was non-zero.
+
+The check: for every number rendered, ask what makes it true, and whether it is
+still true when the thing it counts is zero, partial, or split across two fields.
+
+**A check-then-act spanning an await.** Phase 6: a uniqueness check that read
+before the loop, so it tested the batch against the past and not against itself.
+Phase 7: a tab lookup that read before a create, so a second click read the same
+empty storage as the first. In both, the read and the act were individually
+correct and the gap between them was not held.
+
+The check: wherever an `await` sits between deciding and doing, ask what else
+could run in the gap — and note that in an extension the answer is rarely
+another thread, but usually the same user clicking twice.
 
 ## Changes from the original plan
 
