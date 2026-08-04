@@ -165,3 +165,50 @@ export async function runPendingMigrations(
 
   return { from: dataVersion, to: targetVersion, applied, freshInstall: false }
 }
+
+/**
+ * Brings records that arrived from an older export up to the current schema.
+ *
+ * A backup restored after an upgrade is the ordinary case for this: the file
+ * was written by whatever build the user had, and the records inside it have
+ * missed every migration since. Nothing else would ever apply them — the
+ * harness above keys off `dataVersion`, which the worker brought up to date at
+ * startup, so from its point of view there is nothing pending. This is the same
+ * silent-loss shape decision 9 exists for, arriving through the one door that
+ * does not go past the version stamp.
+ *
+ * It runs each migration across the **whole table**, not just the imported
+ * rows, because a `Migration` is defined over the database and narrowing it to
+ * a subset would be a second implementation of every migration ever written.
+ * Safe because they are all required to be idempotent, and cheap because it
+ * only runs at all when a file turns out to be behind — which today it never
+ * is, since the exporter always writes at the current version.
+ *
+ * `dataVersion` is deliberately not touched. It records what this *database*
+ * has been through, and it is already current; the imported records were the
+ * only things behind.
+ */
+export async function migrateImportedRecords(
+  db: JourneyTrackerDb,
+  fromVersion: number,
+  options: MigrationOptions = {},
+): Promise<number[]> {
+  const { migrations = MIGRATIONS, targetVersion = SCHEMA_VERSION } = options
+
+  const pending = migrations
+    .filter((m) => m.to > fromVersion && m.to <= targetVersion)
+    .sort((a, b) => a.to - b.to)
+
+  if (pending.length === 0) return []
+
+  // Same guard as a startup migration: a panel reading through a half-rewritten
+  // table gets the same wrong answer whichever door the rewrite came in by.
+  await patchSettings({ migrationInProgress: true })
+  try {
+    for (const migration of pending) await migration.run(db)
+  } finally {
+    await patchSettings({ migrationInProgress: false })
+  }
+
+  return pending.map((migration) => migration.to)
+}

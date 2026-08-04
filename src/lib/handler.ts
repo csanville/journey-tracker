@@ -1,3 +1,4 @@
+import { validatePosting, validateSnapshot } from './backup/bundle'
 import type { JourneyTrackerDb } from './db'
 import {
   findSnapshot,
@@ -7,12 +8,22 @@ import {
   sanitizeReport,
 } from './detection'
 import { broadcast } from './events'
-import type { Request, RequestKind, Response, Result, StatusReport } from './messages'
+import { now } from './ids'
+import type {
+  ImportBatchResult,
+  Request,
+  RequestKind,
+  Response,
+  Result,
+  StatusReport,
+} from './messages'
+import { migrateImportedRecords } from './migrations'
 import { recordStorageProtection } from './persistence'
 import * as repo from './repository'
-import { readSettings } from './settings'
+import { patchSettings, readSettings } from './settings'
 import { postingInputFromDetection, setTrackedBadge } from './tracked'
 import { SCHEMA_VERSION } from './types'
+import type { Posting, Snapshot } from './types'
 
 /**
  * Who sent the request, as far as the worker can tell for itself.
@@ -70,6 +81,19 @@ async function dispatch(
       return { postingId: request.snapshot.postingId }
     case 'snapshot/get':
       return repo.getSnapshot(db, request.postingId)
+    case 'snapshot/ids':
+      return repo.listSnapshotIds(db)
+    case 'snapshot/list':
+      return repo.listSnapshots(db, request.postingIds)
+    case 'backup/import-postings':
+      return importPostings(db, request.postings, request.schemaVersion)
+    case 'backup/import-snapshots':
+      return importSnapshots(db, request.snapshots)
+    case 'backup/wipe':
+      return repo.wipeAll(db)
+    case 'backup/recorded':
+      await patchSettings({ lastBackupAt: now() })
+      return status(db)
     case 'detection/report': {
       // No tab means this did not come from a content script, and a detection
       // that is not attached to a tab is one the panel could never ask for.
@@ -183,12 +207,76 @@ async function upsert(
         trimmedSource: detection.snapshot.trimmedSource,
         truncated: detection.snapshot.truncated,
       })
+
+      // Decision 6's retention cap, swept where snapshots are actually created.
+      // A count and nothing else until the cap is passed, which is several
+      // hundred captures away for anyone who has just installed this.
+      await repo.pruneSnapshots(db)
     }
   } catch (error) {
     console.error('[JourneyTracker] could not store the snapshot', error)
   }
 
   return posting
+}
+
+/**
+ * One batch of records from an export file.
+ *
+ * Validated again here, and not because the panel is untrusted — it is this
+ * extension's own page. It is because everything in the payload came out of a
+ * file the user picked, and the worker is the single writer (decision 4): the
+ * guarantee that nothing malformed reaches the database has to hold at the
+ * place that writes, not at the place that happened to read the file. It is the
+ * same reasoning that validates a content script's report on arrival
+ * (decision 15), and it costs one pass over an array.
+ *
+ * A record that fails is dropped from the batch rather than failing it. The
+ * panel has already told the user how many the file offered, so a record lost
+ * here would show up as a discrepancy in the summary — which is the point.
+ */
+async function importPostings(
+  db: JourneyTrackerDb,
+  postings: Posting[],
+  schemaVersion: number,
+): Promise<ImportBatchResult> {
+  const valid = postings
+    .map(validatePosting)
+    .filter((posting): posting is Posting => typeof posting !== 'string')
+
+  const outcome = await repo.insertMissingPostings(db, valid)
+
+  // Only when the file really was behind, which today it never is — the
+  // exporter always writes at the current version. It is here for the upgrade
+  // that has not happened yet, because by then the file will already exist on
+  // somebody's disk and nothing else would ever bring it forward.
+  const lowest = Math.min(schemaVersion, outcome.lowestVersion ?? SCHEMA_VERSION)
+  if (lowest < SCHEMA_VERSION) {
+    const applied = await migrateImportedRecords(db, lowest)
+    if (applied.length > 0) {
+      console.info('[JourneyTracker] migrated imported records', applied)
+    }
+  }
+
+  return { imported: outcome.imported.length, skipped: outcome.skipped.length }
+}
+
+async function importSnapshots(
+  db: JourneyTrackerDb,
+  snapshots: Snapshot[],
+): Promise<ImportBatchResult> {
+  const valid = snapshots
+    .map(validateSnapshot)
+    .filter((snapshot): snapshot is Snapshot => typeof snapshot !== 'string')
+
+  const outcome = await repo.insertMissingSnapshots(db, valid)
+
+  // The restore is subject to the same cap as ordinary capture (decision 6):
+  // importing a full backup taken before the sweep existed should not be a way
+  // to reinstate a thousand snapshots.
+  await repo.pruneSnapshots(db)
+
+  return { imported: outcome.imported.length, skipped: outcome.skipped.length }
 }
 
 async function status(db: JourneyTrackerDb): Promise<StatusReport> {
@@ -201,5 +289,7 @@ async function status(db: JourneyTrackerDb): Promise<StatusReport> {
     storageUnlimited: settings.storageUnlimited,
     evictionSafe: Boolean(settings.storageUnlimited || settings.storagePersisted),
     postingCount: await repo.countPostings(db),
+    snapshotCount: await repo.countSnapshots(db),
+    lastBackupAt: settings.lastBackupAt,
   }
 }

@@ -1,6 +1,6 @@
 import type { JourneyTrackerDb } from './db'
 import { now } from './ids'
-import { normalizePostingInput } from './normalize'
+import { deriveJoinKeys, normalizePostingInput } from './normalize'
 import { normalizeTitle } from './normalize/title'
 import { isUsableUrlKey, urlHost } from './normalize/url'
 import { POSTING_INPUT_FIELDS, SCHEMA_VERSION } from './types'
@@ -210,4 +210,211 @@ export async function getSnapshot(
   postingId: string,
 ): Promise<Snapshot | null> {
   return (await db.snapshots.get(postingId)) ?? null
+}
+
+/**
+ * Which postings have a snapshot, so an export can ask for them in batches
+ * rather than requesting one for every record and getting mostly nothing.
+ */
+export async function listSnapshotIds(db: JourneyTrackerDb): Promise<string[]> {
+  return (await db.snapshots.orderBy('capturedAt').primaryKeys()) as string[]
+}
+
+/** Snapshots by posting id, skipping ids that have none. */
+export async function listSnapshots(
+  db: JourneyTrackerDb,
+  postingIds: string[],
+): Promise<Snapshot[]> {
+  const found = await db.snapshots.bulkGet(postingIds)
+  return found.filter((snapshot): snapshot is Snapshot => snapshot !== undefined)
+}
+
+/**
+ * How many postings keep their captured page, per decision 6.
+ *
+ * Snapshots are one-per-posting and replaced on re-capture, so nothing grows
+ * without bound *per record* — but a long job search accumulates records, and
+ * each carries up to 256KB of page text. Decision 6 named the number and left
+ * the sweep unbuilt through phase 5; phase 6 is where it belongs, because
+ * export is when the size of all this becomes visible to the user anyway.
+ */
+export const SNAPSHOT_RETENTION = 500
+
+/**
+ * Drops the oldest snapshots beyond the retention cap.
+ *
+ * **Records are never dropped, only their snapshots.** A posting whose snapshot
+ * has been swept still lists, still dedupes, still exports — it has merely lost
+ * the ability to be re-parsed after a future adapter fix, which is the one
+ * thing decision 6 is willing to trade away under storage pressure.
+ *
+ * Ordered by `capturedAt` rather than by the posting's `updatedAt`. It is the
+ * snapshot's own recency, it is already indexed, and it needs no join — and the
+ * two only disagree for a record edited long after its page was read, where
+ * keeping the older capture is not obviously better anyway.
+ *
+ * Cheap on the ordinary path: a count, and then nothing.
+ */
+export async function pruneSnapshots(
+  db: JourneyTrackerDb,
+  keep: number = SNAPSHOT_RETENTION,
+): Promise<number> {
+  return db.transaction('rw', db.snapshots, async () => {
+    if ((await db.snapshots.count()) <= keep) return 0
+
+    // Newest first, then skip the ones being kept: what remains is the tail.
+    const doomed = (await db.snapshots
+      .orderBy('capturedAt')
+      .reverse()
+      .offset(keep)
+      .primaryKeys()) as string[]
+
+    await db.snapshots.bulkDelete(doomed)
+    return doomed.length
+  })
+}
+
+/** What an import batch did, per record, so the UI can be specific about it. */
+export interface InsertOutcome {
+  imported: string[]
+  /** Already present, and therefore left exactly as they were. */
+  skipped: string[]
+}
+
+export interface PostingInsertOutcome extends InsertOutcome {
+  /**
+   * The lowest `schemaVersion` actually written, or `null` if nothing was.
+   *
+   * The caller migrates from here. A backup restored after an upgrade is the
+   * ordinary case for this — the file was written by the build the user had,
+   * and the records inside it need every migration since (decision 9).
+   */
+  lowestVersion: number | null
+}
+
+/**
+ * Writes records that are not already here, and never touches one that is.
+ *
+ * Skip-on-conflict is decision 14, and the asymmetry behind it is the same one
+ * that governs dedupe: a duplicate id is far more likely to be a re-imported
+ * backup than a deliberate correction, and overwriting silently destroys
+ * whatever the user has done to that record since. A skip is visible in the
+ * summary and costs nothing; an overwrite is invisible and costs the record.
+ *
+ * This is deliberately *not* `upsertPosting`. That path stamps `updatedAt` with
+ * the current time, which is right for a save and wrong for a restore — a
+ * re-imported history would arrive with every record edited today, in one
+ * indistinguishable block, and the "newest first" list would be meaningless
+ * ever after. A restore reproduces what was exported, timestamps included,
+ * which is what makes export-wipe-import a round trip rather than a copy.
+ *
+ * The join keys are re-derived all the same. They are derived fields on every
+ * other write (decision 4) and a file is the one input that could carry keys
+ * some other build computed — or that somebody edited by hand.
+ */
+export async function insertMissingPostings(
+  db: JourneyTrackerDb,
+  postings: Posting[],
+): Promise<PostingInsertOutcome> {
+  return db.transaction('rw', db.postings, async () => {
+    const outcome: PostingInsertOutcome = { imported: [], skipped: [], lowestVersion: null }
+    if (postings.length === 0) return outcome
+
+    // One lookup for the batch rather than one per record: the read has to
+    // happen inside this transaction anyway, and `bulkGet` preserves order.
+    const existing = await db.postings.bulkGet(postings.map((posting) => posting.id))
+    const fresh: Posting[] = []
+
+    postings.forEach((posting, index) => {
+      if (existing[index]) {
+        outcome.skipped.push(posting.id)
+        return
+      }
+
+      fresh.push({ ...posting, ...deriveJoinKeys(posting) })
+      outcome.imported.push(posting.id)
+      outcome.lowestVersion =
+        outcome.lowestVersion === null
+          ? posting.schemaVersion
+          : Math.min(outcome.lowestVersion, posting.schemaVersion)
+    })
+
+    if (fresh.length > 0) await db.postings.bulkPut(fresh)
+    return outcome
+  })
+}
+
+/**
+ * The same rule for snapshots, plus one of its own: no orphans.
+ *
+ * A snapshot whose posting is not here is dropped rather than stored. It could
+ * only be read by looking it up by a posting id that does not exist, so keeping
+ * it would be storing up to 256KB of page text that nothing can ever reach —
+ * and page text is precisely what this project does not keep for no reason
+ * (decision 6).
+ *
+ * A posting that was skipped as already-present may still gain a snapshot it
+ * did not have. That is not an overwrite: it adds a re-parse that was not
+ * possible before and changes no record.
+ */
+export async function insertMissingSnapshots(
+  db: JourneyTrackerDb,
+  snapshots: Snapshot[],
+): Promise<InsertOutcome> {
+  return db.transaction('rw', db.postings, db.snapshots, async () => {
+    const outcome: InsertOutcome = { imported: [], skipped: [] }
+    if (snapshots.length === 0) return outcome
+
+    const ids = snapshots.map((snapshot) => snapshot.postingId)
+    const [owners, existing] = await Promise.all([
+      db.postings.bulkGet(ids),
+      db.snapshots.bulkGet(ids),
+    ])
+
+    const fresh: Snapshot[] = []
+
+    snapshots.forEach((snapshot, index) => {
+      if (existing[index] || !owners[index]) {
+        outcome.skipped.push(snapshot.postingId)
+        return
+      }
+
+      fresh.push(snapshot)
+      outcome.imported.push(snapshot.postingId)
+    })
+
+    if (fresh.length > 0) await db.snapshots.bulkPut(fresh)
+    return outcome
+  })
+}
+
+/**
+ * Deletes everything. The only way to empty the database from the UI.
+ *
+ * It exists because a restore has to be testable by the person relying on it:
+ * an export nobody has ever re-imported is a backup nobody knows the shape of,
+ * and this is a project whose data lives in exactly one place (decision 1).
+ * Wiping and re-importing is how a user finds out their backup is real.
+ *
+ * Both stores go in one transaction, so there is no window in which the
+ * snapshots outlive the records that name them.
+ */
+export async function wipeAll(
+  db: JourneyTrackerDb,
+): Promise<{ postings: number; snapshots: number }> {
+  return db.transaction('rw', db.postings, db.snapshots, async () => {
+    const counts = {
+      postings: await db.postings.count(),
+      snapshots: await db.snapshots.count(),
+    }
+
+    await db.postings.clear()
+    await db.snapshots.clear()
+
+    return counts
+  })
+}
+
+export async function countSnapshots(db: JourneyTrackerDb): Promise<number> {
+  return db.snapshots.count()
 }

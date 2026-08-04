@@ -37,6 +37,55 @@ export interface RequestMap {
   'snapshot/put': { payload: { snapshot: Snapshot }; result: { postingId: string } }
   'snapshot/get': { payload: { postingId: string }; result: Snapshot | null }
   /**
+   * Which postings have a snapshot at all, so a `full` export can fetch them in
+   * batches instead of asking about every record and getting mostly nothing.
+   */
+  'snapshot/ids': { payload: NoPayload; result: string[] }
+  'snapshot/list': { payload: { postingIds: string[] }; result: Snapshot[] }
+  /**
+   * Backup traffic is **batched**, and every message here carries a slice
+   * rather than the file.
+   *
+   * A `full` export is records plus up to 500 page snapshots of up to 256KB
+   * each, so the whole thing is tens of megabytes. Pushing that through
+   * `sendMessage` in one call means the payload is serialized, copied, and held
+   * in both contexts at once — the same argument that keeps the panel from
+   * being sent a single detection's source (decision 15), at three orders of
+   * magnitude. The panel walks the batches and reports progress as it goes.
+   *
+   * It stays worker-side rather than letting the panel open its own connection
+   * for the read half, because import is unambiguously a write (decision 4) and
+   * a panel that opened the database would also be the context performing
+   * Dexie's structural upgrade on the next release that adds an index.
+   */
+  'backup/import-postings': {
+    payload: {
+      postings: Posting[]
+      /** The version the file declares, so records behind it can be migrated. */
+      schemaVersion: number
+    }
+    result: ImportBatchResult
+  }
+  'backup/import-snapshots': {
+    payload: { snapshots: Snapshot[] }
+    result: ImportBatchResult
+  }
+  /**
+   * Empties both stores. Destructive and irreversible, and the reason it exists
+   * is that a backup nobody has restored is a backup nobody can trust.
+   */
+  'backup/wipe': { payload: NoPayload; result: { postings: number; snapshots: number } }
+  /**
+   * Records that a JSON backup was taken. Sent by the panel because only it
+   * knows the file was actually written, and handled by the worker because
+   * settings have one writer like everything else.
+   *
+   * Not sent for the CSV: a report that cannot be imported is not a backup, and
+   * a "last backed up" line that a CSV had reset would be a comfortable lie in
+   * the one place this project cannot afford one.
+   */
+  'backup/recorded': { payload: NoPayload; result: StatusReport }
+  /**
    * The one message a content script sends. The tab it belongs to comes from
    * the sender rather than the payload — a page cannot forge which tab it is.
    * Returns `null` when the report did not survive validation.
@@ -54,6 +103,19 @@ export interface RequestMap {
    * would otherwise keep reporting the state it read before the request.
    */
   'storage/reassess': { payload: NoPayload; result: StatusReport }
+}
+
+/**
+ * What one import batch did.
+ *
+ * Counts rather than ids: the panel is accumulating these across every batch to
+ * show one summary, and the ids of four hundred records it already sent are not
+ * something it needs back.
+ */
+export interface ImportBatchResult {
+  imported: number
+  /** Already present, and therefore left exactly as they were (decision 14). */
+  skipped: number
 }
 
 export type RequestKind = keyof RequestMap
@@ -85,6 +147,10 @@ export interface StatusReport {
    */
   evictionSafe: boolean
   postingCount: number
+  /** Reported so the panel can say what a `full` export is about to include. */
+  snapshotCount: number
+  /** When a JSON backup was last taken, or `null` if never. */
+  lastBackupAt: number | null
 }
 
 export function isRequest(value: unknown): value is Request {

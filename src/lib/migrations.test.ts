@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { aPosting, freshDb } from '../test/factories'
-import { runPendingMigrations, type Migration } from './migrations'
+import { migrateImportedRecords, runPendingMigrations, type Migration } from './migrations'
 import { upsertPosting } from './repository'
 import { patchSettings, readSettings, waitForMigration } from './settings'
 import { SCHEMA_VERSION } from './types'
+import type { Posting } from './types'
 
 describe('runPendingMigrations', () => {
   it('stamps a fresh install as current without replaying history', async () => {
@@ -309,3 +310,128 @@ function migration(to: number, log: number[]): Migration {
     },
   }
 }
+
+/**
+ * The one door into the database that does not go past the version stamp.
+ *
+ * A backup restored after an upgrade carries records written by the build the
+ * user had, and the harness above would never touch them — from its point of
+ * view `dataVersion` is already current and nothing is pending. That is the
+ * silent-loss shape decision 9 exists for.
+ */
+describe('migrateImportedRecords', () => {
+  it('does nothing when the file was already current', async () => {
+    const db = await freshDb()
+    const ran: number[] = []
+
+    const applied = await migrateImportedRecords(db, 2, {
+      targetVersion: 2,
+      migrations: [migration(1, ran), migration(2, ran)],
+    })
+
+    expect(applied).toEqual([])
+    expect(ran).toEqual([])
+  })
+
+  it('applies every migration between the file’s version and this build’s', async () => {
+    const db = await freshDb()
+    const ran: number[] = []
+
+    const applied = await migrateImportedRecords(db, 1, {
+      targetVersion: 3,
+      migrations: [migration(3, ran), migration(1, ran), migration(2, ran)],
+    })
+
+    expect(applied).toEqual([2, 3])
+    expect(ran).toEqual([2, 3])
+  })
+
+  // A panel reading through a half-rewritten table gets the same wrong answer
+  // whichever door the rewrite came in by.
+  it('raises the migration flag while it works and clears it after', async () => {
+    const db = await freshDb()
+    let flagDuring: boolean | null = null
+
+    await migrateImportedRecords(db, 1, {
+      targetVersion: 2,
+      migrations: [
+        {
+          to: 2,
+          description: 'observes the flag',
+          run: async () => {
+            flagDuring = (await readSettings()).migrationInProgress
+          },
+        },
+      ],
+    })
+
+    expect(flagDuring).toBe(true)
+    expect((await readSettings()).migrationInProgress).toBe(false)
+  })
+
+  it('clears the flag even when a migration throws', async () => {
+    const db = await freshDb()
+
+    await expect(
+      migrateImportedRecords(db, 1, {
+        targetVersion: 2,
+        migrations: [
+          {
+            to: 2,
+            description: 'fails',
+            run: async () => {
+              throw new Error('no')
+            },
+          },
+        ],
+      }),
+    ).rejects.toThrow('no')
+
+    expect((await readSettings()).migrationInProgress).toBe(false)
+  })
+
+  /**
+   * `dataVersion` records what this *database* has been through, and it is
+   * already current — the imported records were the only things behind.
+   */
+  it('leaves the database’s own version stamp alone', async () => {
+    const db = await freshDb()
+    await patchSettings({ dataVersion: 5 })
+    const ran: number[] = []
+
+    await migrateImportedRecords(db, 1, {
+      targetVersion: 2,
+      migrations: [migration(2, ran)],
+    })
+
+    expect((await readSettings()).dataVersion).toBe(5)
+  })
+
+  it('backfills the join keys of a record that arrived from a v1 export', async () => {
+    const db = await freshDb()
+    // What a phase 1 build stored: the fields existed but held whatever the
+    // caller sent.
+    await db.postings.add({
+      ...(aPosting({
+        id: 'old',
+        company: 'Initech Inc.',
+        url: 'https://boards.greenhouse.io/initech/jobs/9?utm_source=x',
+      }) as Posting),
+      schemaVersion: 1,
+      createdAt: 1,
+      updatedAt: 1,
+      companyNormalized: 'Initech Inc.',
+      canonicalUrl: 'https://boards.greenhouse.io/initech/jobs/9?utm_source=x',
+    })
+
+    await migrateImportedRecords(db, 1)
+
+    const migrated = await db.postings.get('old')
+    expect(migrated?.companyNormalized).toBe('initech')
+    expect(migrated?.canonicalUrl).toBe('https://boards.greenhouse.io/initech/jobs/9')
+    expect(migrated?.schemaVersion).toBe(2)
+    // Correcting a key is not an edit the user made; bumping this would reorder
+    // their list.
+    expect(migrated?.updatedAt).toBe(1)
+  })
+})
