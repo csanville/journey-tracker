@@ -297,6 +297,18 @@ export async function getDetectionSummary(tabId: number): Promise<DetectionSumma
 }
 
 /**
+ * Every tab currently holding a detection.
+ *
+ * Bounded to `MAX_CACHED_TABS`, so iterating it is cheap by construction. It
+ * exists for the operations that change the *record set* rather than a single
+ * page — a wipe, a restore — after which every badge painted from a detection
+ * is a claim that has to be re-checked.
+ */
+export async function cachedTabIds(): Promise<number[]> {
+  return Object.keys(await readCache()).map(Number)
+}
+
+/**
  * The snapshot for a detection id, wherever it is cached.
  *
  * Looked up by id rather than by tab because by the time the user saves, the tab
