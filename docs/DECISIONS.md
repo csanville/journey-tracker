@@ -622,9 +622,70 @@ of submission, using the user as the signal instead of a heuristic.
 would have saved them. Confirmation detection, when built, is per-ATS and needs
 its own signals alongside the parse adapters.
 
+**Amended — the ceiling is decision 2, not detector quality.** Phase 8 scoped
+this and found the entry had been reasoning about the wrong constraint. The
+paragraph above argues that detection is *unreliable*; the binding fact is that
+on almost every site it is **impossible**.
+
+Detecting a submission needs code running on the page at the moment it happens,
+and this extension has exactly two ways to put code on a page: the content
+script the manifest declares, and an `activeTab` injection granted by a gesture.
+`activeTab` is revoked on navigation — which is what a submission usually is —
+and the injected bundle is a one-shot reader besides. So Workday, iCIMS, Ashby,
+SmartRecruiters, LinkedIn Easy Apply and every board embedded in a company's own
+careers page are out of reach, and no improvement in heuristics moves them. The
+only thing that would is `<all_urls>`, which decision 2 exists to refuse.
+
+The value is inverted by the same fact, which is the part worth remembering
+before anyone plans this again: detection can only run on the boards where the
+flow already works best — the panel auto-fills, the revisit banner answers, the
+record is one click away. The long tail, where the user does the most work, is
+exactly the part that cannot be reached. A general "submission detection"
+feature is therefore not a thing this extension can have, and describing what
+ships as one would be a claim that outruns what is true.
+
+**Amended — what one board actually gives, and what another refuses to.** What
+survives is not a heuristic at all. A submitted Greenhouse application lands on
+`job-boards.greenhouse.io/<token>/jobs/<id>/confirmation`: a real page load,
+publicly indexed, carrying the job id, so it joins back to a stored record by
+URL. `lib/confirmation.ts` matches that one shape and nothing else.
+
+Two implementation facts fell out of it that were not obvious:
+
+- **The join must run against the record set, never the detection cache.**
+  Decision 15's `onUpdated` listener drops a tab's detection on a real page
+  load, and a confirmation page is one — so the detection for the posting being
+  confirmed is already gone when the confirmation arrives. The worker cannot
+  special-case it either, because `changeInfo.url` is withheld without the
+  `tabs` permission.
+- **The content script filters; the worker decides.** The script sends only when
+  a URL matches, so ordinary navigation costs no message and does not wake the
+  worker (decision 9 rests on it being idle enough to be torn down). The worker
+  re-runs the derivation itself, because deciding that somebody applied to
+  something belongs on the trusted side of the boundary — the same reasoning as
+  `sanitizeReport`.
+
+**Lever gets nothing, and the reason is a decision rather than an omission.** Its
+apply form is a distinct URL, which is a usable *intent* signal, but the page
+after a successful submission is an employer-configurable "Application Success
+Page URL" that may redirect off-host entirely. There is no stable shape to match
+**by design**, and inventing one would be this document's most repeated failure
+(decision 3): a mechanism recorded as working when only its existence was
+checked. A test pins the absence so a future guess has to argue with it.
+
+A prompt is also raised only for a posting **already stored**. Manufacturing a
+record from a confirmation page — which carries no employer, title or
+description worth trusting — would put junk in the tracker to save one click.
+
 **Revisit when.** A detector reaches a precision on real submissions high enough
 that silent writes would not manufacture history. Auto-writing without a prompt
 needs stronger evidence than auto-prompting did.
+
+Note what would *not* be enough on its own: the Greenhouse signal is essentially
+exact, and it is still behind a prompt, because precision on one board says
+nothing about a mechanism and the failure mode of a wrong silent write is a
+history the user cannot tell is wrong. Widening coverage is the other axis, and
+it is gated on decision 2 rather than on this entry.
 
 ---
 
@@ -1083,3 +1144,71 @@ that read before a create.
 point `tabs.query` becomes the simpler implementation and this bookkeeping can
 go. Adding the permission *for* this would be the wrong trade — it is a
 broad-reading permission bought to save twenty lines.
+
+---
+
+## 18. What happened after applying is two fields, not more states
+
+**Decision.** `state` keeps its two values (decision 8). What the employer did is
+recorded on two further fields: `stage`, the furthest point the application
+reached, and `outcome`, how it ended. Neither is ever a value on `state`.
+
+**Why.** They answer different questions. `state` is about the *user* — did you
+send it — and decision 8 is emphatic that it must not be inferred from anything.
+`stage` and `outcome` are about the *employer*, and folding them into one enum
+loses information that cannot be reconstructed.
+
+The case that settles it is the commonest real result in a job search: **rejected
+after two interviews**. A single ladder — `viewed | applied | interviewing |
+rejected | …` — can say one of those things. Such a record would show as
+`rejected` and drop out of the interview count the moment the rejection arrived,
+silently understating the interview rate, which is one of the two numbers
+somebody opens a dashboard to find. That is the shape `ROADMAP.md` has been
+counting since phase 3 under "a claim that outruns what is true", reached here
+through a schema choice rather than a rendering one.
+
+Two axes also fail better as they grow. A fourth outcome added to a linear enum
+changes what every existing query means; a fourth value on an axis does not.
+
+**Consequences.**
+
+*"No response" is not a value, and that is the point.* It is `stage === null &&
+outcome === null`, and how long the silence has lasted is derived from
+`appliedAt`. A field the user has to maintain by hand to stay true will be wrong
+within a week — nobody returns to a record to tick "still no reply" — whereas a
+value derived from a timestamp is correct whenever it is read. `silence()` is the
+only view in phase 8 that needed no new field at all, and that is a feature of
+the model rather than a coincidence.
+
+*Two axes admit combinations, and most of them are real.* Only two cannot mean
+anything, and `resolveProgress` settles those at the single writer (decision 4):
+a posting never applied to carries neither field, and an accepted offer implies
+the offer stage. Everything else is left exactly as sent — in particular
+`outcome: 'rejected'` with `stage: null`, which is not a contradiction but the
+ordinary case of being turned down without ever reaching a screen. Flooring it
+would invent a conversation that did not happen.
+
+*`stage` is monotonic, so the funnel is a funnel.* Each row is a subset of the one
+above it and the counts can only fall, by construction rather than by luck. That
+is what makes it honest to draw as a taper where the `viewed`/`applied` funnel —
+two exclusive states, not successive ones — is not.
+
+*"Heard back" is asked positively.* `heardBack` tests "reached at least the first
+stage", not `stage !== null`, and a rejection counts because a rejection is an
+answer while withdrawing is not. The positive form is also the safe one: a
+malformed record answers false, where the negative test answers true and inflates
+the rate. Wrong low is recoverable; wrong high reads as good news.
+
+*A nullable field still ships with a migration.* Records written at version 2
+read back with these properties absent, and `undefined` is not `null` in the CSV
+writer, the export validator, or anything that round-trips a record. Schema
+version 3 backfills them so the table is one shape. Neither field is indexed, so
+there is no Dexie structural upgrade and the dashboard's schema-less reader is
+unaffected (decision 4, amended) — pinned by a test, because the next release
+that *does* add an index needs to notice.
+
+**Revisit when.** A third axis is genuinely needed — an interview *count*, or
+per-round dates, are the plausible ones — or when the external tracker of
+decision 7 settles and wants to write outcomes in from email. Adding a value to
+either existing axis is an ordinary change and needs no revisit; adding a value
+to `state` needs decision 8, not this entry.

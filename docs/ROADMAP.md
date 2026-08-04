@@ -16,7 +16,7 @@ then merged.
 | 5 ✅ | `feat/live-sync`, `feat/activetab-capture` | Tab listeners, swap rules, dirty banner, revisit warning, toolbar badge, `activeTab` capture for unknown sites | Tab between postings; the form follows, and a posting already tracked says so before you type |
 | 6 ✅ | `feat/export-import` | JSON lean/full round-trip, CSV report, skip-duplicate import, snapshot retention sweep | Export, wipe, re-import — data identical |
 | 7 ✅ | `feat/dashboard` | Extension-page dashboard; `liveQuery` over a schema-less read connection; status funnel, over time, per-board yield | Patterns visible across saved data |
-| 8 | `feat/submit-detect` | Submission heuristics behind a prompt | Prompt fires on a real submission |
+| 8 ✅ | `feat/outcomes`, `feat/submit-detect` | Schema v3 `stage`/`outcome`; response funnel, endings and silence on the dashboard; Greenhouse confirmation-URL detection behind a prompt | The dashboard says what happened after you applied, and a real Greenhouse submission raises a prompt |
 | later | — | Workday, Ashby, iCIMS, SmartRecruiters adapters; diagnostics action | — |
 
 ## Phase 1 — schema and storage
@@ -487,6 +487,155 @@ Also worth noting about the first one: the tests missed it because the only
 `beforeWindow` case in the suite had *both* timestamps outside the window, so a
 non-zero `tracked` masked the asymmetric path. A fixture that exercises two
 fields together will not catch a bug that needs them to disagree.
+
+## Phase 8 — outcomes, and the one submission signal that is not a heuristic
+
+The phase that was planned as one thing and turned out to be another. It is
+worth recording why, because the finding outlives the feature.
+
+### The premise did not survive decision 2
+
+This file's phase 8 was `feat/submit-detect`, "submission heuristics behind a
+prompt". Scoping it started from the obvious question — how reliable can the
+heuristics be? — and never got there, because a prior question settles it.
+
+Detecting a submission needs code running on the page **at the moment of
+submission**. This extension has exactly two ways to get code onto a page: the
+content script the manifest declares, and an `activeTab` injection granted by a
+gesture. `activeTab` is revoked on navigation, and a submission usually *is* a
+navigation; `injected.ts` is a one-shot reader besides. So Workday, iCIMS,
+Ashby, SmartRecruiters, LinkedIn Easy Apply and every board embedded in a
+company's own careers page are not *hard* to detect. They are **structurally
+undetectable** without `<all_urls>`, which decision 2 exists to keep out of the
+manifest.
+
+That reframes the whole phase. It is not a heuristic-quality problem that better
+parsing could improve — it is a permissions boundary, and the only way through
+it is a trade decision 2 already refused.
+
+**The value was also inverted.** Detection can only run on the two boards where
+the flow already works best: the panel auto-fills, the revisit banner answers,
+and the record is one click away. Decision 12 priced manual save at exactly that
+one click. The long tail — where the user does the most work, right-clicking to
+capture and then typing — gets nothing. A phase spending its whole budget where
+it is least needed is a phase to rescope.
+
+### What survived, and what replaced it
+
+Two things.
+
+**One signal that is not a heuristic.** A submitted Greenhouse application lands
+on `job-boards.greenhouse.io/<token>/jobs/<id>/confirmation` — a real page load,
+publicly indexed, carrying the job id, so it joins straight back to a stored
+record by URL. The resident content script's `watchUrl` already sees every URL
+change. `lib/confirmation.ts` is a URL match and nothing else: no submit-event
+interception, no fetch watching, no MutationObserver on confirmation text.
+
+A `submit` listener *would* work in the isolated world, and is worse: it fires
+on **attempt**, so validation failures and network errors look identical to
+success. The confirmation navigation only happens when the application actually
+went in.
+
+**Lever is deliberately absent**, and the reason is the interesting one. Its
+apply form is a distinct URL (`/<company>/<id>/apply`), which is a fine *intent*
+signal — but the page after a successful submission is an employer-configurable
+"Application Success Page URL" that can redirect off-host entirely. There is no
+stable shape to match, **by design**. Guessing at one would be decision 3's
+recurring failure exactly: a mechanism recorded as working because its existence
+was checked rather than its behaviour. `confirmation.test.ts` pins the absence,
+so a later change that adds a guessed Lever pattern has to delete a test and
+argue with the reason written beside it.
+
+**The phase that signal was always the front end of.** Phase 7's "deliberately
+not" named response and outcome tracking as the obvious next view and said why
+it could not be one: "the schema has two states (decision 8) and adding a third
+is a schema change with a migration, not a dashboard feature." That is the rest
+of phase 8.
+
+### Two axes, not a third state
+
+`state` is unchanged. Decision 8's "`applied` is never inferred" is about *the
+user's* action; an outcome is about *the employer's* response, and they are two
+questions (decision 18).
+
+- `stage` — `screening` | `interviewing` | `offer`, the **furthest** point
+  reached, so it only moves forward.
+- `outcome` — `rejected` | `withdrawn` | `accepted`, or `null` while still open.
+
+The case that forces two fields is the commonest real result in a job search:
+**rejected after two interviews**. A single ladder can say one of those. Such a
+record would drop out of the interview count the moment the rejection arrived,
+silently understating the interview rate — the "claim that outruns what is true"
+shape this file has been counting since phase 3, arriving through a schema
+decision rather than a rendering one.
+
+**"No response" is deliberately not a value.** It is both fields `null`, and how
+long it has been silent comes from `appliedAt`. A field the user must maintain
+by hand to stay true will go stale, because nobody returns to a record to tick
+"still no reply"; a value derived from time is always true. `silence()` is the
+one view in the phase that needed no new field at all.
+
+The combination that looks wrong and is not: **`rejected` with no stage.** That
+is being turned down without ever reaching a screen, which is most rejections.
+`resolveProgress` settles only the two combinations that genuinely cannot mean
+anything — progress on a posting never applied to, and an offer accepted without
+an offer — and leaves that one alone.
+
+### Done when
+
+The dashboard says what happened after you applied — and, specific to this
+phase, when the response funnel's rows can only narrow, because each is a subset
+of the one above it rather than a separate bucket that happens to be smaller.
+
+**Shipped**, across two branches on phase 5's precedent — `feat/outcomes` for
+the schema, form, dashboard and backup, `feat/submit-detect` for the half with
+the uncertainty in it, so it could be read and reverted on its own.
+
+Four things are worth recording.
+
+**A nullable field still needs a migration.** Adding `stage` and `outcome` as
+`| null` looks like it needs no backfill, and that is the trap: a record written
+at version 2 reads back with the properties **absent**, and `undefined` is not
+`null` anywhere it matters. The CSV writer prints the string, the export
+validator sees a shape it does not recognise, and `resolveProgress` carries the
+absence straight back into storage. The migration makes the whole table one
+shape, which is the only state the readers were written against.
+
+**No Dexie structural upgrade, and that was load-bearing.** Neither field is
+indexed — the dashboard reads the whole table — so `db.ts` still declares
+`version(1)` and phase 7's schema-less reader is untouched. That is now pinned
+by a test living in `dashboard/db.test.ts` rather than beside `lib/db.ts`,
+because the dashboard is what pays if it stops being true.
+
+**`heardBack` asks the positive question.** It is written as "reached at least
+the first stage" rather than `stage !== null`. Same answer on well-formed data;
+safer on anything else, because a record somehow carrying `undefined` answers
+false here where the negative test answers *true* and quietly inflates the one
+rate the view exists to report. Wrong low is recoverable. Wrong high reads as
+good news.
+
+**The event union grew, and decision 16 called it.** That entry said the union
+was built to grow but that "refresh everything" would stop being the panel's
+right answer once events meant different things. The second member is exactly
+that: a submission is a question about one record, and re-reading the active
+tab's detection would neither ask it nor answer it. The panel now branches on
+`type`.
+
+### Deliberately not in phase 8
+
+- **Lever, and every board without a declared content script.** See above. This
+  is a permissions boundary, and the honest thing is to state it rather than
+  ship a detector that works on one board and is described as if it worked
+  generally.
+- **A prompt for a page with no record behind it.** If someone applied without
+  ever saving the posting, the extension declines to manufacture one: a
+  confirmation page carries no employer, title or description worth trusting,
+  and a junk record to save one click is a bad trade for a tracker.
+- **Writing without asking.** Decision 12's revisit condition asks for a
+  detector precise enough that silent writes would not manufacture history. One
+  URL match on one board is not that, and this phase does not argue otherwise.
+- **Response detection from email.** That is decision 7's external tracker, and
+  it is still early.
 
 ## Recurring shapes
 
