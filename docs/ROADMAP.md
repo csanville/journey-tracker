@@ -249,6 +249,35 @@ whoever wrote the job posting. The guard fires on ordinary text too — a note
 beginning "- called back" gets an apostrophe — which is the right direction to
 be wrong in for a report that is never parsed back.
 
+### What review changed
+
+Fifteen defects across two rounds, and the useful thing about them is that they
+clustered. Almost none were in the storage layer; they were in **what the code
+said about what it had done**.
+
+- A count that promised more than the database held — pages inserted and swept
+  by the retention cap in the same breath, reported as added.
+- A summary that under-reported a partial import, because the refresh sat on the
+  success path only, so four hundred records genuinely written showed as
+  nothing.
+- A destructive dialog that said "Erase 0 records" over a full database, because
+  the count falls back to zero before the worker answers.
+- A `lastBackupAt` asserting a file had been written when all that can be
+  observed is that one was offered.
+- Two checks that contradicted their own comments: `formatVersion !==` refusing
+  older files the comment above it promised to accept, and a formula guard
+  naming `\t` and `\r` where the docs claimed all leading whitespace.
+- A uniqueness check that read before the loop, so it tested the batch against
+  the past and not against itself.
+- A migration that ran but recorded nothing, so an interrupted chain could never
+  be resumed — a protection that executed without leaving evidence it had, which
+  is decision 3's recurring pattern wearing a new face.
+- Badges left asserting records a wipe had just deleted.
+
+Worth carrying into phase 7: the dashboard is nothing *but* claims about the
+record set, and every defect above was a claim that outran what was actually
+true.
+
 ## Changes from the original plan
 
 - **Records moved from `chrome.storage.local` to IndexedDB** (decision 3). The

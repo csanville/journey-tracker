@@ -752,6 +752,64 @@ performs Dexie's structural upgrade on the next release adding an index — and
 that upgrade would then be racing the worker's own connection. The read half
 being marginally cheaper is not worth putting a schema upgrade in the UI.
 
+**Amended — "never overwrites" has to hold against the file, not just the
+store.** Review found the rule enforced by a single `bulkGet` taken before any
+write, so two records sharing an id *within one batch* both saw nothing stored,
+both counted as imported, and the last one won. A record lost, and the summary
+reporting it restored. An export cannot produce this — ids are keys there — but a
+file hand-merged from two machines or two backups concatenated can, and those are
+exactly the files somebody assembles when they are trying hard not to lose
+anything. The general shape is worth naming, because it recurs wherever a batch
+is checked against a store: **a uniqueness check that reads before the loop
+tests the batch against the past, not against itself.**
+
+**Amended — a count of what was written is a promise, and the retention cap can
+break it.** The snapshot sweep runs after each import batch, so restoring a
+year-old `full` backup into a database of newer captures inserted every page and
+reclaimed it immediately — while reporting hundreds added. Pages are counted
+after the sweep now, and the reclaimed ones are reported separately as
+*dropped*: they are neither imported nor skipped, and that number is the only
+place the 500-page limit is ever visible to a user. A restore that silently kept
+none of its pages would otherwise read exactly like one that kept them all.
+
+**Amended — the migration debt needs somewhere durable to live.** The importer's
+migration (above) originally ran inline and recorded nothing, which failed twice
+over. It ran once per 200-record batch, rewriting the whole table each time — 25
+full passes for a 5,000-record restore, flapping `migrationInProgress` at every
+waiting reader — and a chain interrupted between two steps left records at an
+intermediate version with **nothing that would ever finish them**, since
+`dataVersion` was already current before the import began.
+
+So the debt is written down: `importedBelowVersion` in settings, set before the
+work, stepped after each migration, cleared on completion, and checked by the
+worker at every start. The migration itself is deferred to the last batch, which
+the panel flags — only the panel knows where a file ends. A run that never
+reaches that flag, because a batch failed or the panel closed, is finished at the
+next worker start rather than lost.
+
+This is the third time in this document that a protection turned out to be
+declared rather than executed (decision 3 names the pattern). Here the
+declaration was a function that ran; what was missing was any record that it had.
+
+**Amended — a wipe and a restore move every badge at once.** Neither operation
+told anybody. The badge is painted from a detection-to-record match, so it is a
+claim about the *record set* as much as about the page (decision 16) — and these
+are the only two operations that move the record set under every open tab
+simultaneously. Erasing everything left tabs asserting records that had just been
+deleted, contradicting the panel's own revisit banner, which re-queries; a
+restore left them dark on pages it had just tracked. Both now re-answer the
+question for every tab holding a detection, which the cache's eight-tab bound
+makes cheap however large the import was.
+
+**Amended — the destructive dialog must not be reachable before the counts
+are.** Every count in the panel falls back to zero while the worker has not
+answered, so the erase confirmation asked "Erase 0 records and 0 pages?" over a
+full database — understating the stakes in the one place that must not — and the
+milder of its two warnings won, because `status?.lastBackupAt === null` is false
+for `undefined`. Guarding the button was not enough, since the confirmation
+outlives a status that goes away. The general rule: **a fallback value chosen for
+a quiet UI becomes a lie in a dialog that asks for consent.**
+
 **Amended — the CSV needed a security decision the entry did not anticipate.**
 Every string in a record was chosen by whoever wrote the job posting. Excel and
 Sheets evaluate a cell that opens with `=`, `+`, `-` or `@`, and a formula is not
@@ -761,10 +819,34 @@ the apostrophe that spreadsheets use to mark text. It fires on ordinary text as
 well (a note beginning "- called back" gets one), which is the right direction to
 be wrong in for a file that is never parsed back.
 
+The guard tests for **any** leading whitespace as well as the four characters,
+which the first implementation got wrong by naming `\t` and `\r` specifically:
+spreadsheets trim a field before deciding what it is, so a single leading space —
+entirely ordinary in scraped markup — walked straight through it.
+
 The file also carries a UTF-8 BOM, without which Excel decodes it as the system
 codepage and mangles every accented company name, and uses CRLF per RFC 4180.
 None of this makes CSV a format — the leading zeros in a requisition id are still
 lost, which is the concession this decision started from.
+
+**Amended — the envelope check refused files older than itself.** It tested
+`!==`, contradicting this entry's own reasoning: the whole point of versioning
+the envelope apart from the records is that an importer can take a file older
+than it is. On the first bump that check would have orphaned every backup already
+on disk — for a format whose stated purpose is surviving this extension, with no
+retroactive fix available to somebody holding the only copy of their history. It
+refuses what it cannot open (`>`), and nothing else.
+
+**Amended — what `lastBackupAt` can honestly claim.** A blob and an `<a
+download>` click have no completion signal, and acquiring one means the
+`downloads` permission and an install warning (decision 2). So a cancelled
+Save-As, or a download a policy blocked, still stamps the date. That matters
+because the only consumer is the erase confirmation, where a phantom backup would
+silence exactly the warning it exists to raise. The resolution is not to pretend:
+what is recorded is that a file was *offered*, and the dialog names the date and
+asks the user to check the file is still there rather than asserting a restore is
+possible. **A value that cannot be verified should be worded as what it actually
+observed.**
 
 **Revisit when.** A real merge case appears — the same history edited on two
 machines. That needs `updatedAt` (decision 10) and an explicit conflict UI, not a
