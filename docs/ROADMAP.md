@@ -17,7 +17,8 @@ then merged.
 | 6 ✅ | `feat/export-import` | JSON lean/full round-trip, CSV report, skip-duplicate import, snapshot retention sweep | Export, wipe, re-import — data identical |
 | 7 ✅ | `feat/dashboard` | Extension-page dashboard; `liveQuery` over a schema-less read connection; status funnel, over time, per-board yield | Patterns visible across saved data |
 | 8 ✅ | `feat/outcomes`, `feat/submit-detect` | Schema v3 `stage`/`outcome`; response funnel, endings and silence on the dashboard; Greenhouse confirmation-URL detection behind a prompt | The dashboard says what happened after you applied, and a real Greenhouse submission raises a prompt |
-| later | — | Workday, Ashby, iCIMS, SmartRecruiters adapters; diagnostics action | — |
+| 9 | `feat/edit-record` | Editing a saved posting from the panel — the capability phase 7's docs assumed already existed, and which phase 8's fields need to be worth anything | Change a record's stage and outcome weeks after saving it, without writing a second record |
+| later | — | Workday, Ashby, iCIMS, SmartRecruiters adapters; diagnostics action; wire up `waitForMigration`; persist a pending submission prompt | — |
 
 ## Phase 1 — schema and storage
 
@@ -420,6 +421,14 @@ records, and only one of them should ever render as "nothing here yet".
 
 - **Editing from the dashboard.** It reads. Decision 4 forbids the write, and the
   panel is where a record is edited.
+
+  > **Corrected in phase 8.** The second clause was not true when it was
+  > written and is still not. The panel has no edit path either: `PostingForm`
+  > always saves under a freshly generated id and never loads a stored record,
+  > and `RecentPostings` is inert. Nothing in this extension can change a
+  > posting after it is first saved. The sentence read as a statement of where
+  > the capability lives; it was a statement of where it *would* live. See
+  > phase 9.
 - **Response and outcome tracking.** A funnel from `applied` to *heard back* is
   the obvious next view and there is nowhere to store the answer: the schema has
   two states (decision 8) and adding a third is a schema change with a migration,
@@ -620,6 +629,78 @@ right answer once events meant different things. The second member is exactly
 that: a submission is a question about one record, and re-reading the active
 tab's detection would neither ask it nor answer it. The panel now branches on
 `type`.
+
+### The limit this phase ships with
+
+**`stage` and `outcome` can only be set when a posting is first saved.** Review
+found it, and it is the most important thing on this page.
+
+There is no edit path anywhere in the extension. `PostingForm` always saves
+under a freshly generated id and never loads a stored record; `RecentPostings`
+is inert; the dashboard reads only (decision 4). The only writes to an existing
+record are the submission prompt, which touches `state` and `appliedAt`, and an
+import. The duplicate prompt's "Save anyway" writes a *second* record.
+
+So two fields designed to change over weeks can hold only what was true at the
+moment of first save — which is almost always "nothing heard yet" and "still
+open". **The response funnel will read `N still open` indefinitely**, and
+re-entering a job to record its rejection double-counts it in `funnel.applied`
+and `responseFunnel.applied`, deflating the very rates the section exists to
+report.
+
+This is written here rather than left implicit because the alternative is a
+dashboard section that looks authoritative and is inert — which is this
+project's oldest recurring failure wearing yet another face. Phase 8 is
+therefore **not finished by its own standard** until phase 9 lands; what shipped
+is the schema, the arithmetic and the surfaces, with the one interaction that
+makes them mean anything still missing.
+
+Two smaller gaps, recorded rather than fixed:
+
+- **`waitForMigration` has never had a production caller.** Decision 9 says "the
+  panel and dashboard wait on that flag"; neither does, and nothing else does
+  either. It is what made the `outcomes` defect below reachable rather than
+  latent. Decision 3 names this pattern — a protection recorded as established
+  when only its declaration was checked — and this is its fourth appearance.
+- **The submission prompt needs the panel already open.** The worker broadcasts
+  and `broadcast` swallows the rejection when nothing is listening, which is the
+  ordinary case; nothing is persisted and the content script never retries. With
+  the panel closed the feature silently does nothing.
+
+### What review changed
+
+Six defects across the two branches, and they sort into the two shapes this file
+has been counting.
+
+**A claim that outran what is true**, three times, all in the phase built to
+resist them. `outcomes` and `silence` compared `outcome` against `null` while
+reading through the dashboard's own connection — which opens the database
+directly and does not wait on the worker's migration, so a record written before
+version 3 arrives with the property *absent*. `undefined` is not `null`: nothing
+landed in `open`, a phantom `undefined: NaN` key appeared, and the card read "Of
+2 applications: 0 still open, 0 rejected, 0 withdrawn, 0 accepted" over two open
+applications, while the "still waiting" line vanished entirely.
+
+The useful part is not either fix. `heardBack` was deliberately hardened against
+exactly this shape, and the two functions beside it were not — so the lesson is
+that **the defence belongs everywhere the shape can reach, not on the function
+where the argument was first made.** `resolveProgress` had the same hole, and
+worse consequences: it would have written the absence back and let
+`upsertPosting` stamp it `schemaVersion: 3`, putting the record permanently
+beyond the backfill.
+
+**A check-then-act spanning an await**, for the fourth phase running, in the
+banner added by the phase whose own section describes the shape. `onConfirm`
+cleared the prompt after an awaited write, discarding a *different* confirmation
+that arrived in the gap. Dismissal also left no mark, so a reload of the
+confirmation page re-raised a question the user had just answered — the
+"unanswered question" state decision 13's amendment exists for, reached by a new
+component that did not inherit `PostingForm`'s discipline. And the banner
+carried `saving`/`failure` across postings for want of a `key`.
+
+Also corrected: a comment claiming the repository nulls `appliedAt`. It does
+not — `resolveProgress` governs `stage` and `outcome` only — and as written it
+made a load-bearing fallback look redundant.
 
 ### Deliberately not in phase 8
 

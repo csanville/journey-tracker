@@ -556,6 +556,26 @@ migration is not itself rewriting.
 **Consequences.** Migration tests from every prior version are part of the test
 suite, and the number of them grows over time. Accepted cost.
 
+**Amended — the waiting half has never run.** The sentence above says "the panel
+and dashboard wait on that flag rather than querying through it". They do not,
+and never have. `waitForMigration` exists in `settings.ts`, is covered by seven
+tests, is named in a comment in `migrations.ts` — and has **no production caller
+anywhere**. Neither surface waits; both query straight through.
+
+Found in phase 8, when a dashboard function that trusted the migrated record
+shape turned out to be reachable with an unmigrated one, on a restored tab or
+after an upgrade whose `onInstalled` run was killed. The aggregation was
+hardened where it reads, which fixes the symptom; the flag is still not waited
+on, and that is recorded in `ROADMAP.md` rather than fixed here.
+
+This is the fourth time in this document that a protection turned out to be
+**declared rather than executed** — decision 3 names the pattern and predicted it
+would recur, and every previous instance was caught by review of the code that
+introduced it. This one survived seven phases because the mechanism was written,
+tested and then never called, which no test of the mechanism can detect. The
+check that would have caught it is: **for every guard this document says a
+surface applies, grep for the caller, not the definition.**
+
 **Revisit when.** Never.
 
 ---
@@ -676,6 +696,21 @@ checked. A test pins the absence so a future guess has to argue with it.
 A prompt is also raised only for a posting **already stored**. Manufacturing a
 record from a confirmation page — which carries no employer, title or
 description worth trusting — would put junk in the tracker to save one click.
+
+**Amended — the prompt requires the side panel to be open already.** The worker
+announces the match on the event channel, and decision 16 records that
+`broadcast` swallows its rejection because with the panel closed there is no
+receiver — the ordinary case, not the exceptional one. Nothing is persisted and
+the content script does not retry, so a submission confirmed while the panel is
+shut is simply lost.
+
+That is a real hole in a feature whose whole purpose is to catch the moment the
+user is *least* likely to be looking at the panel. It is recorded rather than
+fixed because closing it means giving the pending question somewhere durable to
+live — `chrome.storage.session` is the natural home, alongside the detection
+cache (decision 15) — and that is a change to what the panel restores on open,
+not a line in the worker. Until then the honest description of the feature is
+"notices a submission **if the panel is open**", and the README says so.
 
 **Revisit when.** A detector reaches a precision on real submissions high enough
 that silent writes would not manufacture history. Auto-writing without a prompt
@@ -1206,6 +1241,27 @@ version 3 backfills them so the table is one shape. Neither field is indexed, so
 there is no Dexie structural upgrade and the dashboard's schema-less reader is
 unaffected (decision 4, amended) — pinned by a test, because the next release
 that *does* add an index needs to notice.
+
+**Amended — the model shipped without the interaction it depends on.** Both
+fields describe a process that unfolds over weeks, and phase 8 shipped with **no
+way to change a record after it is first saved**. `PostingForm` always writes
+under a freshly generated id and never loads a stored posting; `RecentPostings`
+is inert; the dashboard reads only. So in practice every record carries the
+values that were true at the moment of first save — "nothing heard yet" and
+"still open" — and the response funnel reads `N still open` indefinitely.
+
+The decision itself is unaffected: two axes are still right, and the argument
+above is about what the schema can *express*. What it exposes is that the
+argument was made entirely about storage and never about how a value gets
+changed. **A field whose reason for existing is that it changes needs its edit
+path named in the same breath as its shape**, or the model is sound and inert.
+Phase 9 is that path.
+
+Worth noting how it was missed: phase 7's roadmap section asserted "the panel is
+where a record is edited", which read as a description of an existing capability
+and was in fact a description of an intention. Planning phase 8 took it at face
+value. A claim about what the software does, sitting in a document about what
+was decided, is exactly the sort that stops being checked.
 
 **Revisit when.** A third axis is genuinely needed — an interview *count*, or
 per-round dates, are the plausible ones — or when the external tracker of
