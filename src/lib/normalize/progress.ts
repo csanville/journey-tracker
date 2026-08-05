@@ -19,6 +19,26 @@ import type { Outcome, PostingState, Stage } from '../types'
 /** Weakest first. The order is what makes "furthest reached" comparable. */
 export const STAGE_ORDER: readonly Stage[] = ['screening', 'interviewing', 'offer']
 
+/** Unordered — an outcome is a choice, not a ladder. */
+export const OUTCOMES: readonly Outcome[] = ['rejected', 'withdrawn', 'accepted']
+
+/**
+ * Narrows an unknown to a `Stage`, or `null`.
+ *
+ * Membership rather than a null check, so `undefined` and any value outside the
+ * set land on `null` together. Both are reachable: a record written before
+ * version 3 has no such property at all, and a hand-edited import can carry
+ * anything.
+ */
+export function asStage(value: unknown): Stage | null {
+  return STAGE_ORDER.find((stage) => stage === value) ?? null
+}
+
+/** As `asStage`, for outcomes. */
+export function asOutcome(value: unknown): Outcome | null {
+  return OUTCOMES.find((outcome) => outcome === value) ?? null
+}
+
 /** What `resolveProgress` needs to decide. A `Posting` satisfies it. */
 export interface ProgressSource {
   state: PostingState
@@ -75,14 +95,22 @@ export function heardBack(progress: Pick<ProgressSource, 'stage' | 'outcome'>): 
  *   cheaper than teaching every reader downstream to special-case it.
  *
  * Idempotent, so it is safe from a migration and safe on a re-save.
+ *
+ * Both fields are narrowed through `asStage`/`asOutcome` rather than passed
+ * along, which is what makes this the single enforcement point its callers
+ * treat it as. Without it the version 3 migration's own hazard — a record whose
+ * properties are *absent*, where `undefined` is not `null` — would be carried
+ * straight back into storage by the very function documented to prevent it, and
+ * `upsertPosting` would then stamp it `schemaVersion: 3` and put it permanently
+ * beyond the backfill's reach.
  */
 export function resolveProgress(source: ProgressSource): Progress {
   if (source.state !== 'applied') return { stage: null, outcome: null }
 
-  const stage =
-    source.outcome === 'accepted' && !stageAtLeast(source.stage, 'offer')
-      ? 'offer'
-      : source.stage
+  const outcome = asOutcome(source.outcome)
+  const known = asStage(source.stage)
 
-  return { stage, outcome: source.outcome }
+  const stage = outcome === 'accepted' && !stageAtLeast(known, 'offer') ? 'offer' : known
+
+  return { stage, outcome }
 }

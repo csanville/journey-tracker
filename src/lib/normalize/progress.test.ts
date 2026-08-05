@@ -109,6 +109,31 @@ describe('resolveProgress', () => {
     })
   })
 
+  /**
+   * The hazard the version 3 migration's own docstring names. `markApplied`
+   * projects a stored record's fields and sends them back, so a record missing
+   * these properties would be written back missing them *and* stamped
+   * `schemaVersion: 3` — permanently beyond the backfill's reach.
+   */
+  it('reads an absent field as nothing rather than passing it through', () => {
+    const absent = { state: 'applied' } as unknown as Parameters<typeof resolveProgress>[0]
+
+    const resolved = resolveProgress(absent)
+
+    expect(resolved).toHaveProperty('stage', null)
+    expect(resolved).toHaveProperty('outcome', null)
+  })
+
+  it('discards values outside the schema, which a hand-edited file can carry', () => {
+    const bogus = {
+      state: 'applied',
+      stage: 'vibes',
+      outcome: 'ghosted',
+    } as unknown as Parameters<typeof resolveProgress>[0]
+
+    expect(resolveProgress(bogus)).toEqual({ stage: null, outcome: null })
+  })
+
   it('is idempotent, which is what makes it safe from a migration', () => {
     for (const input of [
       source('applied', null, 'accepted'),

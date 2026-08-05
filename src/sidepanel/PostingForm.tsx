@@ -477,6 +477,18 @@ export function PostingForm({
             <Select
               label="Furthest stage"
               value={draft.stage}
+              // Locked, not merely mirrored, while the outcome is `accepted`.
+              // The mirror below used to run in one direction only, so choosing
+              // Accepted and then correcting the stage down to Screening left
+              // the form reading Screening/Accepted while `resolveProgress`
+              // stored Offer/Accepted — the form disagreeing with the record,
+              // which is the exact thing the mirror was added to prevent.
+              // Disabling says why the control will not move; silently
+              // snapping it back would not.
+              disabled={draft.outcome === 'accepted'}
+              hint={
+                draft.outcome === 'accepted' ? 'An accepted offer implies one.' : undefined
+              }
               onChange={(v) => field('stage', v as Draft['stage'])}
               options={[
                 ['', 'Nothing heard yet'],
@@ -828,11 +840,16 @@ function Select({
   value,
   onChange,
   options,
+  disabled,
+  hint,
 }: {
   label: string
   value: string
   onChange: (value: string) => void
   options: [value: string, label: string][]
+  disabled?: boolean
+  /** Why the control reads as it does — shown in place of nothing, not an error. */
+  hint?: string
 }) {
   const id = useId()
   const rendered = useMemo(() => options, [options])
@@ -846,6 +863,8 @@ function Select({
         id={id}
         className="field__input"
         value={value}
+        disabled={disabled}
+        aria-describedby={hint ? `${id}-hint` : undefined}
         onChange={(event) => onChange(event.target.value)}
       >
         {rendered.map(([optionValue, optionLabel]) => (
@@ -854,6 +873,11 @@ function Select({
           </option>
         ))}
       </select>
+      {hint && (
+        <span className="field__hint" id={`${id}-hint`}>
+          {hint}
+        </span>
+      )}
     </p>
   )
 }
