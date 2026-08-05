@@ -17,6 +17,7 @@
  * Everything here is pure. Reading the database is the repository's job and
  * handing the user a file is the panel's; this module owns what the file *is*.
  */
+import { asOutcome, asStage, resolveProgress } from '../normalize/progress'
 import { SCHEMA_VERSION } from '../types'
 import type {
   Posting,
@@ -273,6 +274,18 @@ export function validatePosting(value: unknown): Posting | string {
     // Only meaningful once the application has gone in, which is the same rule
     // the form applies on save.
     appliedAt: state === 'applied' ? finiteNumber(value.appliedAt) : null,
+    // Through `resolveProgress` rather than repeated here, so a hand-edited file
+    // meets exactly the rules a save does. It is the enforcement point for this
+    // path: an import writes records verbatim apart from the join keys
+    // (decision 14), so nothing downstream will correct these two.
+    //
+    // `resolveProgress` narrows both fields itself, so passing them raw is
+    // deliberate rather than lazy — one place decides what a `Stage` is.
+    ...resolveProgress({
+      state,
+      stage: asStage(value.stage),
+      outcome: asOutcome(value.outcome),
+    }),
     resumeUsed: nullableString(value.resumeUsed),
     notes: nullableString(value.notes),
     tags: Array.isArray(value.tags)

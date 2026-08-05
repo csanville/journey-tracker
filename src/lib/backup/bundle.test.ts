@@ -37,6 +37,8 @@ function aRecord(overrides: Partial<Posting> = {}): Posting {
     adapterVersion: 'greenhouse@1',
     state: 'applied',
     appliedAt: 1_700_000_400_000,
+    stage: null,
+    outcome: null,
     resumeUsed: 'backend-2026',
     notes: 'Referred by Milton',
     tags: ['backend', 'remote-ok'],
@@ -255,6 +257,50 @@ describe('validatePosting', () => {
     if (typeof result === 'string') return
 
     expect(result.appliedAt).toBeNull()
+  })
+
+  /**
+   * The validator is the enforcement point for the import path, not a second
+   * opinion: an import writes records verbatim apart from the join keys
+   * (decision 14), so nothing downstream re-checks these two.
+   */
+  it('drops stage and outcome from a record that was only viewed', () => {
+    const result = validatePosting({
+      ...aRecord(),
+      state: 'viewed',
+      stage: 'offer',
+      outcome: 'accepted',
+    })
+
+    expect(typeof result).not.toBe('string')
+    if (typeof result === 'string') return
+
+    expect(result.stage).toBeNull()
+    expect(result.outcome).toBeNull()
+  })
+
+  it('discards a stage the schema does not have rather than storing it', () => {
+    const result = validatePosting({ ...aRecord(), stage: 'vibes', outcome: 'maybe' })
+
+    expect(typeof result).not.toBe('string')
+    if (typeof result === 'string') return
+
+    expect(result.stage).toBeNull()
+    expect(result.outcome).toBeNull()
+  })
+
+  it('implies the offer stage on an imported accepted offer', () => {
+    const result = validatePosting({
+      ...aRecord(),
+      state: 'applied',
+      stage: null,
+      outcome: 'accepted',
+    })
+
+    expect(typeof result).not.toBe('string')
+    if (typeof result === 'string') return
+
+    expect(result.stage).toBe('offer')
   })
 
   // Five nulls in a trench coat: `salary !== null` would be true and every

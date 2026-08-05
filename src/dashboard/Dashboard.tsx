@@ -4,11 +4,17 @@ import {
   formatBucket,
   formatRate,
   funnel,
+  outcomes,
   overTime,
   perBoard,
+  responseFunnel,
+  silence,
   type BucketSize,
+  type Outcomes,
   type OverTime,
   type PerBoard,
+  type ResponseFunnel,
+  type Silence,
 } from '../lib/dashboard/aggregate'
 import { usePostings } from './usePostings'
 
@@ -74,6 +80,9 @@ function Views({
   onSize: (size: BucketSize) => void
 }) {
   const stats = useMemo(() => funnel(postings), [postings])
+  const replies = useMemo(() => responseFunnel(postings), [postings])
+  const ended = useMemo(() => outcomes(postings), [postings])
+  const quiet = useMemo(() => silence(postings), [postings])
   const timeline = useMemo(() => overTime(postings, { size }), [postings, size])
   const boards = useMemo(() => perBoard(postings), [postings])
 
@@ -88,6 +97,11 @@ function Views({
           <Figure value={formatRate(stats.appliedRate)} label="of what you saw" />
         </div>
         <Funnel viewed={stats.viewed} applied={stats.applied} tracked={stats.tracked} />
+      </section>
+
+      <section className="card" aria-labelledby="replies-heading">
+        <h2 id="replies-heading">After you applied</h2>
+        <Replies replies={replies} ended={ended} quiet={quiet} />
       </section>
 
       <section className="card" aria-labelledby="time-heading">
@@ -193,6 +207,132 @@ function Funnel({
         <span className="funnel__value">{applied}</span>
       </div>
     </div>
+  )
+}
+
+/**
+ * What happened after the applications went in.
+ *
+ * Unlike the `Funnel` above, this one **is** drawn as a taper, and the
+ * difference is real rather than stylistic: `viewed` and `applied` are exclusive
+ * states, whereas `stage` is the furthest point a single application reached, so
+ * each row here genuinely is a subset of the one above it. The bars can only
+ * narrow.
+ *
+ * With nothing applied to, none of it is drawn. Zero percent is a finding — it
+ * says nobody replied — and a database with no applications in it has not earned
+ * the right to say that about anyone.
+ */
+function Replies({
+  replies,
+  ended,
+  quiet,
+}: {
+  replies: ResponseFunnel
+  ended: Outcomes
+  quiet: Silence
+}) {
+  if (replies.applied === 0) {
+    return (
+      <p className="empty">
+        Nothing applied to yet. Set a posting’s status to <strong>applied</strong> in the
+        side panel and this fills in.
+      </p>
+    )
+  }
+
+  const share = (n: number) => (n / replies.applied) * 100
+  const rows: Array<{ label: string; value: number; positive?: boolean }> = [
+    { label: 'Applied', value: replies.applied },
+    { label: 'Heard back', value: replies.heardBack },
+    { label: 'Interviewed', value: replies.interviewed },
+    { label: 'Offers', value: replies.offers, positive: true },
+  ]
+
+  return (
+    <>
+      <div className="figures">
+        <Figure value={formatRate(replies.responseRate)} label="replied" />
+        <Figure value={formatRate(replies.interviewRate)} label="reached an interview" />
+        <Figure value={replies.offers} label="offers" tone="positive" />
+        <Figure value={ended.open} label="still open" />
+      </div>
+
+      <div className="funnel">
+        {rows.map((row) => (
+          <div className="funnel__row" key={row.label}>
+            <span className="funnel__label">{row.label}</span>
+            <span className="funnel__track">
+              <span
+                className={`funnel__bar${row.positive ? ' funnel__bar--positive' : ''}`}
+                style={{ width: `${share(row.value)}%` }}
+              />
+            </span>
+            <span className="funnel__value">{row.value}</span>
+          </div>
+        ))}
+      </div>
+
+      <Endings ended={ended} />
+      <Waiting quiet={quiet} />
+    </>
+  )
+}
+
+/**
+ * How the closed applications closed.
+ *
+ * Every applied record is in exactly one of these four, which is what makes the
+ * line safe to read as a breakdown rather than as four unrelated counts. The
+ * zeros are printed rather than skipped: "0 offers" out of forty applications is
+ * the finding, and dropping it would leave the reader to infer it from a gap.
+ */
+function Endings({ ended }: { ended: Outcomes }) {
+  return (
+    <p className="note">
+      Of {ended.applied} {ended.applied === 1 ? 'application' : 'applications'}:{' '}
+      {ended.open} still open, {ended.rejected} rejected, {ended.withdrawn} withdrawn,{' '}
+      {ended.accepted} accepted.
+    </p>
+  )
+}
+
+/**
+ * The applications nobody has answered.
+ *
+ * Derived from `appliedAt` rather than stored, which is the point — nobody goes
+ * back to a record to tick "still no reply", so a field would be wrong within a
+ * week and this cannot be.
+ *
+ * `undateable` is reported on its own terms and gated on its own count, not on
+ * `waiting`. That is phase 7's defect exactly: a residual hidden whenever the
+ * other half of its condition happened to be zero.
+ */
+function Waiting({ quiet }: { quiet: Silence }) {
+  if (quiet.unanswered === 0) return null
+
+  const notes: string[] = []
+
+  if (quiet.waiting > 0) {
+    notes.push(
+      `${quiet.waiting} ${quiet.waiting === 1 ? 'has' : 'have'} had no reply for ` +
+        `${quiet.thresholdDays} days or more` +
+        (quiet.longestWaitDays === null
+          ? ''
+          : `, the longest ${quiet.longestWaitDays} days`),
+    )
+  }
+  if (quiet.recent > 0) notes.push(`${quiet.recent} sent recently`)
+  if (quiet.undateable > 0) {
+    notes.push(
+      `${quiet.undateable} with no date recorded, so ${quiet.undateable === 1 ? 'it cannot' : 'they cannot'} be aged`,
+    )
+  }
+
+  return (
+    <p className="note">
+      {quiet.unanswered} still waiting on a first reply: {notes.join('; ')}.
+    </p>
   )
 }
 

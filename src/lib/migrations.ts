@@ -1,5 +1,5 @@
 import type { JourneyTrackerDb } from './db'
-import { deriveJoinKeys } from './normalize'
+import { deriveJoinKeys, resolveProgress } from './normalize'
 import { patchSettings, readSettings } from './settings'
 import { SCHEMA_VERSION } from './types'
 
@@ -56,7 +56,48 @@ const backfillJoinKeys: Migration = {
   },
 }
 
-export const MIGRATIONS: Migration[] = [backfillJoinKeys]
+/**
+ * Version 3 adds `stage` and `outcome` — what happened *after* an application,
+ * as opposed to `state`, which is what the user did (decision 8).
+ *
+ * Adding a field that is allowed to be null looks like it needs no migration,
+ * and that is the trap. A record written at version 2 reads back with these
+ * properties **absent**, and `undefined` is not `null` anywhere it matters: the
+ * CSV writer would print the string `undefined`, the export validator would see
+ * a shape it does not recognise, and `resolveProgress` would carry the absence
+ * straight back into storage. Backfilling makes the whole table one shape, which
+ * is the only state the readers are written against.
+ *
+ * `resolveProgress` is reused rather than hardcoding two nulls, so the rule
+ * about what may accompany a non-`applied` record lives in exactly one place —
+ * and so a record already carrying the fields, from a re-run or a future export,
+ * is corrected rather than trusted. `updatedAt` is untouched for the same reason
+ * as version 2: this is not an edit the user made, and bumping it would reorder
+ * their list.
+ */
+const backfillOutcomes: Migration = {
+  to: 3,
+  description: 'add stage and outcome to existing records',
+  async run(db) {
+    await db.transaction('rw', db.postings, async () => {
+      const stored = await db.postings.toArray()
+
+      const rewritten = stored.map((posting) => ({
+        ...posting,
+        ...resolveProgress({
+          state: posting.state,
+          stage: posting.stage ?? null,
+          outcome: posting.outcome ?? null,
+        }),
+        schemaVersion: 3,
+      }))
+
+      if (rewritten.length > 0) await db.postings.bulkPut(rewritten)
+    })
+  },
+}
+
+export const MIGRATIONS: Migration[] = [backfillJoinKeys, backfillOutcomes]
 
 export interface MigrationOutcome {
   from: number

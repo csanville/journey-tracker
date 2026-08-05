@@ -14,7 +14,7 @@ import type { JourneyTrackerDb } from '../lib/db'
 import { handleRequest } from '../lib/handler'
 import type { Request } from '../lib/messages'
 import * as repo from '../lib/repository'
-import type { Posting, Snapshot } from '../lib/types'
+import type { Posting, PostingInput, Snapshot } from '../lib/types'
 import { aPosting, freshDb } from '../test/factories'
 import {
   backupFilename,
@@ -31,6 +31,41 @@ function connect(db: JourneyTrackerDb): void {
     handleRequest(db, message as Request)) as never)
 }
 
+/**
+ * A spread of what phase 8 made storable, cycling so a seed of any size covers
+ * all five: never applied, applied and waiting, rejected without ever reaching
+ * a stage, rejected after interviews, and an accepted offer.
+ */
+function progressFor(index: number): Partial<PostingInput> {
+  switch (index % 5) {
+    case 0:
+      return { state: 'viewed', appliedAt: null, stage: null, outcome: null }
+    case 1:
+      return { state: 'applied', appliedAt: 1_700_000_000_000, stage: null, outcome: null }
+    case 2:
+      return {
+        state: 'applied',
+        appliedAt: 1_700_000_000_000,
+        stage: null,
+        outcome: 'rejected',
+      }
+    case 3:
+      return {
+        state: 'applied',
+        appliedAt: 1_700_000_000_000,
+        stage: 'interviewing',
+        outcome: 'rejected',
+      }
+    default:
+      return {
+        state: 'applied',
+        appliedAt: 1_700_000_000_000,
+        stage: 'offer',
+        outcome: 'accepted',
+      }
+  }
+}
+
 async function seed(db: JourneyTrackerDb, count: number): Promise<Posting[]> {
   const written: Posting[] = []
 
@@ -44,6 +79,10 @@ async function seed(db: JourneyTrackerDb, count: number): Promise<Posting[]> {
           jobTitle: `Engineer ${index}`,
           url: `https://boards.greenhouse.io/employer${index}/jobs/${index}`,
           notes: index % 2 === 0 ? 'Called back, second round on Tuesday' : null,
+          // Records that differ in `stage` and `outcome`, so a field dropped on
+          // the way through the file fails the identity assertion rather than
+          // round-tripping vacuously as five identical nulls would.
+          ...progressFor(index),
         }),
       ),
     )

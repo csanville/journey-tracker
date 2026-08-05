@@ -61,6 +61,26 @@ describe('openForReading', () => {
     reader.close()
   })
 
+  /**
+   * Schema version 3 added `stage` and `outcome` to every record and
+   * deliberately indexed neither, so it needed no `version().stores()` bump —
+   * a data migration, not a structural upgrade (the distinction `lib/db.ts`
+   * draws in its own header).
+   *
+   * This is here rather than beside `lib/db.ts` because the dashboard is what
+   * pays if it stops being true. A structural upgrade added without thinking
+   * about this file is exactly the release the tests above describe: whichever
+   * context declares the higher version performs the upgrade, and the reader is
+   * built never to be that context.
+   */
+  it('needed no structural upgrade for the version 3 fields', async () => {
+    const name = dbName()
+    const worker = await workerDb(name)
+
+    expect(worker.verno).toBe(1)
+    worker.close()
+  })
+
   it('never downgrades a database newer than the build it is running in', async () => {
     const name = dbName()
     const ahead = new Dexie(name)

@@ -45,6 +45,65 @@ describe('postings', () => {
     expect(await getPosting(db, 'nope')).toBeNull()
   })
 
+  /**
+   * The `stage`/`outcome` invariants, asserted through the real write path
+   * rather than against `resolveProgress` directly — that function is already
+   * covered, and what matters here is that `upsertPosting` actually routes
+   * through it. Decision 4 makes this the one place the rule binds.
+   */
+  it('refuses to store progress on a posting that was only looked at', async () => {
+    const db = await freshDb()
+
+    const written = await upsertPosting(
+      db,
+      aPosting({ state: 'viewed', stage: 'interviewing', outcome: 'rejected' }),
+    )
+
+    expect(written.stage).toBeNull()
+    expect(written.outcome).toBeNull()
+  })
+
+  it('implies the offer stage when an offer was accepted', async () => {
+    const db = await freshDb()
+
+    const written = await upsertPosting(
+      db,
+      aPosting({ state: 'applied', appliedAt: 1_000, stage: null, outcome: 'accepted' }),
+    )
+
+    expect(written.stage).toBe('offer')
+  })
+
+  it('keeps a rejection that never reached a stage, which is not a contradiction', async () => {
+    const db = await freshDb()
+
+    const written = await upsertPosting(
+      db,
+      aPosting({ state: 'applied', appliedAt: 1_000, stage: null, outcome: 'rejected' }),
+    )
+
+    expect(written.stage).toBeNull()
+    expect(written.outcome).toBe('rejected')
+  })
+
+  /**
+   * A resolved record has to come back out of `upsertPosting` unchanged, or the
+   * retry that decision 4 relies on stops being a no-op: the client re-sends
+   * what it was given, and if resolving it a second time moved anything the
+   * write would look like an edit and bump `updatedAt`.
+   */
+  it('treats a re-sent resolved record as a retry, not an edit', async () => {
+    const db = await freshDb()
+    const first = await upsertPosting(
+      db,
+      aPosting({ id: 'retry', state: 'applied', appliedAt: 1_000, outcome: 'accepted' }),
+    )
+
+    const second = await upsertPosting(db, first)
+
+    expect(second).toEqual(first)
+  })
+
   it('lists newest first', async () => {
     const db = await freshDb()
     // Two writes inside one millisecond tie on `updatedAt`, which leaves the

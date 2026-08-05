@@ -3,8 +3,11 @@ import {
   boardOf,
   formatRate,
   funnel,
+  outcomes,
   overTime,
   perBoard,
+  responseFunnel,
+  silence,
   startOfMonth,
   startOfWeek,
 } from './aggregate'
@@ -27,6 +30,11 @@ function record(overrides: Partial<Posting> = {}): Posting {
     updatedAt: at(2026, 3, 2),
     state: 'viewed',
     appliedAt: null,
+    // Present and null rather than absent, which is what the version 3
+    // migration guarantees on every stored record. Leaving them off would let
+    // these tests exercise a shape the database cannot hold.
+    stage: null,
+    outcome: null,
     canonicalUrl: 'https://boards.greenhouse.io/initech/jobs/4021',
     ...overrides,
   } as Posting
@@ -57,6 +65,263 @@ describe('funnel', () => {
 
     expect(result.viewed + result.applied).toBe(result.tracked)
     expect(result.tracked).toBe(postings.length)
+  })
+})
+
+/** An applied record, since every progress view ignores the others. */
+const sent = (overrides: Partial<Posting> = {}) =>
+  record({ state: 'applied', appliedAt: at(2026, 3, 2), ...overrides })
+
+describe('responseFunnel', () => {
+  it('divides every stage by applications sent, so the rates compare', () => {
+    const result = responseFunnel([
+      record({ state: 'viewed' }),
+      sent(),
+      sent({ outcome: 'rejected' }),
+      sent({ stage: 'interviewing', outcome: 'rejected' }),
+      sent({ stage: 'offer', outcome: 'accepted' }),
+    ])
+
+    expect(result.applied).toBe(4)
+    expect(result.heardBack).toBe(3)
+    expect(result.interviewed).toBe(2)
+    expect(result.offers).toBe(1)
+    expect(result.responseRate).toBe(0.75)
+    expect(result.interviewRate).toBe(0.5)
+    expect(result.offerRate).toBe(0.25)
+  })
+
+  /**
+   * The whole reason `stage` and `outcome` are two fields. On a single enum
+   * this record would say `rejected` and nothing else, and it would vanish from
+   * the interview count the moment the rejection arrived — understating the one
+   * rate somebody is looking at this page to find out.
+   */
+  it('still counts an interview that ended in a rejection', () => {
+    const result = responseFunnel([sent({ stage: 'interviewing', outcome: 'rejected' })])
+
+    expect(result.interviewed).toBe(1)
+    expect(result.heardBack).toBe(1)
+  })
+
+  it('counts a rejection with no stage as an answer but not an interview', () => {
+    const result = responseFunnel([sent({ outcome: 'rejected' })])
+
+    expect(result.heardBack).toBe(1)
+    expect(result.interviewed).toBe(0)
+  })
+
+  /**
+   * Withdrawing is the user's own action, not a reply. Counting it would
+   * inflate the response rate with applications nobody ever answered.
+   */
+  it('does not count withdrawing before anyone replied as hearing back', () => {
+    expect(responseFunnel([sent({ outcome: 'withdrawn' })]).heardBack).toBe(0)
+  })
+
+  it('falls monotonically, because a stage is the furthest point reached', () => {
+    const result = responseFunnel([
+      sent({ stage: 'screening' }),
+      sent({ stage: 'interviewing' }),
+      sent({ stage: 'offer' }),
+    ])
+
+    expect(result.heardBack).toBeGreaterThanOrEqual(result.interviewed)
+    expect(result.interviewed).toBeGreaterThanOrEqual(result.offers)
+  })
+
+  it('has no rates to report when nothing has been applied to', () => {
+    const result = responseFunnel([record({ state: 'viewed' })])
+
+    expect(result.responseRate).toBeNull()
+    expect(result.interviewRate).toBeNull()
+    expect(result.offerRate).toBeNull()
+  })
+
+  it('agrees with the funnel above it on how many were applied to', () => {
+    const postings = [record(), sent(), sent({ outcome: 'accepted' })]
+
+    expect(responseFunnel(postings).applied).toBe(funnel(postings).applied)
+  })
+})
+
+describe('outcomes', () => {
+  it('puts every applied record in exactly one bucket', () => {
+    const postings = [
+      record({ state: 'viewed' }),
+      sent(),
+      sent({ outcome: 'rejected' }),
+      sent({ outcome: 'withdrawn' }),
+      sent({ stage: 'offer', outcome: 'accepted' }),
+    ]
+    const result = outcomes(postings)
+
+    expect(result.open + result.rejected + result.withdrawn + result.accepted).toBe(
+      result.applied,
+    )
+    expect(result.applied).toBe(4)
+    expect(result.open).toBe(1)
+  })
+
+  /**
+   * A record written before version 3 has no `stage`/`outcome` property at all,
+   * and the dashboard opens the database directly without waiting on the
+   * worker's migration — so this shape reaches the aggregation on a restored
+   * tab or an interrupted upgrade.
+   *
+   * Compared against `null` it broke the stated invariant outright: nothing
+   * landed in `open`, a phantom `undefined: NaN` key appeared, and the card
+   * read "Of 2 applications: 0 still open, 0 rejected, 0 withdrawn, 0
+   * accepted". `heardBack` was hardened against exactly this and `outcomes`
+   * was not.
+   */
+  it('counts an unmigrated record as open rather than as nothing', () => {
+    const v2 = {
+      state: 'applied',
+      appliedAt: 1_000,
+      createdAt: 1_000,
+    } as unknown as Posting
+
+    const result = outcomes([v2, v2])
+
+    expect(result.open).toBe(2)
+    expect(result.open + result.rejected + result.withdrawn + result.accepted).toBe(
+      result.applied,
+    )
+    expect(Object.values(result).every(Number.isFinite)).toBe(true)
+    expect(result).not.toHaveProperty('undefined')
+  })
+
+  it('ignores an outcome the schema does not have', () => {
+    const bogus = {
+      state: 'applied',
+      appliedAt: 1_000,
+      outcome: 'ghosted',
+    } as unknown as Posting
+
+    expect(outcomes([bogus]).open).toBe(1)
+  })
+
+  it('reports an empty database as four zeros rather than throwing', () => {
+    expect(outcomes([])).toEqual({
+      applied: 0,
+      open: 0,
+      rejected: 0,
+      withdrawn: 0,
+      accepted: 0,
+    })
+  })
+})
+
+describe('silence', () => {
+  const now = at(2026, 4, 1)
+  const daysBefore = (days: number) => now - days * 24 * 60 * 60 * 1000
+
+  it('separates what has gone quiet from what is merely recent', () => {
+    const result = silence(
+      [
+        sent({ appliedAt: daysBefore(40) }),
+        sent({ appliedAt: daysBefore(25) }),
+        sent({ appliedAt: daysBefore(3) }),
+      ],
+      { now },
+    )
+
+    expect(result.waiting).toBe(2)
+    expect(result.recent).toBe(1)
+    expect(result.longestWaitDays).toBe(40)
+  })
+
+  it('is exclusive and adds up to the unanswered total', () => {
+    const result = silence(
+      [
+        sent({ appliedAt: daysBefore(40) }),
+        sent({ appliedAt: daysBefore(1) }),
+        sent({ appliedAt: null }),
+      ],
+      { now },
+    )
+
+    expect(result.waiting + result.recent + result.undateable).toBe(result.unanswered)
+    expect(result.unanswered).toBe(3)
+  })
+
+  /**
+   * The residual, exercised **alone**. Phase 7 shipped its one defect in a
+   * residual gated on half its own condition, and the tests missed it because
+   * the only fixture had both inputs non-zero. So this case has an undateable
+   * record and nothing else: `waiting` and `recent` are both zero, and the
+   * count still has to be reported.
+   */
+  it('reports an undateable application when it is the only one', () => {
+    const result = silence([sent({ appliedAt: null })], { now })
+
+    expect(result.undateable).toBe(1)
+    expect(result.unanswered).toBe(1)
+    expect(result.waiting).toBe(0)
+    expect(result.recent).toBe(0)
+    // Nothing datable to be the oldest, and zero would read as "sent today".
+    expect(result.longestWaitDays).toBeNull()
+  })
+
+  /**
+   * The same unmigrated shape. Read as a closed outcome, every such record fell
+   * out of this view and the "still waiting" line disappeared over a database
+   * full of open applications — the funnel above it saying otherwise.
+   */
+  it('still counts an unmigrated application as waiting', () => {
+    const v2 = {
+      state: 'applied',
+      appliedAt: daysBefore(40),
+      createdAt: 1_000,
+    } as unknown as Posting
+
+    const result = silence([v2], { now })
+
+    expect(result.unanswered).toBe(1)
+    expect(result.waiting).toBe(1)
+  })
+
+  it('leaves out applications that were answered', () => {
+    const result = silence(
+      [
+        sent({ appliedAt: daysBefore(40), stage: 'screening' }),
+        sent({ appliedAt: daysBefore(40), outcome: 'rejected' }),
+      ],
+      { now },
+    )
+
+    expect(result.unanswered).toBe(0)
+  })
+
+  it('leaves out applications the user closed, which wait for nothing', () => {
+    const result = silence([sent({ appliedAt: daysBefore(40), outcome: 'withdrawn' })], {
+      now,
+    })
+
+    expect(result.unanswered).toBe(0)
+  })
+
+  it('leaves out postings never applied to', () => {
+    expect(silence([record({ state: 'viewed' })], { now }).unanswered).toBe(0)
+  })
+
+  it('reads a hand-typed future date as sent today rather than a negative wait', () => {
+    const result = silence([sent({ appliedAt: daysBefore(-5) })], { now })
+
+    expect(result.longestWaitDays).toBe(0)
+    expect(result.recent).toBe(1)
+  })
+
+  it('has no longest wait to report when nothing is waiting', () => {
+    expect(silence([], { now }).longestWaitDays).toBeNull()
+  })
+
+  it('honours a threshold the caller chose', () => {
+    const postings = [sent({ appliedAt: daysBefore(10) })]
+
+    expect(silence(postings, { now, thresholdDays: 7 }).waiting).toBe(1)
+    expect(silence(postings, { now, thresholdDays: 14 }).waiting).toBe(0)
   })
 })
 

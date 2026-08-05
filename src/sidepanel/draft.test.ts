@@ -28,6 +28,17 @@ describe('isDirty', () => {
     expect(isDirty({ ...EMPTY_DRAFT, company: '   ' })).toBe(false)
   })
 
+  /**
+   * `DRAFT_FIELDS` is derived from `EMPTY_DRAFT`, so a new field joins dirty
+   * tracking by existing. This pins that, because the failure is silent and
+   * expensive: an unwatched field is typed work that a swap would clobber
+   * without asking (decision 13).
+   */
+  it('notices a stage the user set and nothing else', () => {
+    expect(isDirty({ ...EMPTY_DRAFT, stage: 'interviewing' })).toBe(true)
+    expect(isDirty({ ...EMPTY_DRAFT, outcome: 'rejected' })).toBe(true)
+  })
+
   it('compares against a baseline, not against empty', () => {
     // From phase 5 a pristine form is one that still matches what was
     // auto-filled into it (decision 13).
@@ -141,6 +152,52 @@ describe('toPostingInput', () => {
     // A date on a posting that was only looked at would misreport the funnel
     // (decision 8).
     expect(viewed.appliedAt).toBeNull()
+  })
+
+  it('carries the stage and outcome an applied record was given', () => {
+    const input = toPostingInput(
+      draft({
+        state: 'applied',
+        appliedAt: '2026-03-14',
+        stage: 'interviewing',
+        outcome: 'rejected',
+      }),
+      'id-1',
+    )
+
+    // The pair a single status enum could not express, which is the reason
+    // there are two fields.
+    expect(input.stage).toBe('interviewing')
+    expect(input.outcome).toBe('rejected')
+  })
+
+  it('reads the blank options as nothing heard and still open', () => {
+    const input = toPostingInput(
+      draft({ state: 'applied', appliedAt: '2026-03-14' }),
+      'id-1',
+    )
+
+    expect(input.stage).toBeNull()
+    expect(input.outcome).toBeNull()
+  })
+
+  it('drops stage and outcome from a posting that was only looked at', () => {
+    const input = toPostingInput(
+      draft({ state: 'viewed', stage: 'offer', outcome: 'accepted' }),
+      'id-1',
+    )
+
+    expect(input.stage).toBeNull()
+    expect(input.outcome).toBeNull()
+  })
+
+  it('implies the offer stage when an offer was accepted', () => {
+    const input = toPostingInput(
+      draft({ state: 'applied', appliedAt: '2026-03-14', outcome: 'accepted' }),
+      'id-1',
+    )
+
+    expect(input.stage).toBe('offer')
   })
 
   it('marks the record as hand-entered', () => {

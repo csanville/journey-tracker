@@ -100,10 +100,70 @@ describe('runPendingMigrations', () => {
     expect(migrated?.companyNormalized).toBe('acme')
     expect(migrated?.canonicalUrl).toBe('https://boards.greenhouse.io/acme/jobs/4012345')
     expect(migrated?.atsReqId).toBe('4012345')
-    expect(migrated?.schemaVersion).toBe(2)
+    // The whole chain ran, not just the one under test, so this is the current
+    // version rather than 2 — and it is written as `SCHEMA_VERSION` so the next
+    // bump does not fail a test that is not about it.
+    expect(migrated?.schemaVersion).toBe(SCHEMA_VERSION)
     // A key correction is not an edit the user made; bumping this would
     // reorder their list.
     expect(migrated?.updatedAt).toBe(1_000)
+  })
+
+  /**
+   * The version 3 backfill, and the reason it is not a formality.
+   *
+   * A record written at version 2 has no `stage` or `outcome` *property at
+   * all*, and `undefined` is not `null` anywhere it matters downstream — the
+   * CSV writer prints the string, the export validator sees an unfamiliar
+   * shape. So this asserts the keys are present and null, which `toBeNull`
+   * alone would not: it passes on a missing property too.
+   */
+  it('backfills stage and outcome onto a record written before they existed', async () => {
+    const db = await freshDb()
+    const {
+      stage: _stage,
+      outcome: _outcome,
+      ...withoutProgress
+    } = aPosting({
+      id: 'v2',
+      state: 'applied',
+      appliedAt: 2_000,
+    })
+    await db.postings.put({
+      ...(withoutProgress as Posting),
+      schemaVersion: 2,
+      createdAt: 1_000,
+      updatedAt: 1_000,
+    })
+    await patchSettings({ dataVersion: 2 })
+
+    await runPendingMigrations(db)
+
+    const migrated = await db.postings.get('v2')
+    expect(migrated).toHaveProperty('stage', null)
+    expect(migrated).toHaveProperty('outcome', null)
+    expect(migrated?.schemaVersion).toBe(SCHEMA_VERSION)
+    // Adding a field is not an edit the user made, exactly as with version 2.
+    expect(migrated?.updatedAt).toBe(1_000)
+  })
+
+  it('strips progress a v2 record should never have carried on a viewed posting', async () => {
+    const db = await freshDb()
+    // Only reachable through a hand-edited file, which is precisely the input
+    // the backfill runs `resolveProgress` over rather than writing two nulls.
+    await db.postings.put({
+      ...aPosting({ id: 'odd', state: 'viewed' }),
+      stage: 'offer',
+      outcome: 'accepted',
+      schemaVersion: 2,
+    } as Posting)
+    await patchSettings({ dataVersion: 2 })
+
+    await runPendingMigrations(db)
+
+    const migrated = await db.postings.get('odd')
+    expect(migrated?.stage).toBeNull()
+    expect(migrated?.outcome).toBeNull()
   })
 
   it('leaves an already-derived record byte-identical when replayed', async () => {
@@ -114,7 +174,7 @@ describe('runPendingMigrations', () => {
     // A worker killed mid-migration re-runs the whole thing on the survivors.
     await runPendingMigrations(db)
 
-    expect(await db.postings.get('current')).toEqual({ ...stored, schemaVersion: 2 })
+    expect(await db.postings.get('current')).toEqual(stored)
   })
 
   it('clears a migration flag left behind by a killed worker', async () => {
@@ -435,7 +495,7 @@ describe('migrateImportedRecords', () => {
     const migrated = await db.postings.get('old')
     expect(migrated?.companyNormalized).toBe('initech')
     expect(migrated?.canonicalUrl).toBe('https://boards.greenhouse.io/initech/jobs/9')
-    expect(migrated?.schemaVersion).toBe(2)
+    expect(migrated?.schemaVersion).toBe(SCHEMA_VERSION)
     // Correcting a key is not an edit the user made; bumping this would reorder
     // their list.
     expect(migrated?.updatedAt).toBe(1)

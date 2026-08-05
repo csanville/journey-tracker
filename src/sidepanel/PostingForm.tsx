@@ -459,6 +459,68 @@ export function PostingForm({
           )}
         </div>
 
+        {/*
+          What happened after, on the two axes phase 8 added. Only shown once
+          the status is `applied`, because neither means anything about a
+          posting that was merely looked at — and the repository strips them
+          from one regardless, so a hidden control cannot leave a stale claim
+          on the record.
+
+          Both default to the blank option and both are meant to stay there for
+          a while: no stage is "nothing heard yet" and no outcome is "still
+          open", which is the ordinary state of a recent application rather
+          than an unanswered question. Neither is labelled "none", which would
+          read as a thing to go and fix.
+        */}
+        {draft.state === 'applied' && (
+          <div className="row">
+            <Select
+              label="Furthest stage"
+              value={draft.stage}
+              // Locked, not merely mirrored, while the outcome is `accepted`.
+              // The mirror below used to run in one direction only, so choosing
+              // Accepted and then correcting the stage down to Screening left
+              // the form reading Screening/Accepted while `resolveProgress`
+              // stored Offer/Accepted — the form disagreeing with the record,
+              // which is the exact thing the mirror was added to prevent.
+              // Disabling says why the control will not move; silently
+              // snapping it back would not.
+              disabled={draft.outcome === 'accepted'}
+              hint={
+                draft.outcome === 'accepted' ? 'An accepted offer implies one.' : undefined
+              }
+              onChange={(v) => field('stage', v as Draft['stage'])}
+              options={[
+                ['', 'Nothing heard yet'],
+                ['screening', 'Screening'],
+                ['interviewing', 'Interviewing'],
+                ['offer', 'Offer'],
+              ]}
+            />
+            <Select
+              label="Outcome"
+              value={draft.outcome}
+              onChange={(v) => {
+                const outcome = v as Draft['outcome']
+                field('outcome', outcome)
+                // An offer is implied by accepting one. The repository enforces
+                // this anyway (`resolveProgress`), but doing it here as well is
+                // what stops the form showing "Nothing heard yet" next to
+                // "Accepted" in the moment before a save.
+                if (outcome === 'accepted' && draft.stage !== 'offer') {
+                  field('stage', 'offer')
+                }
+              }}
+              options={[
+                ['', 'Still open'],
+                ['rejected', 'Rejected'],
+                ['withdrawn', 'Withdrawn'],
+                ['accepted', 'Accepted'],
+              ]}
+            />
+          </div>
+        )}
+
         <Text
           label="Resume used"
           value={draft.resumeUsed}
@@ -778,11 +840,16 @@ function Select({
   value,
   onChange,
   options,
+  disabled,
+  hint,
 }: {
   label: string
   value: string
   onChange: (value: string) => void
   options: [value: string, label: string][]
+  disabled?: boolean
+  /** Why the control reads as it does — shown in place of nothing, not an error. */
+  hint?: string
 }) {
   const id = useId()
   const rendered = useMemo(() => options, [options])
@@ -796,6 +863,8 @@ function Select({
         id={id}
         className="field__input"
         value={value}
+        disabled={disabled}
+        aria-describedby={hint ? `${id}-hint` : undefined}
         onChange={(event) => onChange(event.target.value)}
       >
         {rendered.map(([optionValue, optionLabel]) => (
@@ -804,6 +873,11 @@ function Select({
           </option>
         ))}
       </select>
+      {hint && (
+        <span className="field__hint" id={`${id}-hint`}>
+          {hint}
+        </span>
+      )}
     </p>
   )
 }

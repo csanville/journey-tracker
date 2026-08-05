@@ -141,6 +141,77 @@ describe('Dashboard', () => {
     expect(el.querySelector('.boards tbody th')?.textContent).toContain('Greenhouse')
   })
 
+  /**
+   * The unhappy branch of the new section, and the one somebody sees first: a
+   * database with records in it but nothing applied to. Drawing a funnel of
+   * zeros there would report a 0% response rate over no applications, which is
+   * the "empty store has not earned the right to say it" rule stated for a
+   * different view.
+   */
+  it('declines to draw a response funnel over no applications', async () => {
+    await seed(3, 0)
+
+    const el = await render()
+    await waitForText(el, 'After you applied')
+
+    expect(el.textContent).toContain('Nothing applied to yet')
+    expect(el.textContent).not.toContain('still open, 0 rejected')
+  })
+
+  it('renders what happened after the applications went in', async () => {
+    const db = new JourneyTrackerDb(DB_NAME)
+    await db.open()
+    // One rejected without ever reaching a stage, one rejected after
+    // interviews, one still waiting. The second is the record a single-enum
+    // schema could not describe.
+    await upsertPosting(
+      db,
+      aPosting({ id: 'a', state: 'applied', appliedAt: Date.now(), outcome: 'rejected' }),
+    )
+    await upsertPosting(
+      db,
+      aPosting({
+        id: 'b',
+        state: 'applied',
+        appliedAt: Date.now(),
+        stage: 'interviewing',
+        outcome: 'rejected',
+      }),
+    )
+    await upsertPosting(db, aPosting({ id: 'c', state: 'applied', appliedAt: Date.now() }))
+    db.close()
+
+    const el = await render()
+    await waitForText(el, 'After you applied')
+
+    const section = el.querySelector('[aria-labelledby="replies-heading"]')
+    expect(section?.textContent).toContain('Interviewed')
+    // Two of three heard back, one of three interviewed, and the interview
+    // survives the rejection that followed it.
+    expect(section?.textContent).toContain('67%')
+    expect(section?.textContent).toContain('33%')
+    expect(section?.textContent).toContain('1 still open, 2 rejected')
+  })
+
+  /**
+   * The residual on its own. Phase 7's one shipped defect was a residual gated
+   * on half its own condition, and its test missed it because the only fixture
+   * had both halves non-zero — so this fixture has nothing but the residual.
+   */
+  it('discloses an undateable application when it is the only thing waiting', async () => {
+    const db = new JourneyTrackerDb(DB_NAME)
+    await db.open()
+    await upsertPosting(db, aPosting({ id: 'nodate', state: 'applied', appliedAt: null }))
+    db.close()
+
+    const el = await render()
+    await waitForText(el, 'After you applied')
+
+    const section = el.querySelector('[aria-labelledby="replies-heading"]')
+    expect(section?.textContent).toContain('no date recorded')
+    expect(section?.textContent).toContain('1 still waiting')
+  })
+
   it('says "1 posting" rather than "1 postings"', async () => {
     await seed(1, 0)
 
@@ -172,7 +243,10 @@ describe('Dashboard', () => {
     const el = await render()
     await waitForText(el, 'Where things stand')
 
-    expect(el.querySelector('.note')?.textContent).toContain('before this window')
+    // Scoped to the timeline's own section: several cards carry a `.note` now,
+    // and the residual this test is about belongs to exactly one of them.
+    const note = el.querySelector('[aria-labelledby="time-heading"] .note')
+    expect(note?.textContent).toContain('before this window')
   })
 
   it('re-renders when a record is saved while it is open', async () => {
