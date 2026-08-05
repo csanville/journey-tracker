@@ -21,7 +21,7 @@
  */
 
 import type { Outcome, Posting, PostingState } from '../types'
-import { heardBack, stageAtLeast } from '../normalize/progress'
+import { asOutcome, heardBack, stageAtLeast } from '../normalize/progress'
 import { urlHost } from '../normalize/url'
 
 /** How the two states divide the record set. */
@@ -117,9 +117,22 @@ export function responseFunnel(postings: readonly Posting[]): ResponseFunnel {
  * How the applications ended, or that they have not.
  *
  * Exactly one bucket per applied record — `open + rejected + withdrawn +
- * accepted === applied` — which is this file's rule stated as arithmetic. There
- * is no residual because there is nowhere for a record to fall: `outcome` is
- * either null or one of three values, and the repository guarantees it.
+ * accepted === applied` — which is this file's rule stated as arithmetic.
+ *
+ * That invariant is enforced here rather than assumed of the input. The
+ * repository does guarantee the shape, but this file reads through the
+ * dashboard's own connection, which opens the database directly and does not
+ * wait on the worker's migration — so a record written before version 3, whose
+ * `outcome` property is *absent*, can reach this function. Trusting the
+ * guarantee cost the invariant outright: `undefined` is not `null`, so nothing
+ * landed in `open`, a phantom `undefined: NaN` key appeared, and the card
+ * rendered "Of 2 applications: 0 still open, 0 rejected, 0 withdrawn, 0
+ * accepted" — a statement that outruns the truth in a view built specifically
+ * to resist them.
+ *
+ * `heardBack` was hardened against exactly this shape and this was not, which
+ * is the more useful lesson: the defence has to go everywhere the shape can
+ * reach, not on the function where the argument was first made.
  */
 export interface Outcomes {
   applied: number
@@ -139,8 +152,9 @@ export function outcomes(postings: readonly Posting[]): Outcomes {
     if (posting.state !== 'applied') continue
 
     applied++
-    if (posting.outcome === null) open++
-    else counts[posting.outcome]++
+    const outcome = asOutcome(posting.outcome)
+    if (outcome === null) open++
+    else counts[outcome]++
   }
 
   return { applied, open, ...counts }
@@ -202,8 +216,13 @@ export function silence(
 
   for (const posting of postings) {
     // Closed is not waiting, and an answer already arrived is not silence.
+    // Narrowed rather than compared against `null` for the same reason as
+    // `outcomes` above — an absent property is not `null`, and taking it for a
+    // closed outcome dropped every unmigrated record out of this view, so the
+    // "still waiting" line disappeared over a database full of open
+    // applications.
     if (posting.state !== 'applied') continue
-    if (posting.outcome !== null || heardBack(posting)) continue
+    if (asOutcome(posting.outcome) !== null || heardBack(posting)) continue
 
     unanswered++
 

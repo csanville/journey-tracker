@@ -163,6 +163,45 @@ describe('outcomes', () => {
     expect(result.open).toBe(1)
   })
 
+  /**
+   * A record written before version 3 has no `stage`/`outcome` property at all,
+   * and the dashboard opens the database directly without waiting on the
+   * worker's migration — so this shape reaches the aggregation on a restored
+   * tab or an interrupted upgrade.
+   *
+   * Compared against `null` it broke the stated invariant outright: nothing
+   * landed in `open`, a phantom `undefined: NaN` key appeared, and the card
+   * read "Of 2 applications: 0 still open, 0 rejected, 0 withdrawn, 0
+   * accepted". `heardBack` was hardened against exactly this and `outcomes`
+   * was not.
+   */
+  it('counts an unmigrated record as open rather than as nothing', () => {
+    const v2 = {
+      state: 'applied',
+      appliedAt: 1_000,
+      createdAt: 1_000,
+    } as unknown as Posting
+
+    const result = outcomes([v2, v2])
+
+    expect(result.open).toBe(2)
+    expect(result.open + result.rejected + result.withdrawn + result.accepted).toBe(
+      result.applied,
+    )
+    expect(Object.values(result).every(Number.isFinite)).toBe(true)
+    expect(result).not.toHaveProperty('undefined')
+  })
+
+  it('ignores an outcome the schema does not have', () => {
+    const bogus = {
+      state: 'applied',
+      appliedAt: 1_000,
+      outcome: 'ghosted',
+    } as unknown as Posting
+
+    expect(outcomes([bogus]).open).toBe(1)
+  })
+
   it('reports an empty database as four zeros rather than throwing', () => {
     expect(outcomes([])).toEqual({
       applied: 0,
@@ -223,6 +262,24 @@ describe('silence', () => {
     expect(result.recent).toBe(0)
     // Nothing datable to be the oldest, and zero would read as "sent today".
     expect(result.longestWaitDays).toBeNull()
+  })
+
+  /**
+   * The same unmigrated shape. Read as a closed outcome, every such record fell
+   * out of this view and the "still waiting" line disappeared over a database
+   * full of open applications — the funnel above it saying otherwise.
+   */
+  it('still counts an unmigrated application as waiting', () => {
+    const v2 = {
+      state: 'applied',
+      appliedAt: daysBefore(40),
+      createdAt: 1_000,
+    } as unknown as Posting
+
+    const result = silence([v2], { now })
+
+    expect(result.unanswered).toBe(1)
+    expect(result.waiting).toBe(1)
   })
 
   it('leaves out applications that were answered', () => {
