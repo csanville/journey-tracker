@@ -8,11 +8,48 @@ There is no server and no account. Nothing is transmitted anywhere.
 
 ## Status
 
-**Phase 7 — the dashboard.** The panel's **Dashboard** link opens a tab showing
-what the saved records add up to: how many you have applied to against how many
-you only looked at, tracking and applying week by week or month by month, and
-which boards your applications actually came from. It updates as you save,
-without a refresh.
+**Phase 8 — what happened after you applied.** An applied posting now records
+how far it got and how it ended, on two separate controls: a **stage**
+(screening, interviewing, offer) and an **outcome** (rejected, withdrawn,
+accepted). They are separate because the commonest result in a job search —
+rejected after two interviews — needs both, and a single status list would throw
+one of them away.
+
+Leaving them alone is the normal thing to do. Blank means "nothing heard yet"
+and "still open", and how long something has been quiet is worked out from the
+date you applied, so there is nothing to keep up to date.
+
+> **These can only be set when you first save a posting.** There is not yet any
+> way to edit a record afterwards, which means you cannot come back three weeks
+> later and mark a job rejected — and re-entering it saves a second copy rather
+> than updating the first. Editing is phase 9, and until it lands the dashboard
+> section below will mostly say everything is still open. It is listed here
+> rather than left to be discovered, because the charts will look authoritative
+> either way.
+
+The dashboard gained a section for it: how many applications got a reply, how
+many reached an interview, how many ended in an offer, and how many are still
+waiting on a first response after three weeks.
+
+**On Greenhouse, the extension notices when an application goes in** — provided
+the side panel is open at the time. Submitting one lands on a confirmation page,
+and if that posting is already saved the panel asks whether to mark it applied.
+It asks rather than acting: a wrong guess costs one dismissed banner. With the
+panel closed there is nothing listening and the moment passes unnoticed.
+
+This only works on Greenhouse, and that is a real limit rather than a gap to be
+filled later. Reading the moment of submission needs the extension to be running
+on the page when it happens, which it only is on the job boards listed under
+Privacy below. Everywhere else — Workday, iCIMS, LinkedIn, a company's own
+careers page — the honest answer is that it cannot see it, and reaching them
+would mean asking for permission to read every site you visit. Lever is left out
+too: employers there can send you anywhere after you apply, so there is nothing
+dependable to watch for.
+
+Before that: the **Dashboard** link opens a tab showing what the saved records
+add up to — how many you have applied to against how many you only looked at,
+tracking and applying week by week or month by month, and which boards your
+applications actually came from. It updates as you save, without a refresh.
 
 Anything the charts cannot place is stated rather than dropped — an application
 with no date recorded, or records older than the window shown — so the figures
