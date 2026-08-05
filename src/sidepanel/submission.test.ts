@@ -43,12 +43,18 @@ describe('markApplied', () => {
   })
 
   /**
-   * The repository owns these, and a caller sending them back is a caller that
-   * can move them. `createdAt` is the one that matters most: `upsertPosting`
-   * keeps the stored value, so leaving it out is what stops a confirmation from
-   * re-dating a posting saved weeks ago.
+   * The three the repository *stamps*, which a caller sending them back could
+   * move. `createdAt` matters most: `upsertPosting` keeps the stored value, so
+   * leaving it out is what stops a confirmation re-dating a posting saved weeks
+   * ago.
+   *
+   * Deliberately not a claim about every repository-owned field — the join keys
+   * `companyNormalized` and `canonicalUrl` *are* carried, because
+   * `POSTING_INPUT_FIELDS` includes them and `normalizePostingInput` overwrites
+   * both on the way in. Naming them here rather than leaving the test title to
+   * imply otherwise.
    */
-  it('sends none of the fields the repository owns', () => {
+  it('sends none of the timestamps or the version the repository stamps', () => {
     const input = markApplied(stored(), 9_000) as Record<string, unknown>
 
     expect(input).not.toHaveProperty('schemaVersion')

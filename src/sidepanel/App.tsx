@@ -79,18 +79,54 @@ export function App() {
   }, [])
 
   /**
+   * Postings whose prompt has already been answered, either way.
+   *
+   * Decision 13's amendment names "an unanswered question" as a state that must
+   * not be silently re-entered, and dismissing has to leave a mark or there is
+   * no reachable state in which the answer sticks: a reload of the confirmation
+   * page re-fires the event, the worker re-matches the same record, and the
+   * identical banner returns over a question the user just answered. That is
+   * the same failure `PostingForm`'s own `dismissed` flag exists to prevent,
+   * arriving in a new component.
+   *
+   * A ref rather than state — nothing renders from it, and it must not
+   * re-trigger the effect that reads it. Its bound is the life of the panel,
+   * which is the right scope: re-prompting requires the user to go back to a
+   * confirmation page deliberately.
+   */
+  const answered = useRef(new Set<string>())
+
+  /** Retires a prompt, whichever button retired it. */
+  const answer = useCallback((postingId: string) => {
+    answered.current.add(postingId)
+    // Cleared only if it is still the posting being answered. `onConfirm`
+    // awaits a write first, and clearing unconditionally after that await threw
+    // away a *different* confirmation that had arrived in the gap — the
+    // check-then-act-across-an-await shape this project has now found in four
+    // phases running.
+    setSubmitted((current) => (current?.id === postingId ? null : current))
+  }, [])
+
+  /**
    * Reads the record a confirmation page pointed at, so the prompt can name it.
    *
    * The worker sends an id rather than the record, so this is where the copy
    * shown to the user comes from — read at prompt time, not whenever the event
-   * happened to be built. A record that has since gone, or that already says
-   * `applied` because the user got there first, produces no prompt: there is
-   * nothing left to ask.
+   * happened to be built. A record that has since gone, that already says
+   * `applied` because the user got there first, or whose prompt has already
+   * been answered produces nothing: there is nothing left to ask.
    */
   const announceSubmitted = useCallback(async (postingId: string) => {
+    if (answered.current.has(postingId)) return
+
     try {
       const posting = await send('posting/get', { id: postingId })
-      if (posting && posting.state !== 'applied') setSubmitted(posting)
+      if (!posting || posting.state === 'applied') return
+      // Re-checked after the round trip: the user may have answered a prompt
+      // for this same record while the read was in flight.
+      if (answered.current.has(posting.id)) return
+
+      setSubmitted(posting)
     } catch (error) {
       // The user is about to save this by hand, exactly as they did before this
       // feature existed. Not worth a banner.
@@ -213,12 +249,17 @@ export function App() {
       )}
 
       {submitted && (
+        // Keyed by record, so the banner's own `saving`/`failure` state cannot
+        // outlive the posting it was about. Without it a second confirmation
+        // arriving while the first was mid-save inherited "Saving…" — or a
+        // failure message — under a different job's name.
         <SubmissionPrompt
+          key={submitted.id}
           posting={submitted}
-          onDismiss={() => setSubmitted(null)}
+          onDismiss={() => answer(submitted.id)}
           onConfirm={async () => {
             await send('posting/upsert', { posting: markApplied(submitted, Date.now()) })
-            setSubmitted(null)
+            answer(submitted.id)
             await refresh()
           }}
         />
