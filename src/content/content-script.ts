@@ -1,3 +1,5 @@
+import { send } from '../lib/client'
+import { confirmationTarget } from '../lib/confirmation'
 import { capture } from './capture'
 import { watchUrl } from './watch-url'
 
@@ -22,6 +24,32 @@ import { watchUrl } from './watch-url'
  * one page once.
  */
 
-capture(location.href)
+/**
+ * Reports a page that is an application confirmation.
+ *
+ * Filtered here so an ordinary navigation costs nothing — without the check
+ * every URL change on a board would wake the service worker, and decision 9
+ * rests on the worker being idle enough to be torn down. The worker re-derives
+ * the posting from the URL rather than trusting anything computed on this side;
+ * see `application/submitted` in `messages.ts`.
+ *
+ * Never allowed to fail the page. A job board that breaks because this
+ * extension is installed is a worse outcome than a missed prompt, and a missed
+ * prompt only costs the manual save the user was already making.
+ */
+function reportIfConfirmation(url: string): void {
+  if (confirmationTarget(url) === null) return
 
-watchUrl((url) => capture(url))
+  void send('application/submitted', { url }).catch((error: unknown) => {
+    console.debug('[JourneyTracker] could not report a submission', error)
+  })
+}
+
+function visit(url: string): void {
+  capture(url)
+  reportIfConfirmation(url)
+}
+
+visit(location.href)
+
+watchUrl((url) => visit(url))

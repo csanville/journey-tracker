@@ -21,15 +21,35 @@ export interface DetectionChanged {
   tabId: number
 }
 
-export type ExtensionEvent = DetectionChanged
+/**
+ * A tracked posting was just applied to, as far as the confirmation page says.
+ *
+ * Carries the record's id rather than the record, so the panel reads the
+ * current one instead of rendering a copy that was already stale when it was
+ * put in the message.
+ *
+ * This is the second member of the union, which decision 16 said would be the
+ * moment "refresh everything" stopped being the right answer for the panel —
+ * and it is: this event asks a question about one record, and refreshing the
+ * active tab's detection would neither ask it nor answer it.
+ */
+export interface ApplicationSubmitted {
+  type: 'application/submitted'
+  tabId: number
+  postingId: string
+}
+
+export type ExtensionEvent = DetectionChanged | ApplicationSubmitted
 
 export function isEvent(value: unknown): value is ExtensionEvent {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    (value as { type?: unknown }).type === 'detection/changed' &&
-    typeof (value as { tabId?: unknown }).tabId === 'number'
-  )
+  if (typeof value !== 'object' || value === null) return false
+
+  const event = value as { type?: unknown; tabId?: unknown; postingId?: unknown }
+  if (typeof event.tabId !== 'number') return false
+
+  if (event.type === 'detection/changed') return true
+
+  return event.type === 'application/submitted' && typeof event.postingId === 'string'
 }
 
 /**

@@ -109,6 +109,24 @@ export interface RequestMap {
     payload: { report: DetectionReport }
     result: { detectionId: string } | null
   }
+  /**
+   * A content script saying the page it is on is an application confirmation.
+   *
+   * Carries the raw `location.href` rather than the posting URL derived from
+   * it. The content script pre-filters so an ordinary navigation costs no
+   * message, but the worker re-runs `confirmationTarget` itself: the derivation
+   * is the part that decides whether somebody gets told they applied to a job,
+   * and it belongs on the trusted side of the boundary — the same reasoning as
+   * `sanitizeReport`.
+   *
+   * `matched` says whether a stored record was found for it, which is the
+   * honest answer to what the worker did rather than a promise about what the
+   * panel will show.
+   */
+  'application/submitted': {
+    payload: { url: string }
+    result: { matched: boolean }
+  }
   /** What the panel asks about the tab it is sitting next to. */
   'detection/get': { payload: { tabId: number }; result: DetectionSummary | null }
   status: { payload: NoPayload; result: StatusReport }
@@ -200,7 +218,10 @@ export function isRequest(value: unknown): value is Request {
  * `posting/delete` reachable from that context would be an ambient capability
  * nothing uses and nobody would notice growing teeth.
  */
-const CONTENT_SCRIPT_KINDS: readonly RequestKind[] = ['detection/report']
+const CONTENT_SCRIPT_KINDS: readonly RequestKind[] = [
+  'detection/report',
+  'application/submitted',
+]
 
 export function allowedFromContentScript(kind: RequestKind): boolean {
   return CONTENT_SCRIPT_KINDS.includes(kind)

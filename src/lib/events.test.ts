@@ -6,6 +6,25 @@ describe('isEvent', () => {
     expect(isEvent({ type: 'detection/changed', tabId: 4 })).toBe(true)
   })
 
+  it('accepts a submission, which carries the record it is about', () => {
+    expect(isEvent({ type: 'application/submitted', tabId: 4, postingId: 'p1' })).toBe(true)
+  })
+
+  /**
+   * The second member of the union is where "refresh everything" stops being
+   * the right answer for the panel (decision 16), so the panel branches on
+   * `type` — and a submission without a `postingId` would take that branch and
+   * ask about a record that was never named.
+   */
+  it('rejects a submission that does not say which record', () => {
+    expect(isEvent({ type: 'application/submitted', tabId: 4 })).toBe(false)
+    expect(isEvent({ type: 'application/submitted', tabId: 4, postingId: 7 })).toBe(false)
+  })
+
+  it('rejects an event type it does not know', () => {
+    expect(isEvent({ type: 'application/withdrawn', tabId: 4 })).toBe(false)
+  })
+
   it('rejects a request', () => {
     // The whole reason events are keyed on `type` and requests on `kind`:
     // neither guard can ever accept the other's messages, so a broadcast

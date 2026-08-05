@@ -10,6 +10,7 @@ import { BackupSection } from './BackupSection'
 import { activeTabDetection } from './detection-client'
 import { PostingForm } from './PostingForm'
 import { RecentPostings } from './RecentPostings'
+import { markApplied } from './submission'
 
 /**
  * The panel proper: file a posting, see what has been filed.
@@ -26,6 +27,8 @@ export function App() {
   const [postings, setPostings] = useState<Posting[] | null>(null)
   const [failure, setFailure] = useState<string | null>(null)
   const [detection, setDetection] = useState<DetectionSummary | null>(null)
+  /** A posting whose confirmation page was just seen, awaiting an answer. */
+  const [submitted, setSubmitted] = useState<Posting | null>(null)
   const version = chrome.runtime.getManifest().version
 
   const refresh = useCallback(async (): Promise<StatusReport | null> => {
@@ -75,6 +78,62 @@ export function App() {
     }
   }, [])
 
+  /**
+   * Postings whose prompt has already been answered, either way.
+   *
+   * Decision 13's amendment names "an unanswered question" as a state that must
+   * not be silently re-entered, and dismissing has to leave a mark or there is
+   * no reachable state in which the answer sticks: a reload of the confirmation
+   * page re-fires the event, the worker re-matches the same record, and the
+   * identical banner returns over a question the user just answered. That is
+   * the same failure `PostingForm`'s own `dismissed` flag exists to prevent,
+   * arriving in a new component.
+   *
+   * A ref rather than state — nothing renders from it, and it must not
+   * re-trigger the effect that reads it. Its bound is the life of the panel,
+   * which is the right scope: re-prompting requires the user to go back to a
+   * confirmation page deliberately.
+   */
+  const answered = useRef(new Set<string>())
+
+  /** Retires a prompt, whichever button retired it. */
+  const answer = useCallback((postingId: string) => {
+    answered.current.add(postingId)
+    // Cleared only if it is still the posting being answered. `onConfirm`
+    // awaits a write first, and clearing unconditionally after that await threw
+    // away a *different* confirmation that had arrived in the gap — the
+    // check-then-act-across-an-await shape this project has now found in four
+    // phases running.
+    setSubmitted((current) => (current?.id === postingId ? null : current))
+  }, [])
+
+  /**
+   * Reads the record a confirmation page pointed at, so the prompt can name it.
+   *
+   * The worker sends an id rather than the record, so this is where the copy
+   * shown to the user comes from — read at prompt time, not whenever the event
+   * happened to be built. A record that has since gone, that already says
+   * `applied` because the user got there first, or whose prompt has already
+   * been answered produces nothing: there is nothing left to ask.
+   */
+  const announceSubmitted = useCallback(async (postingId: string) => {
+    if (answered.current.has(postingId)) return
+
+    try {
+      const posting = await send('posting/get', { id: postingId })
+      if (!posting || posting.state === 'applied') return
+      // Re-checked after the round trip: the user may have answered a prompt
+      // for this same record while the read was in flight.
+      if (answered.current.has(posting.id)) return
+
+      setSubmitted(posting)
+    } catch (error) {
+      // The user is about to save this by hand, exactly as they did before this
+      // feature existed. Not worth a banner.
+      console.debug('[JourneyTracker] could not read the submitted posting', error)
+    }
+  }, [])
+
   useEffect(() => {
     void refreshDetection()
 
@@ -101,7 +160,18 @@ export function App() {
      * ordering guard above makes an overlapping pair safe.
      */
     const onEvent = (message: unknown) => {
-      if (isEvent(message)) void refreshDetection()
+      if (!isEvent(message)) return
+
+      // Decision 16 said the union would grow to a point where "refresh
+      // everything" stopped being the right answer, and this is it: a
+      // submission is a question about one record, and re-reading the active
+      // tab's detection would neither ask it nor answer it.
+      if (message.type === 'application/submitted') {
+        void announceSubmitted(message.postingId)
+        return
+      }
+
+      void refreshDetection()
     }
     chrome.runtime.onMessage.addListener(onEvent)
 
@@ -113,7 +183,7 @@ export function App() {
       // unmounted panel.
       latestDetection.current++
     }
-  }, [refreshDetection])
+  }, [refreshDetection, announceSubmitted])
 
   useEffect(() => {
     let cancelled = false
@@ -176,6 +246,23 @@ export function App() {
           Chrome may evict this extension's data if the disk runs low. Exporting a backup
           will matter more than usual until that changes.
         </p>
+      )}
+
+      {submitted && (
+        // Keyed by record, so the banner's own `saving`/`failure` state cannot
+        // outlive the posting it was about. Without it a second confirmation
+        // arriving while the first was mid-save inherited "Saving…" — or a
+        // failure message — under a different job's name.
+        <SubmissionPrompt
+          key={submitted.id}
+          posting={submitted}
+          onDismiss={() => answer(submitted.id)}
+          onConfirm={async () => {
+            await send('posting/upsert', { posting: markApplied(submitted, Date.now()) })
+            answer(submitted.id)
+            await refresh()
+          }}
+        />
       )}
 
       <PostingForm
@@ -277,7 +364,73 @@ export function App() {
         </dl>
       </details>
 
-      <footer className="panel__foot">Phase 7 · dashboard</footer>
+      <footer className="panel__foot">Phase 8 · outcomes</footer>
+    </div>
+  )
+}
+
+/**
+ * "Looks like you applied — shall I record it?"
+ *
+ * Asks rather than writes, which is decision 12 in full: a detector good enough
+ * to write silently would have to be good enough that a wrong write never
+ * manufactures history, and this one is a URL match on one board. Asking costs
+ * a dismissible banner when it is wrong.
+ *
+ * It names the posting rather than saying "this page". By the time this shows,
+ * the tab is on a confirmation page that says almost nothing about the job, and
+ * the whole question is whether the record it means is the right one — which
+ * the user can only answer if they can see which record that is.
+ *
+ * Both buttons resolve it. There is no third state where the banner lingers
+ * unanswered, because the next confirmation would replace it and the first
+ * question would vanish having never been answered — the shape decision 13's
+ * amendment names as "an unanswered question" and suppresses swaps for.
+ */
+function SubmissionPrompt({
+  posting,
+  onConfirm,
+  onDismiss,
+}: {
+  posting: Posting
+  onConfirm: () => Promise<void>
+  onDismiss: () => void
+}) {
+  const [saving, setSaving] = useState(false)
+  const [failure, setFailure] = useState<string | null>(null)
+
+  return (
+    // The revisit notice's styling, because it is the same kind of thing: the
+    // panel telling you something about a record you already have.
+    <div className="notice notice--revisit" role="status">
+      <p className="notice__title">Looks like you applied.</p>
+      <p className="notice__detail">
+        {posting.company} — {posting.jobTitle}
+      </p>
+      {failure && <p className="notice__detail">Could not save it: {failure}</p>}
+      <div className="notice__actions">
+        <button
+          type="button"
+          className="button button--primary"
+          disabled={saving}
+          onClick={() => {
+            setSaving(true)
+            setFailure(null)
+            void onConfirm()
+              .catch((error: unknown) => {
+                // Left on screen rather than dismissed, so the answer the user
+                // gave is not silently discarded by a failed write.
+                setFailure(error instanceof Error ? error.message : String(error))
+              })
+              .finally(() => setSaving(false))
+          }}
+        >
+          {saving ? 'Saving…' : 'Yes, applied'}
+        </button>
+        <button type="button" className="button" disabled={saving} onClick={onDismiss}>
+          Not this one
+        </button>
+      </div>
     </div>
   )
 }
