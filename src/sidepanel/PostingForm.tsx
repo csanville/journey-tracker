@@ -456,11 +456,32 @@ export function PostingForm({
 
     try {
       await send('posting/delete', { id })
+
+      /**
+       * The revisit banner, cleared here because nothing else can.
+       *
+       * It is hidden while a record is open for editing, so this looks like it
+       * needs no attention — and then `reset()` clears `edited` and it comes
+       * straight back, naming the record that has just been deleted, with its
+       * dates. The effect that owns `revisit` is keyed on the detection id, and
+       * a delete does not change what the tab is showing: `detection/get` reads
+       * a cache that only a content script's report ever writes. So the effect
+       * never re-runs and the stale answer survives until the tab navigates.
+       *
+       * Exactly the badge defect, in a sibling banner, missed by the same
+       * reasoning — twice now the panel has been credited with re-checking
+       * something that `refreshDetection` cannot re-check.
+       *
+       * Only when it names *this* record. A banner about some other posting the
+       * page also matches is still true, and clearing it would trade a false
+       * claim for a missing one.
+       */
+      setRevisit((current) => (current?.posting.id === id ? null : current))
+
       // Before `reset`, which clears the record this was about. This refreshes
-      // what the *panel* claims — the list and the revisit banner. The toolbar
-      // badge is repainted by the worker inside `posting/delete`, because it is
-      // the only context that can: the panel's re-read of the active tab goes
-      // through `detection/get`, which reads the cache and touches nothing.
+      // the list and, through it, the counts. The toolbar badge is repainted by
+      // the worker inside `posting/delete`, because it is the only context that
+      // can reach `chrome.action`.
       onDeleted()
       reset()
     } catch (error) {

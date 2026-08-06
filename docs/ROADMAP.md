@@ -840,6 +840,50 @@ badge is neither. It is a side effect in a third context. Nothing but running
 the extension was going to find it, which is an argument for the walkthrough
 rather than an argument for more tests.
 
+### What review changed
+
+Two defects, and they are **the same defect as the badge** — state that outlives
+the thing it describes, in a panel that had just been given a way to make things
+stop existing. Three instances now, all in one phase, all found after the code
+was written and none by the tests written alongside it.
+
+**The revisit banner outlived the record it named.** Delete a posting while
+sitting on its own page and the banner returned — "You looked at this on
+14 March", naming the record just deleted, with its dates. It is hidden while a
+record is open for editing, which is exactly what made it look like it needed no
+attention: `reset()` clears `edited` and the banner comes straight back. The
+effect that owns `revisit` is keyed on the detection id, and deleting a record
+does not change what the tab is showing, so it never re-runs.
+
+This is the badge, one banner over. Worse, the comment written *while fixing the
+badge* claimed `refreshDetection()` cleared this one — a false statement about a
+mechanism, replacing a different false statement about the same mechanism, in
+the same commit that was supposed to have learned the lesson. `detection/get`
+reads a cache only a content script ever writes; nothing the panel does can
+invalidate it.
+
+**The submission prompt's guard was one-directional.** Phase 9 added a check
+that refuses to raise a prompt for a record already open in the form, and wrote
+a comment describing precisely what would go wrong if both owned the record at
+once. It did not cover the other ordering — prompt first, then the user opens
+that record — which is the likelier one, because the prompt names a company and
+a title and nothing else, so clicking the row to see which record it means is
+the obvious way to answer it. The draft seeds `viewed`, confirming writes
+`applied`, and the next Save writes `viewed` and a null `appliedAt` back over
+it. The user's own answer disappears, taking the date the response funnel is
+anchored on. A guard that names its failure mode in a comment and then closes
+one side of it is worth more than no guard and less than it looks.
+
+The tests are the other half of the finding. `PostingForm.test.tsx` mounts the
+form alone and *cannot* see either defect: one needs `App` to clear `editing` on
+the way out, the other needs the prompt and the form on screen together. A first
+attempt at the revisit test passed against the unfixed code, because a stubbed
+`onStopEditing` let the form re-open the record it had just deleted. **Both
+regression tests were then run against the reverted fix to prove they fail** —
+which is the only thing that distinguishes a regression test from a comment.
+`App.test.tsx` exists now, and the shared `chrome` stub grew `tabs`,
+`getManifest` and a real `onMessage` listener set to allow it.
+
 ### Deliberately not in phase 9
 
 - **Optimistic concurrency on an edit.** A record loaded, left open, and changed
@@ -901,6 +945,21 @@ record was overwritten anyway. So the check is better asked without mentioning
 awaits — **for every value a decision reads, ask when it was last true** — and
 the await is merely the most common way for the answer to be "before this
 started".
+
+**A third shape, and phase 9 found it three times: state that outlives what it
+describes.** The badge, the revisit banner and the submission prompt are all
+claims about a record, all held in a context that does not learn when the record
+changes. Deleting is what exposed it, because before phase 9 nothing could make
+a record stop existing while something was still pointing at it. Each was
+individually invisible: the badge lives in the toolbar, the banner is hidden
+behind the very mode that deletes, and the prompt only collides when two
+surfaces are on screen together.
+
+The check: **for every surface that names a record, ask what tells it the record
+is gone.** If the answer is "a re-read that happens to run", it does not — a
+cache read returning the same value re-runs nothing, and an effect keyed on
+something that did not change does not fire. The invalidation belongs wherever
+the record is destroyed, not wherever it is displayed.
 
 ## Changes from the original plan
 

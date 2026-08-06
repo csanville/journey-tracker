@@ -156,6 +156,32 @@ export function App() {
     }
   }, [])
 
+  /**
+   * The other half of the guard in `announceSubmitted`, which was one-directional.
+   *
+   * That one refuses to *raise* a prompt for a record already open in the form.
+   * It does nothing about a prompt that is already up when the user opens the
+   * same record — which is the likelier order, because the prompt names a
+   * company and a title and says nothing else, so clicking the row to see which
+   * record it means is the obvious way to answer it.
+   *
+   * Left alone, both own the record and the form wins. The draft was seeded
+   * before the prompt was confirmed, so it still holds `state: 'viewed'`;
+   * confirming writes `applied`, and the next Save — enabled whether or not
+   * anything was typed — writes `viewed` and a null `appliedAt` straight back
+   * over it. The user's explicit "Yes, applied" disappears, taking with it the
+   * date the whole response funnel is anchored on.
+   *
+   * Retired rather than marked answered. `announceSubmitted` re-reads the record
+   * and declines to ask about one that already says `applied`, so a later event
+   * can safely raise the question again if it is still genuinely open — whereas
+   * marking it answered would suppress it for the life of the panel on the
+   * strength of the user merely having looked.
+   */
+  useEffect(() => {
+    setSubmitted((current) => (current && current.id === editing?.id ? null : current))
+  }, [editing?.id])
+
   useEffect(() => {
     void refreshDetection()
 
