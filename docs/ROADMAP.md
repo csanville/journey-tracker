@@ -17,7 +17,7 @@ then merged.
 | 6 ✅ | `feat/export-import` | JSON lean/full round-trip, CSV report, skip-duplicate import, snapshot retention sweep | Export, wipe, re-import — data identical |
 | 7 ✅ | `feat/dashboard` | Extension-page dashboard; `liveQuery` over a schema-less read connection; status funnel, over time, per-board yield | Patterns visible across saved data |
 | 8 ✅ | `feat/outcomes`, `feat/submit-detect` | Schema v3 `stage`/`outcome`; response funnel, endings and silence on the dashboard; Greenhouse confirmation-URL detection behind a prompt | The dashboard says what happened after you applied, and a real Greenhouse submission raises a prompt |
-| 9 | `feat/edit-record` | Editing a saved posting from the panel — the capability phase 7's docs assumed already existed, and which phase 8's fields need to be worth anything | Change a record's stage and outcome weeks after saving it, without writing a second record |
+| 9 ✅ | `feat/edit-record` | Editing a saved posting from the panel — the capability phase 7's docs assumed already existed, and which phase 8's fields need to be worth anything; a filter to find the record, and delete | Change a record's stage and outcome weeks after saving it, without writing a second record |
 | later | — | Workday, Ashby, iCIMS, SmartRecruiters adapters; diagnostics action; wire up `waitForMigration`; persist a pending submission prompt | — |
 
 ## Phase 1 — schema and storage
@@ -655,6 +655,11 @@ therefore **not finished by its own standard** until phase 9 lands; what shipped
 is the schema, the arithmetic and the surfaces, with the one interaction that
 makes them mean anything still missing.
 
+> **Closed by phase 9.** The edit path exists, and the paragraphs above are kept
+> as written because the limit was real for the length of a phase and the
+> reasoning is what produced the next one. The response funnel is no longer
+> inert.
+
 Two smaller gaps, recorded rather than fixed:
 
 - **`waitForMigration` has never had a production caller.** Decision 9 says "the
@@ -718,6 +723,139 @@ made a load-bearing fallback look redundant.
 - **Response detection from email.** That is decision 7's external tracker, and
   it is still early.
 
+## Phase 9 — editing a saved record
+
+The phase phase 8 was waiting on. Everything before it could get records in and
+read them back; this is the first that can change one after it exists.
+
+The work turned out to be almost entirely in the panel. `posting/get`,
+`posting/upsert` and `posting/delete` were already live message types with tests
+against them, `upsertPosting` was already keyed by a caller-supplied id and
+already preserved `createdAt`, and `findDuplicate` already declined to match a
+record against itself. **The storage and message layers needed no changes at
+all** — which is decision 4 paying out four phases later, and worth recording
+because it is the opposite of what a "we cannot edit anything" limit sounds like
+it will cost.
+
+- **`draftFromPosting`, the missing inverse.** `toPostingInput` had existed since
+  phase 3 with nothing going the other way. The test that matters is a
+  round-trip driven off `POSTING_INPUT_FIELDS`: open a record, touch nothing,
+  save, and every caller-owned field must come back identical. Written against
+  the list rather than as assertions, so a field added later joins the check by
+  existing — a field this pair dropped silently would be a field the user loses
+  by looking at it.
+- **`isDirty`'s baseline, cashed in.** It has compared against a baseline rather
+  than against empty since phase 3, for the auto-fill case that did not exist
+  yet. A stored record is just another baseline, so "the user has changed
+  something" became "differs from the record as stored" without touching the
+  function.
+- **A filter over the whole list, not a longer list.** Five recent rows answer
+  "did that save work", which is what phase 3 needed. They cannot answer "where
+  is the job I applied to last month", and that is the *only* question this phase
+  exists to serve — the record whose rejection needs recording is by definition
+  not a recent one. Plain case-insensitive substring over company and title;
+  `normalizeCompany` exists to make join keys agree, not to second-guess a search
+  box.
+- **Delete, finally given a surface.** The message existed and had never had a
+  caller. Two presses, and the worker repaints the tracked badges from inside
+  the handler — phase 6's "badges left asserting records a wipe had just
+  deleted" is the same defect one record at a time. See below: this is the one
+  thing that shipped wrong and had to be found by using it.
+
+### The two that would have destroyed data
+
+Both are recorded because neither is visible from the feature description, and
+both are about the id rather than about the fields.
+
+**Editing had to suppress the swap rule.** A record just loaded equals its own
+baseline, so it is *pristine* by every test decision 13 applies — and pristine is
+the state that auto-fills. Left alone, tabbing to any posting would repopulate
+the form from that page **while it still held the stored record's id**, and the
+next save would write the other job over the record being edited. Not a lost
+draft: a destroyed record, reached by exactly the "pristine is not empty"
+subtlety the swap rule was written around. `swapAction` gained an `editing` flag
+that returns `announce` — offer, never take, because re-reading a posting whose
+description changed is a real thing to want and an explicit fill layers onto the
+current draft.
+
+**Provenance had to be carried forward.** The save path chose between a
+detection's context and `MANUAL_SAVE`, and an edit is neither. Falling through to
+`MANUAL_SAVE` would restamp a record `manual@1` the first time anybody corrected
+a typo in it — taking with it the only thing that says which records a later
+adapter fix should replay (decision 6), for exactly the records that have a
+snapshot worth replaying. `editContextFor` mirrors `saveContextFor` line for
+line, including the rule that a structured salary survives only while the text
+still reads as it was stored.
+
+### A third place the gap is not an await
+
+The swap guard was written, tested as a pure function, and *still let the record
+be overwritten* on the one path that mattered. The component test caught it.
+
+The effect that loads a record and the effect that swaps in a detection run in
+the **same commit**. On the pass where the record arrives, the swap effect reads
+`edited` as it was rendered — `null` — not as the effect above it has just set
+it. So a record opened while the active tab was itself a posting was filled over
+before it had ever been seen, with the guard present and correct and looking at
+stale state.
+
+This is the "check-then-act spanning an await" shape with the await removed. The
+gap is a render commit, and the lesson generalises the entry under "Recurring
+shapes" below: **the thing to ask is not "is there an await here" but "what does
+this read, and when was it true".** The fix is to guard on the prop — the request
+— which is available on the same render, rather than on the state derived from
+it.
+
+### What using it changed
+
+One defect, and it is the interesting kind: **the badge did not clear after a
+delete.** Save a Greenhouse posting, delete it immediately, and the toolbar went
+on saying `✓` until the page was reloaded — at which point it cleared, which is
+what made the cause findable.
+
+The panel *was* re-reading the active tab, and a comment beside that call said
+so and claimed the badge as its reason. That claim was false. `detection/get` is
+a pure cache read; nothing on the panel's side of the protocol reaches
+`chrome.action` at all. The only thing that repaints a badge is a fresh
+`detection/report` from a content script, and that means a page load. So the
+panel was doing something real, being credited with something else, and the gap
+between the two was invisible because both halves looked right on their own.
+
+The repaint moved into the `posting/delete` handler, which is the one context
+that both knows the record is gone and can reach the toolbar — the one-record
+case of what `backup/wipe` has done since phase 6, calling the same
+`repaintTrackedTabs`. Passing no `tracked` argument is the whole difference: a
+wipe can assert `false` for every tab, whereas after one deletion each tab has
+to be **asked again**, because the answer differs per tab. There is now a test
+for each direction, including that an unrelated deletion leaves a still-valid
+badge lit.
+
+Worth recording for two reasons beyond the fix. First, it is decision 3's
+recurring pattern — a mechanism recorded as working because its existence was
+checked rather than its behaviour — arriving for the fifth time, and this time
+inside a phase whose own notes had just finished describing that pattern.
+Second, **no test would have caught it**, and not because of an oversight: every
+test in this phase asserted against the database or the rendered panel, and the
+badge is neither. It is a side effect in a third context. Nothing but running
+the extension was going to find it, which is an argument for the walkthrough
+rather than an argument for more tests.
+
+### Deliberately not in phase 9
+
+- **Optimistic concurrency on an edit.** A record loaded, left open, and changed
+  from elsewhere before the save will be overwritten by the stale copy. Doing it
+  properly needs `updatedAt` through `PostingInput`, which the type deliberately
+  omits so a caller cannot forge one. The one realistic collision is closed
+  instead: a submission prompt for the record currently being edited is
+  suppressed, because otherwise the prompt writes `applied` and the form writes
+  its own stale `state` straight back over it. The rest needs a real user to
+  leave the panel open across a change they made in another window.
+- **Editing from the dashboard.** Decision 4 forbids it writing, and it cannot
+  open the per-tab side panel programmatically. The panel is where a record is
+  edited — which, since phase 7, is finally a true statement.
+- **Bulk edits.** A list with checkboxes is a different feature and would need
+  its own answer to what a partial failure means.
+
 ## Recurring shapes
 
 Two shapes account for most of what review has found, across every phase that
@@ -755,6 +893,14 @@ The check: wherever an `await` sits between deciding and doing, ask what else
 could run in the gap — and note that in an extension the answer is rarely
 another thread. It is usually the same person clicking twice, or a service
 worker dying mid-conversation.
+
+Phase 9 widened this one. Its instance had **no await at all**: two effects in
+the same render commit, where the second read state the first had just set and
+saw the previous value. The guard was present, correct, and unit-tested, and the
+record was overwritten anyway. So the check is better asked without mentioning
+awaits — **for every value a decision reads, ask when it was last true** — and
+the await is merely the most common way for the answer to be "before this
+started".
 
 ## Changes from the original plan
 
