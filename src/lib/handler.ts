@@ -77,6 +77,18 @@ async function dispatch(
       return repo.findDuplicate(db, request.posting)
     case 'posting/delete':
       await repo.deletePosting(db, request.id)
+      // The one-record case of what `backup/wipe` does below, and it needs the
+      // same treatment for the same reason: a badge is a claim that the page a
+      // tab is showing is in the database, and deleting the record makes every
+      // badge asserting it false. Nothing else would repaint them — `detection/
+      // get` is a pure cache read, so the panel re-reading the active tab does
+      // not touch the toolbar, and only a fresh report from a content script
+      // would. That means a reload, which is not something the user should have
+      // to know to do.
+      //
+      // No `tracked` argument, unlike the wipe: after one deletion each tab has
+      // to be asked again rather than told, because the answer differs per tab.
+      await repaintTrackedTabs(db)
       return { deleted: request.id }
     case 'snapshot/put':
       await repo.putSnapshot(db, request.snapshot)

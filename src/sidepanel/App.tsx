@@ -29,7 +29,22 @@ export function App() {
   const [detection, setDetection] = useState<DetectionSummary | null>(null)
   /** A posting whose confirmation page was just seen, awaiting an answer. */
   const [submitted, setSubmitted] = useState<Posting | null>(null)
+  /**
+   * A record the user asked to edit — a request handed to the form, which owns
+   * whether it can be taken. Held here because the list that raises it is here.
+   */
+  const [editing, setEditing] = useState<Posting | null>(null)
   const version = chrome.runtime.getManifest().version
+
+  /**
+   * Mirrors `editing` for the effect that must not close over a changing value.
+   *
+   * `announceSubmitted` is built once and lives in a listener for the life of
+   * the panel; reading `editing` directly would pin it to whatever was open when
+   * the listener was installed.
+   */
+  const editingId = useRef<string | null>(null)
+  editingId.current = editing?.id ?? null
 
   const refresh = useCallback(async (): Promise<StatusReport | null> => {
     try {
@@ -118,13 +133,20 @@ export function App() {
    */
   const announceSubmitted = useCallback(async (postingId: string) => {
     if (answered.current.has(postingId)) return
+    // The form already has this record open, so the prompt would be a second
+    // owner of it: confirming writes `state: 'applied'`, and the edit in the
+    // form — loaded before that write — would then save its own stale `state`
+    // straight back over it. The user is looking at the field in question and
+    // can set it themselves.
+    if (editingId.current === postingId) return
 
     try {
       const posting = await send('posting/get', { id: postingId })
       if (!posting || posting.state === 'applied') return
       // Re-checked after the round trip: the user may have answered a prompt
-      // for this same record while the read was in flight.
-      if (answered.current.has(posting.id)) return
+      // for this same record while the read was in flight, or opened it for
+      // editing, either of which settles the question this was going to ask.
+      if (answered.current.has(posting.id) || editingId.current === posting.id) return
 
       setSubmitted(posting)
     } catch (error) {
@@ -133,6 +155,32 @@ export function App() {
       console.debug('[JourneyTracker] could not read the submitted posting', error)
     }
   }, [])
+
+  /**
+   * The other half of the guard in `announceSubmitted`, which was one-directional.
+   *
+   * That one refuses to *raise* a prompt for a record already open in the form.
+   * It does nothing about a prompt that is already up when the user opens the
+   * same record — which is the likelier order, because the prompt names a
+   * company and a title and says nothing else, so clicking the row to see which
+   * record it means is the obvious way to answer it.
+   *
+   * Left alone, both own the record and the form wins. The draft was seeded
+   * before the prompt was confirmed, so it still holds `state: 'viewed'`;
+   * confirming writes `applied`, and the next Save — enabled whether or not
+   * anything was typed — writes `viewed` and a null `appliedAt` straight back
+   * over it. The user's explicit "Yes, applied" disappears, taking with it the
+   * date the whole response funnel is anchored on.
+   *
+   * Retired rather than marked answered. `announceSubmitted` re-reads the record
+   * and declines to ask about one that already says `applied`, so a later event
+   * can safely raise the question again if it is still genuinely open — whereas
+   * marking it answered would suppress it for the life of the panel on the
+   * strength of the user merely having looked.
+   */
+  useEffect(() => {
+    setSubmitted((current) => (current && current.id === editing?.id ? null : current))
+  }, [editing?.id])
 
   useEffect(() => {
     void refreshDetection()
@@ -267,11 +315,23 @@ export function App() {
 
       <PostingForm
         detection={detection}
+        editing={editing}
+        onStopEditing={() => setEditing(null)}
         onSaved={() => {
           void refresh()
           // A save wipes the form, so the next thing the user sees should be
           // this page offering itself again rather than a stale banner about
           // the posting they just filed.
+          void refreshDetection()
+        }}
+        onDeleted={() => {
+          void refresh()
+          // The revisit banner, which is the panel's own claim about the active
+          // tab and is now false. The *badge* is not this call's doing and an
+          // earlier version of this comment said it was: `detection/get` only
+          // reads the cache, so nothing here reaches the toolbar. The worker
+          // repaints it from the `posting/delete` handler, which is the only
+          // context that can.
           void refreshDetection()
         }}
       />
@@ -321,7 +381,7 @@ export function App() {
             </button>
           )}
         </h2>
-        <RecentPostings postings={postings} />
+        <RecentPostings postings={postings} onEdit={setEditing} />
       </section>
 
       {/*
@@ -364,7 +424,7 @@ export function App() {
         </dl>
       </details>
 
-      <footer className="panel__foot">Phase 8 · outcomes</footer>
+      <footer className="panel__foot">Phase 9 · editing</footer>
     </div>
   )
 }

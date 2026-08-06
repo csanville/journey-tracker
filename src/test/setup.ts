@@ -108,8 +108,46 @@ const action = {
   setBadgeBackgroundColor: vi.fn(async () => undefined),
 }
 
+/**
+ * `onMessage` and `getManifest` exist for the panel's sake.
+ *
+ * `App` installs a broadcast listener on mount and reads the version for its
+ * header, so without these a test of the panel fails on a missing global before
+ * it reaches anything it was written to check. The listener set is real rather
+ * than a bare spy because the panel's own behaviour on a broadcast — retiring a
+ * prompt, re-reading a tab — is worth being able to drive from a test.
+ */
+const messageListeners = new Set<(message: unknown) => void>()
+
 const runtime = {
   sendMessage: vi.fn(async () => undefined),
+  getManifest: vi.fn(() => ({ version: '0.0.1-test' })),
+  getURL: vi.fn((path: string) => `chrome-extension://test/${path}`),
+  onMessage: {
+    addListener: (listener: (message: unknown) => void) => messageListeners.add(listener),
+    removeListener: (listener: (message: unknown) => void) =>
+      messageListeners.delete(listener),
+  },
+}
+
+/** Delivers a broadcast to whatever is listening, as the worker would. */
+export function emitMessage(message: unknown): void {
+  for (const listener of [...messageListeners]) listener(message)
+}
+
+/**
+ * Just enough `chrome.tabs` for the panel to find out which tab it sits beside.
+ *
+ * Only `id` is ever returned, which is the whole of what decision 2 permits
+ * without the `tabs` permission — a stub that handed back a `url` would let a
+ * test pass against code that could not work in a real browser.
+ */
+const tabs = {
+  query: vi.fn(async () => [{ id: 7 }]),
+  onActivated: {
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+  },
 }
 
 /**
@@ -128,14 +166,17 @@ vi.stubGlobal('chrome', {
     onChanged: storage.onChanged,
   },
   runtime,
+  tabs,
   action,
   scripting,
 })
 
 beforeEach(() => {
   storage.reset()
+  messageListeners.clear()
   action.setBadgeText.mockClear()
   action.setBadgeBackgroundColor.mockClear()
   runtime.sendMessage.mockClear()
+  tabs.query.mockClear()
   scripting.executeScript.mockClear()
 })

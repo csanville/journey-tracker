@@ -605,6 +605,58 @@ describe('importing a backup', () => {
     )
   })
 
+  /**
+   * The one thing phase 9 shipped wrong, found by using it rather than by any
+   * test: delete a record while its own page is open and the badge went on
+   * saying `✓` until the page was reloaded.
+   *
+   * The panel cannot fix this from its side and the first attempt assumed it
+   * could. Its re-read of the active tab goes through `detection/get`, which is
+   * a pure cache read — nothing on that path touches the toolbar. Only a fresh
+   * `detection/report` repaints, and that means a page load. So the repaint
+   * belongs here, in the only context that both knows the record is gone and
+   * can reach `chrome.action`.
+   *
+   * The same shape as the wipe below, one record at a time, and the same shape
+   * as the comment that claimed the panel handled it: a statement about a
+   * mechanism, checked by its existence rather than by its behaviour.
+   */
+  it('clears the badge of a tab showing the record just deleted', async () => {
+    const db = await freshDb()
+    await handleRequest(db, { kind: 'detection/report', report: aReport() }, { tabId: 7 })
+    const posting = trackedPosting()
+    await handleRequest(db, {
+      kind: 'posting/upsert',
+      posting,
+      detectionId: 'det-1',
+    })
+
+    vi.mocked(chrome.action.setBadgeText).mockClear()
+    await handleRequest(db, { kind: 'posting/delete', id: posting.id })
+
+    expect(vi.mocked(chrome.action.setBadgeText)).toHaveBeenCalledWith(
+      expect.objectContaining({ tabId: 7, text: '' }),
+    )
+  })
+
+  it('leaves the badge of a tab whose record survives the deletion', async () => {
+    const db = await freshDb()
+    await handleRequest(db, { kind: 'detection/report', report: aReport() }, { tabId: 7 })
+    await handleRequest(db, {
+      kind: 'posting/upsert',
+      posting: trackedPosting(),
+      detectionId: 'det-1',
+    })
+
+    vi.mocked(chrome.action.setBadgeText).mockClear()
+    // Some other record entirely. Re-asking must not turn into clearing.
+    await handleRequest(db, { kind: 'posting/delete', id: 'not-the-one-on-screen' })
+
+    expect(vi.mocked(chrome.action.setBadgeText)).toHaveBeenCalledWith(
+      expect.objectContaining({ tabId: 7, text: '✓' }),
+    )
+  })
+
   it('lights the badge of a tab whose record a restore brought back', async () => {
     const db = await freshDb()
     await handleRequest(db, { kind: 'detection/report', report: aReport() }, { tabId: 7 })

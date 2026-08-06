@@ -1,7 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import type { DetectionSummary } from '../lib/detection'
 import { EMPTY_DRAFT, toPostingInput, type Draft } from './draft'
-import { draftFromDetection, fieldsFilled, saveContextFor, swapAction } from './fill'
+import type { Posting } from '../lib/types'
+import { aPosting } from '../test/factories'
+import {
+  draftFromDetection,
+  editContextFor,
+  fieldsFilled,
+  saveContextFor,
+  swapAction,
+} from './fill'
 
 function aDetection(overrides: Partial<DetectionSummary> = {}): DetectionSummary {
   return {
@@ -185,6 +193,7 @@ describe('swapAction', () => {
     dirty: false,
     busy: false,
     prompting: false,
+    editing: false,
     dismissed: false,
   }
 
@@ -255,5 +264,108 @@ describe('swapAction', () => {
     // `busy` outranks `prompting`: the phases are mutually exclusive in the
     // component, but the rule must not depend on that to stay safe.
     expect(swapAction({ ...base, prompting: true, busy: true })).toBe('nothing')
+  })
+})
+
+describe('swapAction while editing a stored record', () => {
+  const base = {
+    offered: true,
+    dirty: false,
+    busy: false,
+    prompting: false,
+    editing: true,
+    dismissed: false,
+  }
+
+  /**
+   * The case this flag exists for, and the one that would have destroyed a
+   * record rather than a draft.
+   *
+   * A record just loaded for editing equals its own baseline, so it is pristine
+   * by every other test here — and pristine is the state that swaps. Without
+   * `editing` the form would silently repopulate from whatever tab the user
+   * glanced at, *while still holding the stored record's id*, and the next save
+   * would write that other job over the record being edited.
+   */
+  it('never fills over a record, however untouched it looks', () => {
+    expect(swapAction(base)).toBe('announce')
+  })
+
+  /**
+   * `announce` rather than `nothing`, and the difference is intent rather than
+   * behaviour — the component treats both as "leave the form alone", and the
+   * banner renders from `offered` on its own. It is written this way because
+   * re-reading a posting whose description changed is a real thing to want, and
+   * an explicit fill layers onto the current draft rather than replacing it.
+   * Offer, never take.
+   */
+  it('holds the answer whatever else is true of the form', () => {
+    expect(swapAction({ ...base, dirty: true })).toBe('announce')
+    // Ahead of `dismissed`, so folding the banner away cannot turn the guard
+    // off. It is checked before that branch is ever reached.
+    expect(swapAction({ ...base, dismissed: true })).toBe('announce')
+  })
+
+  it('still does nothing while a write is in flight', () => {
+    expect(swapAction({ ...base, busy: true })).toBe('nothing')
+  })
+
+  it('leaves a new draft filling exactly as it did', () => {
+    // The flag must not change the behaviour it was not about.
+    expect(swapAction({ ...base, editing: false })).toBe('fill')
+  })
+})
+
+describe('editContextFor', () => {
+  function stored(overrides: Partial<Posting> = {}): Posting {
+    return {
+      ...aPosting(),
+      companyNormalized: 'initech',
+      canonicalUrl: 'https://boards.greenhouse.io/initech/jobs/4021',
+      schemaVersion: 3,
+      createdAt: 1000,
+      updatedAt: 1000,
+      ...overrides,
+    }
+  }
+
+  it('carries the adapter that produced the record', () => {
+    const posting = stored({
+      source: 'greenhouse',
+      sourceConfidence: 0.9,
+      adapterVersion: 'greenhouse@3',
+    })
+
+    expect(editContextFor(posting, EMPTY_DRAFT)).toMatchObject({
+      source: 'greenhouse',
+      sourceConfidence: 0.9,
+      adapterVersion: 'greenhouse@3',
+    })
+  })
+
+  /**
+   * A structured range cannot survive a round trip through an all-strings form,
+   * so it travels alongside — the same arrangement `saveContextFor` makes, for
+   * the same reason. Without it, opening a record and saving it unchanged would
+   * flatten `{min, max, currency, period}` to a bare string.
+   */
+  it('keeps the structured salary while the text still reads as stored', () => {
+    const posting = stored()
+    const draft: Draft = { ...EMPTY_DRAFT, salary: posting.salary!.raw! }
+
+    expect(editContextFor(posting, draft).salary).toEqual(posting.salary)
+  })
+
+  it('drops it once the user has typed over the text', () => {
+    const posting = stored()
+    const draft: Draft = { ...EMPTY_DRAFT, salary: '$200k flat' }
+
+    // The figures described the old sentence. Keeping them would store a range
+    // that contradicts the text beside it.
+    expect(editContextFor(posting, draft).salary).toBeNull()
+  })
+
+  it('has no salary to keep when the record had none', () => {
+    expect(editContextFor(stored({ salary: null }), EMPTY_DRAFT).salary).toBeNull()
   })
 })

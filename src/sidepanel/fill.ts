@@ -1,4 +1,5 @@
 import type { DetectionSummary } from '../lib/detection'
+import type { Posting } from '../lib/types'
 import { EMPTY_DRAFT, type Draft, type SaveContext } from './draft'
 
 /**
@@ -94,8 +95,9 @@ export function fieldsFilled(detection: DetectionSummary, base: Draft): Fillable
  *   must swap, because it is what tabbing between two postings looks like.
  * - `announce` — the form is holding something the user has not finished with,
  *   so the posting waits in a banner. Losing typed notes by tabbing away to
- *   check something is the small betrayal decision 13 exists to prevent, and an
- *   unanswered question is the same betrayal in a different shape.
+ *   check something is the small betrayal decision 13 exists to prevent, an
+ *   unanswered question is the same betrayal in a different shape, and a stored
+ *   record open for editing is the same betrayal with a record behind it.
  * - `nothing` — either there is no new posting, or a save is in flight, or the
  *   user already folded this one away. A save in flight matters more than it
  *   looks: the draft has already been snapshotted for writing, so a fill landing
@@ -110,6 +112,22 @@ export function swapAction(state: {
   dirty: boolean
   /** Whether a save is in flight. */
   busy: boolean
+  /**
+   * Whether the form is holding a stored record rather than a new draft.
+   *
+   * The one state where `dirty` is actively misleading. A record just loaded for
+   * editing equals its own baseline, so it is pristine by every test above — and
+   * a pristine form is the case that swaps. The form would silently repopulate
+   * from whatever tab the user glanced at *while still holding the stored
+   * record's id*, and the next save would write that other job over the record
+   * being edited. Not a lost draft: a destroyed record.
+   *
+   * `announce` rather than `nothing`, so the offer survives. Re-reading a
+   * posting whose description changed is a real thing to want, and an explicit
+   * fill layers onto the current draft, leaving state, notes, tags, stage and
+   * outcome alone. Offer, never take.
+   */
+  editing: boolean
   /**
    * Whether the form is waiting on an answer — the duplicate prompt, or a save
    * that failed.
@@ -127,7 +145,7 @@ export function swapAction(state: {
   dismissed: boolean
 }): SwapAction {
   if (!state.offered || state.busy) return 'nothing'
-  if (state.dirty || state.prompting) return 'announce'
+  if (state.dirty || state.prompting || state.editing) return 'announce'
 
   return state.dismissed ? 'nothing' : 'fill'
 }
@@ -152,6 +170,39 @@ export function saveContextFor(detection: DetectionSummary, draft: Draft): SaveC
     salary:
       detection.fields.salary && draft.salary.trim() === (filled.salary ?? '').trim()
         ? detection.fields.salary
+        : null,
+  }
+}
+
+/**
+ * The provenance to keep when saving a record that was loaded for editing.
+ *
+ * `saveContextFor`'s argument, one step further on. That one says provenance
+ * survives the user correcting a field by hand; this says it survives the user
+ * coming back three weeks later to record a rejection. Both answer the same
+ * question — "which adapter produced this record" — and the answer does not
+ * change because somebody edited it.
+ *
+ * Without this the edit path falls through to `MANUAL_SAVE` and every saved
+ * record becomes `manual@1` the first time it is touched. That is not a cosmetic
+ * loss: `source` and `adapterVersion` are what tell a later parser fix which
+ * records to replay against their snapshots (decision 6), so the records that
+ * would lose it are exactly the ones extraction produced — the only ones with a
+ * snapshot worth replaying.
+ *
+ * The salary rule is `saveContextFor`'s, for the same reason: a structured range
+ * cannot round-trip through an all-strings form, so it is carried alongside and
+ * kept only while the text still reads as it was stored. Once the user has typed
+ * over it, the figures describe something else.
+ */
+export function editContextFor(posting: Posting, draft: Draft): SaveContext {
+  return {
+    source: posting.source,
+    sourceConfidence: posting.sourceConfidence,
+    adapterVersion: posting.adapterVersion,
+    salary:
+      posting.salary && draft.salary.trim() === (posting.salary.raw ?? '').trim()
+        ? posting.salary
         : null,
   }
 }

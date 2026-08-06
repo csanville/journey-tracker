@@ -141,6 +141,19 @@ body {
   background: transparent;
 }
 
+/*
+ * The editing banner sits between the two: not a caution, but not merely an
+ * observation either. It changes what the Save button does — updates a record
+ * rather than adding one — so it takes the indigo edge the detected banner uses
+ * for "this is a mode you are in", with no fill so it stays quieter than an
+ * offer with buttons on it.
+ */
+.notice--editing {
+  border-color: var(--indigo);
+  background: transparent;
+  font-size: 0.82rem;
+}
+
 .detected--quiet {
   display: flex;
   justify-content: flex-start;
@@ -384,8 +397,57 @@ body {
 .recent__item {
   display: grid;
   gap: 0.1rem;
-  padding: calc(var(--step) * 0.6) calc(var(--step) * 0.75);
   background: var(--surface);
+}
+
+/*
+ * The whole row is the control, not an "edit" link beside it. The row is what
+ * the user is pointing at, the panel is 360px wide, and a separate affordance
+ * would be a target barely wider than its own outline.
+ *
+ * Reset to look like the row it replaces: a button brings its own font, colour,
+ * alignment and background, all of which are wrong here.
+ */
+.recent__open {
+  display: grid;
+  gap: 0.1rem;
+  width: 100%;
+  padding: calc(var(--step) * 0.6) calc(var(--step) * 0.75);
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.recent__open:hover {
+  background: color-mix(in srgb, var(--indigo) 7%, transparent);
+}
+
+.recent__count {
+  margin: 0;
+  color: var(--ink-faint);
+  font-size: 0.72rem;
+}
+
+/* The search box is a field without a visible label — the placeholder says what
+   it is, and a label above it in a 360px panel costs a line for nothing. The
+   label still exists for a screen reader; see `.visually-hidden`. */
+.field--filter {
+  margin: 0;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  clip-path: inset(50%);
+  overflow: hidden;
+  white-space: nowrap;
 }
 
 .recent__company {
@@ -417,6 +479,19 @@ body {
 .pill--applied {
   background: color-mix(in srgb, var(--indigo) 22%, transparent);
   color: var(--indigo);
+}
+
+/*
+ * Stage and outcome are shown, but not coloured in like `applied` is. Neither is
+ * good or bad news on its own — `rejected` after three interviews is a better
+ * row than an `applied` that never moved — and a palette that scored them would
+ * be making a judgement the data does not support. They read as facts, in the
+ * same grey as everything else, and only their presence is the signal.
+ */
+.pill--stage,
+.pill--outcome {
+  background: transparent;
+  border: 1px solid var(--rule);
 }
 
 /* ---- backup -------------------------------------------------------------- */
@@ -492,9 +567,18 @@ body {
  * control that is collapsed inside a drawer — the confirmation step is what
  * carries the weight, and it is one click away.
  */
-.backup__danger {
+.backup__danger,
+.form__danger {
   padding-top: var(--step);
   border-top: 1px solid var(--rule);
+}
+
+/* Below the fields and above the save row, so the destructive thing is never
+   adjacent to the thing the user came to press. */
+.form__danger {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--step) * 0.5);
 }
 
 .button--danger {
