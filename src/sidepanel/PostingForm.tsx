@@ -3,18 +3,25 @@ import { send } from '../lib/client'
 import type { DetectionSummary } from '../lib/detection'
 import { newId } from '../lib/ids'
 import { postingInputFromDetection } from '../lib/tracked'
-import type { DuplicateMatch } from '../lib/types'
+import type { DuplicateMatch, Posting } from '../lib/types'
 import {
   EMPTY_DRAFT,
   MANUAL_SAVE,
   draftErrors,
+  draftFromPosting,
   isDirty,
   isSaveable,
   toPostingInput,
   today,
   type Draft,
 } from './draft'
-import { draftFromDetection, fieldsFilled, saveContextFor, swapAction } from './fill'
+import {
+  draftFromDetection,
+  editContextFor,
+  fieldsFilled,
+  saveContextFor,
+  swapAction,
+} from './fill'
 
 /**
  * How long the form takes to clear itself after a save. Matches the
@@ -30,6 +37,7 @@ type Phase =
   /** Something already stored looks like this posting; saving would add a copy. */
   | { name: 'duplicate'; match: DuplicateMatch }
   | { name: 'saving' }
+  | { name: 'deleting' }
   | { name: 'wiping' }
   | { name: 'failed'; message: string }
 
@@ -53,11 +61,27 @@ interface Filled {
 
 export function PostingForm({
   onSaved,
+  onDeleted,
   detection,
+  editing,
+  onStopEditing,
 }: {
   onSaved: () => void
+  /** A record was removed; the list and the badge both now claim something false. */
+  onDeleted: () => void
   /** What the active tab is showing, or `null` if it is not a posting. */
   detection: DetectionSummary | null
+  /**
+   * A stored record the user asked to edit — a *request*, not the state.
+   *
+   * What the form has actually loaded is `edited` below, and the two are
+   * deliberately separate for the same reason `offered` and `filled` are: a
+   * request to take something new has to be refusable while the form is holding
+   * work, and a prop cannot be refused.
+   */
+  editing: Posting | null
+  /** The form is no longer holding a stored record — saved, discarded or deleted. */
+  onStopEditing: () => void
 }) {
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT)
   const [phase, setPhase] = useState<Phase>({ name: 'editing' })
@@ -71,16 +95,48 @@ export function PostingForm({
   const [revisit, setRevisit] = useState<DuplicateMatch | null>(null)
 
   /**
+   * The stored record the form is holding, and the draft it was loaded as.
+   *
+   * The draft half is the dirty baseline, exactly as `Filled` carries one: from
+   * here on "the user has changed something" means "differs from the record as
+   * stored", not "differs from blank". A record loaded and left alone is not
+   * dirty, which is what makes Discard and the swap rule behave.
+   */
+  const [edited, setEdited] = useState<{ posting: Posting; draft: Draft } | null>(null)
+  /** Set when opening a record would discard unsaved work, awaiting confirmation. */
+  const [confirmingEdit, setConfirmingEdit] = useState<Posting | null>(null)
+  /** Set when Delete has been pressed once. Destructive things ask twice. */
+  const [confirmingDelete, setConfirmingDelete] = useState(false)
+
+  /**
    * Fixed for the life of this draft rather than generated at save.
    *
    * A save that is retried — after the duplicate prompt, or after a failure —
    * must reuse the id, or the retry writes a second record instead of being the
-   * no-op the repository is built to make it.
+   * no-op the repository is built to make it. Editing is the same requirement
+   * arriving from the other end: the id is the stored record's, and that is the
+   * whole of what makes an edit an edit rather than a second record.
    */
   const [draftId, setDraftId] = useState(newId)
 
   const errors = draftErrors(draft)
-  const dirty = isDirty(draft, filled?.draft ?? EMPTY_DRAFT)
+  const dirty = isDirty(draft, filled?.draft ?? edited?.draft ?? EMPTY_DRAFT)
+
+  /**
+   * The form is holding a stored record, or is about to be.
+   *
+   * The second half is not belt-and-braces. The effect that loads a record and
+   * the effect that swaps in a detection run in the same commit, so on the pass
+   * where the record arrives `edited` is still `null` in the swap effect's
+   * closure — it reads the state as it was rendered, not as the effect above it
+   * has just set it. A record opened on a tab that is itself a posting was
+   * therefore filled straight over before it had ever been seen: pristine, by
+   * every test the swap rule applies, and still holding the stored record's id.
+   *
+   * The prop is the request and is available on the same render, so it closes
+   * the gap the state cannot.
+   */
+  const holdingRecord = edited !== null || editing !== null
 
   /**
    * Whether there is anything to throw away.
@@ -92,11 +148,21 @@ export function PostingForm({
    * governs "has the user typed something worth protecting" (decision 13);
    * this governs "is the form empty", which is what Discard is asking.
    */
-  const hasContent = dirty || filled !== null
+  const hasContent = dirty || filled !== null || edited !== null
   const busy =
-    phase.name === 'checking' || phase.name === 'saving' || phase.name === 'wiping'
-  /** The form is holding a question the user has not answered. See `swapAction`. */
-  const prompting = phase.name === 'duplicate' || phase.name === 'failed'
+    phase.name === 'checking' ||
+    phase.name === 'saving' ||
+    phase.name === 'deleting' ||
+    phase.name === 'wiping'
+  /**
+   * The form is holding a question the user has not answered. See `swapAction`.
+   *
+   * A pending "open this other record?" belongs here for the same reason the
+   * duplicate prompt does: a re-report from `watch-url.ts` — which polls every
+   * second — must not refill the form and take the question away unanswered.
+   */
+  const prompting =
+    phase.name === 'duplicate' || phase.name === 'failed' || confirmingEdit !== null
 
   /**
    * A detection worth offering: one that is not already in the form.
@@ -142,7 +208,56 @@ export function PostingForm({
     setFilled(null)
     setConfirmingFill(false)
     setDismissed(detection?.detectionId ?? null)
+    // Letting go of the record as well, and telling the owner of the request so
+    // it does not immediately hand the same one back. Every exit from editing
+    // runs through here — saved, discarded, deleted — so there is one place
+    // where the id stops being the stored record's.
+    setEdited(null)
+    setConfirmingEdit(null)
+    setConfirmingDelete(false)
+    onStopEditing()
   }
+
+  /** Loads a stored record into the form, under its own id. */
+  const openForEdit = (posting: Posting) => {
+    const next = draftFromPosting(posting)
+    setDraft(next)
+    setDraftId(posting.id)
+    setEdited({ posting, draft: next })
+    setShowErrors(false)
+    setPhase({ name: 'editing' })
+    // A record arriving replaces a fill, and must not leave its provenance
+    // behind: `save` prefers `filled` over `edited`, so a stale one here would
+    // stamp this record with the last detected page's adapter.
+    setFilled(null)
+    setConfirmingFill(false)
+    setConfirmingEdit(null)
+    setConfirmingDelete(false)
+  }
+
+  /**
+   * Takes the record the panel is asking the form to open.
+   *
+   * Refuses while the form holds unsaved work, which is decision 13's rule
+   * reaching the one surface that had no way to obey it. `hasContent` rather
+   * than `dirty`: a form filled from a page and left alone is not dirty, but
+   * throwing it away silently to open something else is still the small betrayal
+   * the rule exists to prevent.
+   */
+  useEffect(() => {
+    // Deferred rather than dropped while a save or a delete is in flight: the
+    // draft has already been snapshotted for writing, and `busy` is a dependency
+    // so the request is taken up the moment the write settles.
+    if (busy || !editing || editing.id === edited?.posting.id) return
+
+    if (hasContent) {
+      setConfirmingEdit(editing)
+      return
+    }
+
+    openForEdit(editing)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editing?.id, busy])
 
   /**
    * Applies a detection to the form.
@@ -190,6 +305,7 @@ export function PostingForm({
       dirty,
       busy,
       prompting,
+      editing: holdingRecord,
       dismissed: dismissed === offered?.detectionId,
     })
 
@@ -197,7 +313,7 @@ export function PostingForm({
     // banner below renders from `offered` on its own.
     if (action === 'fill' && offered) applyFill(offered, EMPTY_DRAFT)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [offered?.detectionId, busy, dirty, prompting, dismissed])
+  }, [offered?.detectionId, busy, dirty, prompting, dismissed, holdingRecord])
 
   /**
    * The revisit warning: "have I been here before", asked on arrival.
@@ -271,14 +387,30 @@ export function PostingForm({
     // Provenance travels with the save rather than being stamped on later: a
     // record that came off a page has to say which adapter read it, or a fix to
     // that adapter has no way to find the records it should replay (decision 6).
+    //
+    // The edit case is the one that would have lost it silently. Falling through
+    // to `MANUAL_SAVE` here would restamp a record `manual@1` the first time
+    // anybody corrected a typo in it — see `editContextFor`. A fill still wins,
+    // because a page just read from is a better answer than what the record said
+    // when it was written.
     const posting = toPostingInput(
       draft,
       draftId,
-      filled ? saveContextFor(filled.detection, draft) : MANUAL_SAVE,
+      filled
+        ? saveContextFor(filled.detection, draft)
+        : edited
+          ? editContextFor(edited.posting, draft)
+          : MANUAL_SAVE,
     )
 
     try {
-      if (!force) {
+      // Skipped when editing, because the check exists to stop a *second* record
+      // being written and an edit writes none — it goes to the same id. The
+      // repository already declines to match a record against itself, so this
+      // could only surface an unrelated posting, under copy ("You already saved
+      // this one · Discard this / Save anyway") that is nonsense when the thing
+      // you already saved is the thing you are editing.
+      if (!force && !edited) {
         setPhase({ name: 'checking' })
         const match = await send('posting/find-duplicate', { posting })
         if (match) {
@@ -305,6 +437,42 @@ export function PostingForm({
     }
   }
 
+  /**
+   * Removes the record being edited.
+   *
+   * Reachable only from edit mode, because there is nothing else to delete — a
+   * draft that has never been saved is discarded, not deleted, and the two
+   * buttons say so.
+   *
+   * The id is taken before the round trip and used after it rather than being
+   * re-read from state, so a record opened in the gap cannot be the one that
+   * gets reported as deleted.
+   */
+  async function remove() {
+    if (!edited) return
+    const { id } = edited.posting
+
+    setPhase({ name: 'deleting' })
+
+    try {
+      await send('posting/delete', { id })
+      // Before `reset`, which clears the record this was about. This refreshes
+      // what the *panel* claims — the list and the revisit banner. The toolbar
+      // badge is repainted by the worker inside `posting/delete`, because it is
+      // the only context that can: the panel's re-read of the active tab goes
+      // through `detection/get`, which reads the cache and touches nothing.
+      onDeleted()
+      reset()
+    } catch (error) {
+      console.error('[JourneyTracker] delete failed', error)
+      setPhase({
+        name: 'failed',
+        message: error instanceof Error ? error.message : String(error),
+      })
+      setConfirmingDelete(false)
+    }
+  }
+
   return (
     <form
       className={`form${phase.name === 'wiping' ? ' form--wiping' : ''}`}
@@ -314,10 +482,65 @@ export function PostingForm({
       }}
       noValidate
     >
+      {/* Says which record the fields belong to, because otherwise nothing
+          does: a form full of a stored posting looks exactly like a form full
+          of a new one, and the difference is whether Save writes a record or
+          overwrites one. */}
+      {edited && (
+        <p className="notice notice--editing" role="status">
+          <span className="notice__title">Editing a saved posting.</span>{' '}
+          <span className="notice__detail">
+            Saved {new Date(edited.posting.createdAt).toLocaleDateString()} · saving updates
+            it rather than adding another.
+          </span>
+        </p>
+      )}
+
+      {confirmingEdit && (
+        <div className="notice" role="alert">
+          <p className="notice__title">Open a different posting?</p>
+          <p>
+            {confirmingEdit.company} — {confirmingEdit.jobTitle}
+          </p>
+          <p className="notice__detail">
+            {edited
+              ? 'Your unsaved changes to the current one would be lost.'
+              : 'What is in the form now would be lost.'}
+          </p>
+          <div className="notice__actions">
+            <button
+              type="button"
+              className="button button--quiet"
+              onClick={() => {
+                // The request is refused rather than parked. Left pending, the
+                // effect above would re-raise it on the next thing that moved,
+                // and a question the user has answered must stay answered.
+                setConfirmingEdit(null)
+                onStopEditing()
+              }}
+            >
+              Keep what I have
+            </button>
+            <button
+              type="button"
+              className="button"
+              onClick={() => openForEdit(confirmingEdit)}
+            >
+              Open it
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Suppressed while the save-time prompt is up: they are the same finding
           at two different moments, and showing both would ask the user to
-          reconcile two banners about one record. */}
-      {revisit && phase.name !== 'duplicate' && <RevisitNotice match={revisit} />}
+          reconcile two banners about one record. Suppressed while editing for a
+          different reason — it is a statement about the active tab, and next to
+          a form holding some other record it reads as a claim about that
+          record. */}
+      {revisit && phase.name !== 'duplicate' && !edited && (
+        <RevisitNotice match={revisit} />
+      )}
 
       {offered && (
         <DetectedNotice
@@ -552,6 +775,56 @@ export function PostingForm({
         </p>
       )}
 
+      {/*
+        Only in edit mode, because only then is there something to delete: an
+        unsaved draft is discarded, and offering "Delete" for it would be
+        offering to remove a record that does not exist.
+
+        Two presses, like the erase in `BackupSection`. The second button says
+        what it will do to which record rather than "Confirm", so a stray click
+        cannot destroy a posting on the strength of a word that could mean
+        anything.
+      */}
+      {edited && (
+        <div className="form__danger">
+          {confirmingDelete ? (
+            <>
+              <p className="notice__detail">
+                Delete {edited.posting.company} — {edited.posting.jobTitle}? This cannot be
+                undone.
+              </p>
+              <div className="notice__actions">
+                <button
+                  type="button"
+                  className="button button--quiet"
+                  onClick={() => setConfirmingDelete(false)}
+                  disabled={busy}
+                >
+                  Keep it
+                </button>
+                <button
+                  type="button"
+                  className="button button--danger"
+                  onClick={() => void remove()}
+                  disabled={busy}
+                >
+                  {phase.name === 'deleting' ? 'Deleting…' : 'Delete it'}
+                </button>
+              </div>
+            </>
+          ) : (
+            <button
+              type="button"
+              className="button button--quiet"
+              onClick={() => setConfirmingDelete(true)}
+              disabled={busy}
+            >
+              Delete this posting
+            </button>
+          )}
+        </div>
+      )}
+
       <div className="form__actions">
         <button
           type="button"
@@ -559,10 +832,17 @@ export function PostingForm({
           onClick={reset}
           disabled={!hasContent || busy}
         >
-          Discard
+          {/* Discarding a draft throws work away; leaving an edit throws
+              nothing away, because the record is already stored. Same button,
+              two honest descriptions of what it does. */}
+          {edited ? (dirty ? 'Discard changes' : 'Stop editing') : 'Discard'}
         </button>
         <button type="submit" className="button button--primary" disabled={busy}>
-          {phase.name === 'checking' || phase.name === 'saving' ? 'Saving…' : 'Save'}
+          {phase.name === 'checking' || phase.name === 'saving'
+            ? 'Saving…'
+            : edited
+              ? 'Save changes'
+              : 'Save'}
         </button>
       </div>
     </form>

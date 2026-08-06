@@ -13,6 +13,7 @@ import { newId } from '../lib/ids'
 import { resolveProgress } from '../lib/normalize/progress'
 import type {
   Outcome,
+  Posting,
   PostingInput,
   PostingState,
   Salary,
@@ -217,10 +218,63 @@ export function toPostingInput(
   }
 }
 
+/**
+ * A `Date` as the `YYYY-MM-DD` a date input holds, in the local timezone.
+ *
+ * The exact inverse of `parseAppliedAt`, and deliberately the only formatter:
+ * `parseAppliedAt` reads a calendar date as local midnight, so anything here
+ * that used UTC would shift the date a day for half the world on every
+ * round trip through the form.
+ */
+export function asDateInput(date: Date): string {
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+
+  return `${date.getFullYear()}-${month}-${day}`
+}
+
 /** Today as `YYYY-MM-DD` in the local timezone, for defaulting the date field. */
 export function today(now: Date = new Date()): string {
-  const month = String(now.getMonth() + 1).padStart(2, '0')
-  const day = String(now.getDate()).padStart(2, '0')
+  return asDateInput(now)
+}
 
-  return `${now.getFullYear()}-${month}-${day}`
+/**
+ * A stored record as the form holds it — the inverse of `toPostingInput`.
+ *
+ * This is what makes a record editable, and phase 9 exists because it did not
+ * exist: `stage` and `outcome` are fields designed to change over weeks, and
+ * until now nothing could load a saved record back into the form to change them.
+ *
+ * The derived join keys (`companyNormalized`, `canonicalUrl`) are deliberately
+ * dropped rather than carried. The repository owns them and re-derives them on
+ * the way back in, so a draft that held them would be a second place for them to
+ * disagree — the same reason `toPostingInput` does not produce them.
+ *
+ * Provenance (`source`, `adapterVersion`, and a structured `salary`) is dropped
+ * here too, because a draft is all strings and cannot hold it. It travels
+ * alongside instead, through `editContextFor` — without which every edit would
+ * restamp an extracted record as hand-typed. See `fill.ts`.
+ */
+export function draftFromPosting(posting: Posting): Draft {
+  return {
+    company: posting.company,
+    jobTitle: posting.jobTitle,
+    location: posting.location ?? '',
+    workMode: posting.workMode ?? '',
+    atsReqId: posting.atsReqId ?? '',
+    // `raw` is what the form can show. Every producer sets it — the adapters
+    // render their parsed figures back into a sentence rather than leaving it
+    // empty — and where it somehow is not set, `editContextFor` still carries
+    // the structured value through untouched, so nothing is lost by showing
+    // nothing.
+    salary: posting.salary?.raw ?? '',
+    url: posting.url,
+    state: posting.state,
+    appliedAt: posting.appliedAt === null ? '' : asDateInput(new Date(posting.appliedAt)),
+    stage: posting.stage ?? '',
+    outcome: posting.outcome ?? '',
+    resumeUsed: posting.resumeUsed ?? '',
+    notes: posting.notes ?? '',
+    tags: posting.tags.join(', '),
+  }
 }

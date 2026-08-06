@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest'
+import { POSTING_INPUT_FIELDS } from '../lib/types'
+import type { Posting } from '../lib/types'
+import { aPosting } from '../test/factories'
 import {
   EMPTY_DRAFT,
+  asDateInput,
   draftErrors,
+  draftFromPosting,
   isDirty,
   isSaveable,
   parseAppliedAt,
@@ -10,9 +15,23 @@ import {
   today,
   type Draft,
 } from './draft'
+import { editContextFor } from './fill'
 
 function draft(overrides: Partial<Draft> = {}): Draft {
   return { ...EMPTY_DRAFT, company: 'Acme, Inc.', jobTitle: 'Staff Engineer', ...overrides }
+}
+
+/** A stored record, which `aPosting` does not quite give — it builds an input. */
+function stored(overrides: Partial<Posting> = {}): Posting {
+  return {
+    ...aPosting(),
+    companyNormalized: 'initech',
+    canonicalUrl: 'https://boards.greenhouse.io/initech/jobs/4021',
+    schemaVersion: 3,
+    createdAt: new Date(2026, 4, 2).getTime(),
+    updatedAt: new Date(2026, 4, 2).getTime(),
+    ...overrides,
+  }
 }
 
 describe('isDirty', () => {
@@ -209,5 +228,132 @@ describe('toPostingInput', () => {
 
   it('generates an id when none is given', () => {
     expect(toPostingInput(draft()).id).toBeTruthy()
+  })
+})
+
+describe('draftFromPosting', () => {
+  /**
+   * The test that matters, and the reason it is written against
+   * `POSTING_INPUT_FIELDS` rather than against a list of assertions: a field
+   * added to the record later joins this check by existing, not by somebody
+   * remembering to come back here.
+   *
+   * What it pins is the whole of phase 9's claim — that opening a record,
+   * touching nothing and saving it leaves the record exactly as it was. A field
+   * this pair drops silently would be a field the user loses by looking at it.
+   */
+  it('round-trips every caller-owned field through the form and back', () => {
+    const posting = stored({
+      state: 'applied',
+      appliedAt: new Date(2026, 2, 14).getTime(),
+      stage: 'interviewing',
+      outcome: 'rejected',
+      resumeUsed: 'backend-2026',
+      notes: 'referred by Dana',
+      tags: ['remote', 'senior'],
+    })
+
+    const asDraft = draftFromPosting(posting)
+    const back = toPostingInput(asDraft, posting.id, editContextFor(posting, asDraft))
+
+    for (const field of POSTING_INPUT_FIELDS) {
+      // The two derived join keys are the exception, and deliberately so: the
+      // repository owns them and re-derives them on the way in, which is why
+      // `toPostingInput` does not produce them at all.
+      if (field === 'companyNormalized' || field === 'canonicalUrl') continue
+      expect({ [field]: back[field] }).toEqual({ [field]: posting[field] })
+    }
+  })
+
+  it('keeps the id, so an edit is an edit and not a second record', () => {
+    const posting = stored()
+    const back = toPostingInput(draftFromPosting(posting), posting.id)
+
+    expect(back.id).toBe(posting.id)
+  })
+
+  /**
+   * The silent-degradation trap. Without `editContextFor` the edit path falls
+   * through to `MANUAL_SAVE`, and every extracted record becomes `manual@1` the
+   * first time anybody corrects a typo in it — taking with it the only thing
+   * that says which records a later adapter fix should replay (decision 6).
+   */
+  it('keeps the provenance of a record that came off a page', () => {
+    const posting = stored({
+      source: 'greenhouse',
+      sourceConfidence: 0.9,
+      adapterVersion: 'greenhouse@3',
+    })
+
+    const asDraft = draftFromPosting(posting)
+    const back = toPostingInput(asDraft, posting.id, editContextFor(posting, asDraft))
+
+    expect(back.source).toBe('greenhouse')
+    expect(back.adapterVersion).toBe('greenhouse@3')
+    expect(back.sourceConfidence).toBe(0.9)
+  })
+
+  it('turns absent fields into the empty strings the inputs hold', () => {
+    const asDraft = draftFromPosting(
+      stored({
+        location: null,
+        workMode: null,
+        atsReqId: null,
+        salary: null,
+        appliedAt: null,
+        stage: null,
+        outcome: null,
+        resumeUsed: null,
+        notes: null,
+        tags: [],
+      }),
+    )
+
+    expect(asDraft).toMatchObject({
+      location: '',
+      workMode: '',
+      atsReqId: '',
+      salary: '',
+      appliedAt: '',
+      stage: '',
+      outcome: '',
+      resumeUsed: '',
+      notes: '',
+      tags: '',
+    })
+  })
+
+  /**
+   * `appliedAt` is stored as epoch milliseconds and shown as a calendar date, and
+   * the conversion happens in local time at both ends. A record applied to late
+   * in the evening must not read as the following day, which is what a UTC
+   * formatter would do for anyone east of Greenwich.
+   */
+  it('shows a late-evening applied date as the day it was', () => {
+    const at = new Date(2026, 2, 14, 23, 30).getTime()
+
+    expect(draftFromPosting(stored({ appliedAt: at })).appliedAt).toBe('2026-03-14')
+    expect(parseAppliedAt('2026-03-14')).toBe(new Date(2026, 2, 14).getTime())
+  })
+
+  it('joins tags as the comma-separated text the field holds', () => {
+    expect(draftFromPosting(stored({ tags: ['remote', 'senior'] })).tags).toBe(
+      'remote, senior',
+    )
+  })
+})
+
+describe('asDateInput', () => {
+  it('is the inverse of parseAppliedAt across a local midnight', () => {
+    const date = new Date(2026, 11, 31, 22, 15)
+
+    expect(asDateInput(date)).toBe('2026-12-31')
+    expect(parseAppliedAt(asDateInput(date))).toBe(new Date(2026, 11, 31).getTime())
+  })
+
+  it('is what today() reports', () => {
+    const now = new Date(2026, 2, 4)
+
+    expect(today(now)).toBe(asDateInput(now))
   })
 })
