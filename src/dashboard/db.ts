@@ -26,34 +26,42 @@ import type { Posting } from '../lib/types'
 import { send } from '../lib/client'
 
 /**
- * Dexie's error when dynamic mode is pointed at a database that does not exist.
+ * Opens the database for reading, once the worker has brought it up to date.
  *
- * Reachable in one real situation: the dashboard opened before anything has ever
- * been saved. Dynamic mode cannot create the database — that is the whole point
- * of using it — so the worker has to be asked to.
- */
-const NO_SUCH_DATABASE = 'NoSuchDatabaseError'
-
-/**
- * Opens the database for reading, asking the worker to create it if it is not
- * there yet.
+ * The `status` round-trip is not a probe for its own sake, and — since the fix
+ * described below — it is not conditional either. Every request is dispatched
+ * through `await ready()` in the service worker, so asking *anything* is what
+ * causes the worker to open the store, run pending migrations, and only then
+ * answer. One message buys both of the things this connection cannot do for
+ * itself.
  *
- * The `status` round-trip is not a probe for its own sake: every request is
- * dispatched through `await ready()` in the service worker, so asking anything
- * at all is what causes the worker to open — and therefore create — the store.
- * That keeps creation in the single writer even though the reader noticed the
- * absence.
+ * **Creating.** Dynamic mode cannot create a database — that is the point of
+ * using it — so the first-ever dashboard open has to go through the single
+ * writer. This half was always here.
+ *
+ * **Migrating.** This half was not, and it cost phase 8 its worst defect. The
+ * round-trip used to happen only after Dexie reported the database missing, so
+ * on every ordinary open — the database exists, which is all of them after the
+ * first — the dashboard read rows that nothing had migrated in this context.
+ * A record written at version 2 arrives with `outcome` *absent*, `undefined` is
+ * not `null`, and the outcomes card rendered "Of 2 applications: 0 still open"
+ * over two open applications. Decision 9 says the dashboard waits on the
+ * migration flag; it never did, and `waitForMigration` had no caller anywhere.
+ *
+ * Gating the open is stronger than waiting on the flag, which is why it is done
+ * this way round: the flag can only be *observed*, so a reader watching it
+ * cannot make a torn-down worker migrate — it would see `false` and read the
+ * stale data with confidence. Asking the worker is what causes the work.
+ *
+ * The cost is deliberate: an unreachable worker now fails the open instead of
+ * serving whatever is on disk. That is the right trade for this project. The
+ * rows are readable but their *shape* is unknown, and `usePostings` renders a
+ * failure as itself while it would render unmigrated data as fact — which is
+ * this file's oldest recurring defect, not a graceful degradation.
  */
 export async function openForReading(name: string = DB_NAME): Promise<Dexie> {
-  try {
-    return await openDynamic(name)
-  } catch (error) {
-    if ((error as { name?: string })?.name !== NO_SUCH_DATABASE) throw error
-  }
-
-  // Only reached on a database that has never existed. If this throws, the
-  // worker is unreachable, which is a different failure and worth showing as
-  // itself rather than as "no data".
+  // If this throws, the worker is unreachable. That is a different failure from
+  // "no data" and worth surfacing as itself — see `usePostings`.
   await send('status', {})
   return openDynamic(name)
 }

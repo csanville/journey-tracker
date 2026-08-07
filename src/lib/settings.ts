@@ -65,9 +65,23 @@ export async function patchSettings(patch: Partial<Settings>): Promise<Settings>
 /**
  * Blocks until no migration is running.
  *
- * Readers call this instead of querying immediately, because an MV3 worker can
- * be torn down partway through a migration and a panel opening in that window
- * would otherwise read half-migrated data.
+ * **Nothing in the extension calls this, and that is now deliberate.** It was
+ * written for decision 9's "the panel and dashboard wait on that flag" and was
+ * wired to neither for six phases, which is what let unmigrated records reach
+ * the dashboard's aggregations in phase 8.
+ *
+ * Both readers are covered without it, and by something stronger. Every request
+ * the panel sends and the `status` round-trip the dashboard now opens with are
+ * dispatched through `await ready()` in the service worker, which runs pending
+ * migrations *before* answering. The difference is cause versus observation: a
+ * reader watching this flag cannot make a torn-down worker migrate, and would
+ * see `false` and read stale data with confidence. Asking the worker is what
+ * causes the work. See `dashboard/db.ts`.
+ *
+ * Kept because the flag it waits on is real and a diagnostics surface is the
+ * obvious future caller — but it is a utility, not a protection anything
+ * currently relies on, and a comment claiming otherwise is the exact defect
+ * this project keeps counting.
  */
 export async function waitForMigration(timeoutMs = 30_000): Promise<void> {
   if (!(await readSettings()).migrationInProgress) return

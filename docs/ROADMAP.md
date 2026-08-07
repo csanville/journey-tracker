@@ -18,7 +18,7 @@ then merged.
 | 7 ✅ | `feat/dashboard` | Extension-page dashboard; `liveQuery` over a schema-less read connection; status funnel, over time, per-board yield | Patterns visible across saved data |
 | 8 ✅ | `feat/outcomes`, `feat/submit-detect` | Schema v3 `stage`/`outcome`; response funnel, endings and silence on the dashboard; Greenhouse confirmation-URL detection behind a prompt | The dashboard says what happened after you applied, and a real Greenhouse submission raises a prompt |
 | 9 ✅ | `feat/edit-record` | Editing a saved posting from the panel — the capability phase 7's docs assumed already existed, and which phase 8's fields need to be worth anything; a filter to find the record, and delete | Change a record's stage and outcome weeks after saving it, without writing a second record |
-| later | — | Workday, Ashby, iCIMS, SmartRecruiters adapters; diagnostics action; wire up `waitForMigration`; persist a pending submission prompt | — |
+| later | — | Workday, Ashby, iCIMS, SmartRecruiters adapters; diagnostics action; persist a pending submission prompt | — |
 
 ## Phase 1 — schema and storage
 
@@ -667,6 +667,18 @@ Two smaller gaps, recorded rather than fixed:
   either. It is what made the `outcomes` defect below reachable rather than
   latent. Decision 3 names this pattern — a protection recorded as established
   when only its declaration was checked — and this is its fourth appearance.
+
+  > **Closed after phase 9, on its own branch, and not by waiting.** The panel
+  > was never exposed: its every request goes through the worker's `ready()`,
+  > which migrates before answering, so the guarantee was real and credited to
+  > the wrong mechanism. The dashboard was exposed, because it asked the worker
+  > for anything only when the database did not yet exist — the round-trip ran
+  > on the first-ever open and never again. `openForReading` now sends `status`
+  > unconditionally, which buys the creation *and* the migration in one message.
+  > The general form is worth keeping: **a flag can only be observed, and
+  > observation cannot cause the work** — a reader watching the flag on a
+  > torn-down worker sees `false` and reads stale records with confidence. See
+  > decision 9's final amendment.
 - **The submission prompt needs the panel already open.** The worker broadcasts
   and `broadcast` swallows the rejection when nothing is listening, which is the
   ordinary case; nothing is persisted and the content script never retries. With
