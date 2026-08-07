@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import Dexie from 'dexie'
 import { openForReading, readPostings, subscribeToPostings } from './db'
 import { JourneyTrackerDb } from '../lib/db'
@@ -24,6 +24,26 @@ async function workerDb(name: string): Promise<JourneyTrackerDb> {
   await db.open()
   return db
 }
+
+/**
+ * A reachable worker, as the default.
+ *
+ * Every open now goes through `status` so the worker can migrate before the
+ * dashboard reads, which makes an answering worker a precondition of these
+ * tests rather than a detail of one of them — the shared stub in `test/setup.ts`
+ * resolves `undefined`, which `send` treats as a torn-down worker.
+ *
+ * Deliberately does *not* open the database: the two version tests below put a
+ * store on disk that the worker's own schema-declaring connection could not open
+ * without a downgrade, and the creation test arms its own stub for the one case
+ * that needs the side effect.
+ */
+beforeEach(() => {
+  vi.mocked(chrome.runtime.sendMessage).mockResolvedValue({
+    ok: true,
+    data: { postingCount: 0 },
+  } as never)
+})
 
 describe('openForReading', () => {
   it('reads a database it did not declare', async () => {
@@ -112,12 +132,65 @@ describe('openForReading', () => {
     reader.close()
   })
 
+  /**
+   * The regression test for phase 8's worst defect, and the reason this file
+   * gained a `beforeEach`.
+   *
+   * The round-trip used to be conditional — reached only after Dexie reported
+   * the database missing — so it ran on the first-ever open and never again.
+   * Every subsequent open read whatever was on disk, unmigrated, which is how
+   * records written at version 2 reached an aggregation written against
+   * version 3 and made it render "0 still open" over open applications.
+   *
+   * Asserting on the message rather than on the data because the shape of the
+   * failure is contextual: it needs a database left behind by an older build,
+   * which is exactly what cannot be arranged after the fact. What can be pinned
+   * is that the worker is asked every time, which is what makes the shape
+   * unreachable.
+   */
+  it('goes through the worker on every open, not only when the database is missing', async () => {
+    const name = dbName()
+    const worker = await workerDb(name)
+    await upsertPosting(worker, aPosting({ company: 'Initech' }))
+    worker.close()
+
+    const reader = await openForReading(name)
+
+    expect(chrome.runtime.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'status' }),
+    )
+    reader.close()
+  })
+
   it('surfaces an unreachable worker as itself, not as an empty dashboard', async () => {
     // "No data" and "cannot reach the worker" are different statements about
     // someone's records, and only one of them is reassuring.
     vi.mocked(chrome.runtime.sendMessage).mockResolvedValue(undefined as never)
 
     await expect(openForReading(dbName())).rejects.toThrow(
+      /no response from the service worker/,
+    )
+  })
+
+  /**
+   * The cost of gating the open, stated as a test so it is a decision rather
+   * than a surprise.
+   *
+   * Before the fix this case succeeded: the database exists, so the old code
+   * never sent anything and never noticed the worker was gone. It now fails,
+   * and that is the intended trade — the rows are readable but their shape is
+   * unknown, and `usePostings` renders a failure honestly while it would render
+   * unmigrated data as fact.
+   */
+  it('fails rather than serving data of unknown shape when the worker is gone', async () => {
+    const name = dbName()
+    const worker = await workerDb(name)
+    await upsertPosting(worker, aPosting({ company: 'Initech' }))
+    worker.close()
+
+    vi.mocked(chrome.runtime.sendMessage).mockResolvedValue(undefined as never)
+
+    await expect(openForReading(name)).rejects.toThrow(
       /no response from the service worker/,
     )
   })

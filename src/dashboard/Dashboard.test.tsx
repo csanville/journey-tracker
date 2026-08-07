@@ -63,6 +63,17 @@ async function waitForText(el: HTMLElement, text: string, timeout = 3000): Promi
 
 beforeEach(async () => {
   await Dexie.delete(DB_NAME)
+
+  // A reachable worker, as the default. `openForReading` gates every open on a
+  // `status` round-trip so the worker can migrate before the page reads, which
+  // makes an answering worker a precondition of rendering at all — the shared
+  // stub in `test/setup.ts` resolves `undefined`, which `send` reads as a
+  // torn-down worker. Re-established per test because `mockClear` resets calls
+  // and not implementations, so the two cases below would otherwise leak.
+  vi.mocked(chrome.runtime.sendMessage).mockResolvedValue({
+    ok: true,
+    data: { postingCount: 0 },
+  } as never)
 })
 
 afterEach(async () => {
@@ -110,7 +121,9 @@ describe('Dashboard', () => {
   })
 
   it('reports an unreachable worker as a failure, not as an empty database', async () => {
-    // No database, and nothing answering the request to create one.
+    // Nothing answering, which now fails the open whether or not a database is
+    // there — the page cannot know the shape of rows no worker has migrated,
+    // and "could not read" is the honest thing to say about them.
     vi.mocked(chrome.runtime.sendMessage).mockResolvedValue(undefined as never)
 
     const el = await render()

@@ -576,6 +576,39 @@ tested and then never called, which no test of the mechanism can detect. The
 check that would have caught it is: **for every guard this document says a
 surface applies, grep for the caller, not the definition.**
 
+**Amended — closed, and not by the waiting.** Both readers are now covered, and
+neither waits on the flag. The mechanism was wrong, which is why wiring it up
+kept not happening.
+
+The panel was never exposed: every request it sends is dispatched through
+`await ready()` in the service worker, which runs pending migrations before
+answering. The guarantee was real all along and was being credited to the wrong
+mechanism — the fifth instance of decision 3's pattern hiding inside the fourth.
+
+The dashboard was exposed, because it opens IndexedDB directly and only asked
+the worker for anything when the database did not exist yet. So the round-trip
+ran on the first-ever open and never again. `openForReading` now sends `status`
+**unconditionally** before opening: one message, and `ready()` supplies both the
+creation the reader cannot perform and the migration it cannot wait for.
+
+The reason this is stronger than the flag, and worth stating as the general
+form: **a flag can only be observed, and observation cannot cause the work.** A
+reader watching `migrationInProgress` on a torn-down worker sees `false` —
+nothing is in progress, because nothing is running — and reads stale records
+with confidence. Asking the writer is what makes the writer act. Where a
+protection needs something to *have happened*, route through whoever does it
+rather than watching for a sign that they did.
+
+The cost is accepted deliberately: an unreachable worker now fails the
+dashboard's open instead of serving what is on disk. The rows are readable but
+their shape is unknown, and this project's oldest recurring defect is a surface
+that states more than it can support. `usePostings` has had a distinct `failed`
+state since phase 7 for exactly this.
+
+`waitForMigration` is kept — the flag is real, and a diagnostics surface is the
+plausible caller — but it is now documented as a utility rather than as a
+protection anything relies on.
+
 **Revisit when.** Never.
 
 ---
