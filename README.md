@@ -31,11 +31,19 @@ The dashboard gained a section for it: how many applications got a reply, how
 many reached an interview, how many ended in an offer, and how many are still
 waiting on a first response after three weeks.
 
-**On Greenhouse, the extension notices when an application goes in** — provided
-the side panel is open at the time. Submitting one lands on a confirmation page,
-and if that posting is already saved the panel asks whether to mark it applied.
-It asks rather than acting: a wrong guess costs one dismissed banner. With the
-panel closed there is nothing listening and the moment passes unnoticed.
+**On Greenhouse, the extension notices when an application goes in.** Submitting
+one lands on a confirmation page, and if that posting is already saved the
+extension asks whether to mark it applied. It asks rather than acting: a wrong
+guess costs one dismissed banner.
+
+The panel does not have to be open at the time — which is just as well, since
+almost nobody has a side panel open while filling in an application form. The
+question waits until you next open it, several of them queue up one at a time,
+and answering sticks whether or not you say yes. The date recorded is the day the
+confirmation page appeared, not the day you got round to answering, so the
+"still waiting on a reply" figures stay honest. Unanswered questions are
+forgotten after a fortnight, on the grounds that by then the answer would be a
+guess.
 
 This only works on Greenhouse, and that is a real limit rather than a gap to be
 filled later. Reading the moment of submission needs the extension to be running
