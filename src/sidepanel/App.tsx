@@ -27,8 +27,20 @@ export function App() {
   const [postings, setPostings] = useState<Posting[] | null>(null)
   const [failure, setFailure] = useState<string | null>(null)
   const [detection, setDetection] = useState<DetectionSummary | null>(null)
-  /** A posting whose confirmation page was just seen, awaiting an answer. */
-  const [submitted, setSubmitted] = useState<Posting | null>(null)
+  /**
+   * The question currently on screen: a posting, and when its confirmation page
+   * was seen.
+   *
+   * The date is carried because it is what gets written on confirmation. It is
+   * the worker's timestamp from the moment the confirmation page was detected,
+   * not the moment the user clicks — a prompt that survives a closed panel can
+   * be answered days later, and `appliedAt` is what the response funnel measures
+   * from.
+   */
+  const [submitted, setSubmitted] = useState<{
+    posting: Posting
+    confirmedAt: number
+  } | null>(null)
   /**
    * A record the user asked to edit — a request handed to the form, which owns
    * whether it can be taken. Held here because the list that raises it is here.
@@ -37,11 +49,14 @@ export function App() {
   const version = chrome.runtime.getManifest().version
 
   /**
-   * Mirrors `editing` for the effect that must not close over a changing value.
+   * Mirrors `editing` for the callback that must not close over a changing value.
    *
-   * `announceSubmitted` is built once and lives in a listener for the life of
-   * the panel; reading `editing` directly would pin it to whatever was open when
-   * the listener was installed.
+   * `refreshPending` is built once and is reached from a listener that lives for
+   * the life of the panel; reading `editing` directly would pin it to whatever
+   * was open when the listener was installed. It also runs across awaits — a
+   * `posting/get` per entry — so the ref is read at the moment each decision is
+   * made rather than at the moment the pass started, which is the distinction
+   * phase 9 spent a defect on.
    */
   const editingId = useRef<string | null>(null)
   editingId.current = editing?.id ?? null
@@ -94,93 +109,102 @@ export function App() {
   }, [])
 
   /**
-   * Postings whose prompt has already been answered, either way.
+   * Reads the pending queue and raises the first question still worth asking.
    *
-   * Decision 13's amendment names "an unanswered question" as a state that must
-   * not be silently re-entered, and dismissing has to leave a mark or there is
-   * no reachable state in which the answer sticks: a reload of the confirmation
-   * page re-fires the event, the worker re-matches the same record, and the
-   * identical banner returns over a question the user just answered. That is
-   * the same failure `PostingForm`'s own `dismissed` flag exists to prevent,
-   * arriving in a new component.
+   * The panel holds no list of its own. Phase 10 put the questions in
+   * `chrome.storage.local` so one survives a closed panel, and the moment they
+   * are written down, a copy in React state is a second thing to keep in step —
+   * so this reads the store, picks the head, and renders that. Called on mount
+   * and whenever the worker says the queue moved, which are the only two ways it
+   * can change.
    *
-   * A ref rather than state — nothing renders from it, and it must not
-   * re-trigger the effect that reads it. Its bound is the life of the panel,
-   * which is the right scope: re-prompting requires the user to go back to a
-   * confirmation page deliberately.
+   * Three things disqualify an entry, and only the first two mean the question
+   * is over:
+   *
+   * - **The record is gone.** Deleted since the confirmation. Retired, because
+   *   nothing will ever make it askable again.
+   * - **It already says `applied`.** The user got there first, by hand or
+   *   through the form. Retired for the same reason.
+   * - **It is open in the form.** *Skipped, not retired* — see below.
+   *
+   * Entries are checked in order rather than filtered in parallel: the queue is
+   * bounded at `MAX_PENDING`, and the common length is one.
    */
-  const answered = useRef(new Set<string>())
-
-  /** Retires a prompt, whichever button retired it. */
-  const answer = useCallback((postingId: string) => {
-    answered.current.add(postingId)
-    // Cleared only if it is still the posting being answered. `onConfirm`
-    // awaits a write first, and clearing unconditionally after that await threw
-    // away a *different* confirmation that had arrived in the gap — the
-    // check-then-act-across-an-await shape this project has now found in four
-    // phases running.
-    setSubmitted((current) => (current?.id === postingId ? null : current))
-  }, [])
-
-  /**
-   * Reads the record a confirmation page pointed at, so the prompt can name it.
-   *
-   * The worker sends an id rather than the record, so this is where the copy
-   * shown to the user comes from — read at prompt time, not whenever the event
-   * happened to be built. A record that has since gone, that already says
-   * `applied` because the user got there first, or whose prompt has already
-   * been answered produces nothing: there is nothing left to ask.
-   */
-  const announceSubmitted = useCallback(async (postingId: string) => {
-    if (answered.current.has(postingId)) return
-    // The form already has this record open, so the prompt would be a second
-    // owner of it: confirming writes `state: 'applied'`, and the edit in the
-    // form — loaded before that write — would then save its own stale `state`
-    // straight back over it. The user is looking at the field in question and
-    // can set it themselves.
-    if (editingId.current === postingId) return
-
+  const refreshPending = useCallback(async () => {
     try {
-      const posting = await send('posting/get', { id: postingId })
-      if (!posting || posting.state === 'applied') return
-      // Re-checked after the round trip: the user may have answered a prompt
-      // for this same record while the read was in flight, or opened it for
-      // editing, either of which settles the question this was going to ask.
-      if (answered.current.has(posting.id) || editingId.current === posting.id) return
+      const pending = await send('submission/pending', {})
 
-      setSubmitted(posting)
+      for (const entry of pending) {
+        // Skipped, not retired. Retiring here would throw away a real question
+        // because the user clicked the row to see which record the prompt meant
+        // — which is the obvious thing to do, since the prompt names a company
+        // and a title and nothing else. It also cannot be shown: the form loaded
+        // this record before any confirmation was written, so confirming would
+        // set `applied` and the form's next Save would put its own stale
+        // `viewed` and a null `appliedAt` straight back over it. The question
+        // returns by itself once editing stops, because this runs again.
+        if (editingId.current === entry.postingId) continue
+
+        const posting = await send('posting/get', { id: entry.postingId })
+
+        if (!posting || posting.state === 'applied') {
+          await send('submission/retire', { postingId: entry.postingId })
+          continue
+        }
+
+        setSubmitted({ posting, confirmedAt: entry.confirmedAt })
+        return
+      }
+
+      setSubmitted(null)
     } catch (error) {
       // The user is about to save this by hand, exactly as they did before this
       // feature existed. Not worth a banner.
-      console.debug('[JourneyTracker] could not read the submitted posting', error)
+      console.debug('[JourneyTracker] could not read pending submissions', error)
     }
   }, [])
 
   /**
-   * The other half of the guard in `announceSubmitted`, which was one-directional.
+   * Answers a question for good, then asks the next one.
    *
-   * That one refuses to *raise* a prompt for a record already open in the form.
-   * It does nothing about a prompt that is already up when the user opens the
-   * same record — which is the likelier order, because the prompt names a
-   * company and a title and says nothing else, so clicking the row to see which
-   * record it means is the obvious way to answer it.
+   * Both buttons land here, and both retire durably — decision 13's amendment
+   * wants an answered question to stay answered, and before the store the only
+   * place to record a dismissal was a ref that died with the panel, so "no"
+   * lasted until the panel was closed.
    *
-   * Left alone, both own the record and the form wins. The draft was seeded
-   * before the prompt was confirmed, so it still holds `state: 'viewed'`;
-   * confirming writes `applied`, and the next Save — enabled whether or not
-   * anything was typed — writes `viewed` and a null `appliedAt` straight back
-   * over it. The user's explicit "Yes, applied" disappears, taking with it the
-   * date the whole response funnel is anchored on.
+   * The re-read is what advances the queue, and it is also why nothing needs to
+   * be cleared here: `refreshPending` sets the next entry or `null`, from the
+   * store, after the retire has landed. The old code cleared local state after
+   * an awaited write and had to guard against discarding a different
+   * confirmation that arrived in the gap; there is no gap to guard now, because
+   * the state is derived rather than accumulated.
+   */
+  const answer = useCallback(
+    async (postingId: string) => {
+      try {
+        await send('submission/retire', { postingId })
+      } catch (error) {
+        // Retiring failed, so the question is still in the store and will be
+        // asked again. Better than clearing the banner over a store that still
+        // holds it, which would look answered and come back on the next open.
+        console.debug('[JourneyTracker] could not retire a submission', error)
+      }
+      await refreshPending()
+    },
+    [refreshPending],
+  )
+
+  /**
+   * Re-asks when the user stops editing, and stands down when they start.
    *
-   * Retired rather than marked answered. `announceSubmitted` re-reads the record
-   * and declines to ask about one that already says `applied`, so a later event
-   * can safely raise the question again if it is still genuinely open — whereas
-   * marking it answered would suppress it for the life of the panel on the
-   * strength of the user merely having looked.
+   * `refreshPending` skips the record open in the form, so both directions are
+   * the same call: opening one drops its prompt if it was up, closing brings it
+   * back if it is still open. Keyed on the id so it fires on a change of which
+   * record is being edited, not on every render of the same one.
    */
   useEffect(() => {
-    setSubmitted((current) => (current && current.id === editing?.id ? null : current))
-  }, [editing?.id])
+    void refreshPending()
+  }, [editing?.id, refreshPending])
 
   useEffect(() => {
     void refreshDetection()
@@ -214,8 +238,13 @@ export function App() {
       // everything" stopped being the right answer, and this is it: a
       // submission is a question about one record, and re-reading the active
       // tab's detection would neither ask it nor answer it.
-      if (message.type === 'application/submitted') {
-        void announceSubmitted(message.postingId)
+      //
+      // The event carries no id — it says the queue moved, and the queue is
+      // read from the store. That is what makes an open panel and a closed one
+      // the same path: this listener is an optimisation for the open case, and
+      // removing it would cost immediacy, not correctness.
+      if (message.type === 'submission/pending') {
+        void refreshPending()
         return
       }
 
@@ -231,7 +260,7 @@ export function App() {
       // unmounted panel.
       latestDetection.current++
     }
-  }, [refreshDetection, announceSubmitted])
+  }, [refreshDetection, refreshPending])
 
   useEffect(() => {
     let cancelled = false
@@ -302,12 +331,18 @@ export function App() {
         // arriving while the first was mid-save inherited "Saving…" — or a
         // failure message — under a different job's name.
         <SubmissionPrompt
-          key={submitted.id}
-          posting={submitted}
-          onDismiss={() => answer(submitted.id)}
+          key={submitted.posting.id}
+          posting={submitted.posting}
+          onDismiss={() => answer(submitted.posting.id)}
           onConfirm={async () => {
-            await send('posting/upsert', { posting: markApplied(submitted, Date.now()) })
-            answer(submitted.id)
+            // `confirmedAt`, not `Date.now()`. This prompt can outlive the
+            // browser session that raised it, so the click is not evidence of
+            // when the application happened — the confirmation page is, and the
+            // worker timestamped it when it saw one.
+            await send('posting/upsert', {
+              posting: markApplied(submitted.posting, submitted.confirmedAt),
+            })
+            await answer(submitted.posting.id)
             await refresh()
           }}
         />
@@ -424,7 +459,7 @@ export function App() {
         </dl>
       </details>
 
-      <footer className="panel__foot">Phase 9 · editing</footer>
+      <footer className="panel__foot">Phase 10 · pending submissions</footer>
     </div>
   )
 }

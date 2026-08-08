@@ -3,6 +3,7 @@ import { aPosting, freshDb } from '../test/factories'
 import type { DetectionReport } from './detection'
 import { handleRequest } from './handler'
 import { allowedFromContentScript, type Request } from './messages'
+import { readPending, recordPending } from './pending'
 import { SNAPSHOT_RETENTION } from './repository'
 import { patchSettings, readSettings } from './settings'
 import { SCHEMA_VERSION } from './types'
@@ -371,6 +372,25 @@ describe('a submitted application', () => {
     expect(read.ok && read.data?.state).toBe('viewed')
   })
 
+  /**
+   * The phase-10 half: the question is written down before it is announced.
+   *
+   * Phase 8 only broadcast, and `broadcast` swallows the rejection when no panel
+   * is listening — which is the ordinary case, since almost nobody keeps a side
+   * panel open while filling in an application form. The question existed solely
+   * inside an event nobody received.
+   */
+  it('writes the question down, not just announces it', async () => {
+    const db = await freshDb()
+    await handleRequest(db, { kind: 'posting/upsert', posting: aPosting({ id: 'p1' }) })
+
+    await submit(db)
+
+    expect(await readPending()).toEqual([
+      { postingId: 'p1', confirmedAt: expect.any(Number) },
+    ])
+  })
+
   it('says nothing about a page with no record behind it', async () => {
     const db = await freshDb()
 
@@ -380,6 +400,19 @@ describe('a submitted application', () => {
     const response = await submit(db)
 
     expect(response.ok && response.data).toEqual({ matched: false })
+    // And records nothing either. A question about a record that does not exist
+    // would sit in the store until it expired, unanswerable.
+    expect(await readPending()).toEqual([])
+  })
+
+  it('does not record a second question for a reloaded confirmation page', async () => {
+    const db = await freshDb()
+    await handleRequest(db, { kind: 'posting/upsert', posting: aPosting({ id: 'p1' }) })
+
+    await submit(db)
+    await submit(db)
+
+    expect(await readPending()).toHaveLength(1)
   })
 
   it('does not ask again about a record already marked applied', async () => {
@@ -436,6 +469,63 @@ describe('a submitted application', () => {
     const response = await submit(db)
 
     expect(response.ok && response.data).toEqual({ matched: false })
+  })
+})
+
+/**
+ * The panel's side of the queue.
+ *
+ * Two messages rather than one, because retiring is not a write to the record:
+ * confirming sends `posting/upsert` as well, and dismissing sends only this.
+ * Folding them together would need a write meaning "no", which there is not.
+ */
+describe('the pending-submission queue', () => {
+  it('hands the panel the questions, oldest first', async () => {
+    const db = await freshDb()
+    const minute = 60 * 1000
+    await recordPending('p-late', Date.now() - minute)
+    await recordPending('p-early', Date.now() - 3 * minute)
+
+    const response = await handleRequest(db, { kind: 'submission/pending' })
+
+    expect(response.ok && response.data.map((p) => p.postingId)).toEqual([
+      'p-early',
+      'p-late',
+    ])
+  })
+
+  it('retires one, and says it did', async () => {
+    const db = await freshDb()
+    await recordPending('p-1', Date.now())
+
+    const response = await handleRequest(db, {
+      kind: 'submission/retire',
+      postingId: 'p-1',
+    })
+
+    expect(response.ok && response.data).toEqual({ retired: true })
+    expect(await readPending()).toEqual([])
+  })
+
+  it('says so when there was nothing to retire', async () => {
+    // Reachable without anything going wrong: the panel retires after a write
+    // it may have already retired through another path, and an error here would
+    // surface as a banner over a question that is correctly gone.
+    const db = await freshDb()
+
+    const response = await handleRequest(db, {
+      kind: 'submission/retire',
+      postingId: 'p-missing',
+    })
+
+    expect(response.ok && response.data).toEqual({ retired: false })
+  })
+
+  it('is not something a content script may ask for', () => {
+    // The queue is the panel's. A page-driven context has no business reading
+    // which applications are awaiting an answer, or answering them.
+    expect(allowedFromContentScript('submission/pending')).toBe(false)
+    expect(allowedFromContentScript('submission/retire')).toBe(false)
   })
 })
 
