@@ -5,6 +5,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { JourneyTrackerDb } from '../lib/db'
 import type { DetectionReport } from '../lib/detection'
 import { handleRequest } from '../lib/handler'
+import { recordPending } from '../lib/pending'
 import { upsertPosting } from '../lib/repository'
 import { aPosting } from '../test/factories'
 import { emitMessage } from '../test/setup'
@@ -78,15 +79,18 @@ function button(el: HTMLElement, text: string): HTMLButtonElement {
 
 describe('a submission prompt and the form claiming the same record', () => {
   /**
-   * Raises the prompt the way the worker does, for a record on this tab.
+   * Raises a question the way the worker does: write it down, then say so.
    *
-   * `tabId` is not decoration: `isEvent` rejects an event without a numeric one,
-   * so a message shaped by hand and missing it is silently ignored rather than
-   * failing loudly. The positive control above is what makes that visible.
+   * Both halves, in that order, because the order is the phase. `recordPending`
+   * is what survives a closed panel; the signal only gets an open one to look
+   * sooner. `tabId` is not decoration — `isEvent` rejects an event without a
+   * numeric one, so a message shaped by hand and missing it would be ignored
+   * silently rather than failing loudly.
    */
-  async function announce(postingId: string) {
+  async function announce(postingId: string, confirmedAt = Date.now()) {
+    await recordPending(postingId, confirmedAt)
     await act(async () => {
-      emitMessage({ type: 'application/submitted', tabId: 7, postingId })
+      emitMessage({ type: 'submission/pending', tabId: 7 })
     })
     await settle()
   }
@@ -103,16 +107,16 @@ describe('a submission prompt and the form claiming the same record', () => {
   })
 
   /**
-   * The ordering the guard in `announceSubmitted` did not cover, and the likelier
-   * of the two: the prompt names a company and a title and nothing else, so
-   * opening the record to see which one it means is the obvious way to answer it.
+   * The ordering phase 9's guard did not cover, and the likelier of the two: the
+   * prompt names a company and a title and nothing else, so opening the record
+   * to see which one it means is the obvious way to answer it.
    *
    * Left alone, the form seeds a draft holding `state: 'viewed'`, confirming the
    * prompt writes `applied`, and the next Save writes `viewed` and a null
    * `appliedAt` back over it — silently discarding the user's own answer and the
    * date the response funnel is anchored on.
    */
-  it('retires the prompt when the user opens that record to look at it', async () => {
+  it('stands the prompt down when the user opens that record to look at it', async () => {
     const posting = await upsertPosting(db, aPosting({ state: 'viewed' }))
     const el = await render()
 
@@ -126,20 +130,43 @@ describe('a submission prompt and the form claiming the same record', () => {
   })
 
   /**
-   * Retired, not hidden — the distinction the fix turns on.
+   * **This reverses phase 9's behaviour, deliberately.**
    *
-   * Re-showing the prompt on the way out would mean rendering a `Posting`
-   * captured before the user touched it, which may since have been saved as
-   * `applied` by the very form that was covering it. The question is only asked
-   * again by a fresh event, and `announceSubmitted` re-reads the record and
-   * declines to ask about one that already says `applied`.
+   * That phase retired the prompt outright when the user opened the record,
+   * and asserted here that it did not come back. The reason given was sound at
+   * the time: re-showing it meant rendering a `Posting` captured before the user
+   * touched it, which the form may since have saved as `applied`.
+   *
+   * That objection is gone. `refreshPending` re-reads the record from the worker
+   * every time and retires anything that now says `applied`, so what comes back
+   * is current or does not come back at all. And the question was never
+   * answered — the user looked at the record and closed it again — so retiring
+   * it was discarding a real signal on the strength of a glance. Skipping while
+   * the form owns it, and asking again when it lets go, is what the store makes
+   * possible.
    */
-  it('does not bring the prompt back when editing stops', async () => {
+  it('asks again once the user stops editing without answering', async () => {
     const posting = await upsertPosting(db, aPosting({ state: 'viewed' }))
     const el = await render()
 
     await announce(posting.id)
     await click(el.querySelector('.recent__open')!)
+    expect(el.textContent).not.toContain('Looks like you applied')
+
+    await click(button(el, 'Stop editing'))
+
+    expect(el.textContent).toContain('Looks like you applied')
+  })
+
+  it('does not ask again about a record the form saved as applied', async () => {
+    // The other side of the reversal: coming back is only safe because the
+    // record is re-read, so a form that answered the question by hand settles it.
+    const posting = await upsertPosting(db, aPosting({ state: 'viewed' }))
+    const el = await render()
+
+    await announce(posting.id)
+    await click(el.querySelector('.recent__open')!)
+    await upsertPosting(db, { ...posting, state: 'applied', appliedAt: Date.now() })
     await click(button(el, 'Stop editing'))
 
     expect(el.textContent).not.toContain('Looks like you applied')
@@ -155,12 +182,106 @@ describe('a submission prompt and the form claiming the same record', () => {
 
     await announce(other.id)
     // Opening an unrelated record must not swallow a question about a different
-    // one — retiring is about the collision, not about editing in general.
+    // one — standing down is about the collision, not about editing in general.
     const rows = [...el.querySelectorAll('.recent__open')]
     const row = rows.find((r) => r.textContent?.includes(open.company))!
     await click(row)
 
     expect(el.textContent).toContain('Looks like you applied')
+  })
+})
+
+/**
+ * The phase itself: a question asked with nobody listening.
+ *
+ * Every test above emits the signal to an already-mounted panel, which is the
+ * case phase 8 built and the case that was never the problem. These start with
+ * the question already in the store and no event at all — the panel was shut
+ * when the confirmation page was seen, which is what happens almost every time
+ * somebody actually applies to a job.
+ */
+describe('a submission confirmed while the panel was closed', () => {
+  it('asks on open, with no event to prompt it', async () => {
+    const posting = await upsertPosting(db, aPosting({ state: 'viewed' }))
+    await recordPending(posting.id, Date.now())
+
+    const el = await render()
+
+    expect(el.textContent).toContain('Looks like you applied')
+  })
+
+  /**
+   * The reason the store holds a timestamp at all.
+   *
+   * `appliedAt` is what the response funnel measures every wait from, and a
+   * prompt that can outlive a browser session is a prompt that can be answered
+   * days after the fact. Recording the click would move every application
+   * forward to whenever the user next opened the panel.
+   */
+  it('records the date of the confirmation, not the date of the answer', async () => {
+    // Three days ago: long enough that recording the click would be visibly
+    // wrong, comfortably inside the TTL so the question is still asked. A fixed
+    // calendar date would silently stop testing anything once it aged past
+    // `PENDING_TTL_MS` — which is exactly what a first draft of this did.
+    const confirmedAt = Date.now() - 3 * 24 * 60 * 60 * 1000
+    const posting = await upsertPosting(db, aPosting({ state: 'viewed' }))
+    await recordPending(posting.id, confirmedAt)
+
+    const el = await render()
+    await click(button(el, 'Yes, applied'))
+
+    const saved = await db.postings.get(posting.id)
+    expect(saved?.state).toBe('applied')
+    expect(saved?.appliedAt).toBe(confirmedAt)
+  })
+
+  it('asks about three of them one at a time, oldest first', async () => {
+    const first = await upsertPosting(db, aPosting({ company: 'Acme', state: 'viewed' }))
+    const second = await upsertPosting(
+      db,
+      aPosting({ company: 'Initech', state: 'viewed' }),
+    )
+    const third = await upsertPosting(db, aPosting({ company: 'Globex', state: 'viewed' }))
+    // Relative to now, so they stay inside the TTL. Recorded out of order to
+    // prove the queue sorts by confirmation date rather than by insertion.
+    const minute = 60 * 1000
+    await recordPending(third.id, Date.now() - minute)
+    await recordPending(first.id, Date.now() - 3 * minute)
+    await recordPending(second.id, Date.now() - 2 * minute)
+
+    const el = await render()
+    expect(el.textContent).toContain('Acme')
+
+    await click(button(el, 'Not this one'))
+    expect(el.textContent).toContain('Initech')
+
+    await click(button(el, 'Not this one'))
+    expect(el.textContent).toContain('Globex')
+
+    await click(button(el, 'Not this one'))
+    expect(el.textContent).not.toContain('Looks like you applied')
+  })
+
+  /**
+   * Dismissal has to outlive the panel or it is not an answer.
+   *
+   * Phase 9 kept dismissals in a ref scoped to the panel's lifetime, which was
+   * the only place available then — so "no" lasted until the panel was closed
+   * and the question returned on the next confirmation-page load. Unmounting and
+   * remounting is that, in a test.
+   */
+  it('does not re-ask a question that was dismissed before the panel closed', async () => {
+    const posting = await upsertPosting(db, aPosting({ state: 'viewed' }))
+    await recordPending(posting.id, Date.now())
+
+    const first = await render()
+    await click(button(first, 'Not this one'))
+    await act(async () => root!.unmount())
+    root = null
+
+    const second = await render()
+
+    expect(second.textContent).not.toContain('Looks like you applied')
   })
 })
 

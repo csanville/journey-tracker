@@ -18,7 +18,8 @@ then merged.
 | 7 ✅ | `feat/dashboard` | Extension-page dashboard; `liveQuery` over a schema-less read connection; status funnel, over time, per-board yield | Patterns visible across saved data |
 | 8 ✅ | `feat/outcomes`, `feat/submit-detect` | Schema v3 `stage`/`outcome`; response funnel, endings and silence on the dashboard; Greenhouse confirmation-URL detection behind a prompt | The dashboard says what happened after you applied, and a real Greenhouse submission raises a prompt |
 | 9 ✅ | `feat/edit-record` | Editing a saved posting from the panel — the capability phase 7's docs assumed already existed, and which phase 8's fields need to be worth anything; a filter to find the record, and delete | Change a record's stage and outcome weeks after saving it, without writing a second record |
-| later | — | Workday, Ashby, iCIMS, SmartRecruiters adapters; diagnostics action; persist a pending submission prompt | — |
+| 10 ✅ | `feat/pending-submissions` | A confirmed submission survives a closed panel: a durable pending queue, an event demoted to a signal, and the confirmation's own timestamp on the record | Apply with the panel shut, open it later, and the question is waiting with the right date on it |
+| later | — | Workday, Ashby, iCIMS, SmartRecruiters adapters; diagnostics action | — |
 
 ## Phase 1 — schema and storage
 
@@ -912,6 +913,147 @@ which is the only thing that distinguishes a regression test from a comment.
 - **Bulk edits.** A list with checkboxes is a different feature and would need
   its own answer to what a partial failure means.
 
+## Phase 10 — a submission that survives a closed panel
+
+Phase 8 shipped the one submission signal that is not a heuristic, and then
+dropped it in the ordinary case. `announceSubmission` broadcasts, `broadcast`
+swallows the rejection when nothing is listening, and nothing is persisted or
+retried. **The panel has to already be open**, and almost nobody has a side
+panel open while they are filling in an application form. The feature works
+exactly when it is least needed.
+
+This is a variant of the shape this file keeps counting, one step further out: a
+mechanism that was verified end to end *in a context where it works*, and whose
+ordinary context was never the one under test. Every test of the prompt mounts
+the panel first.
+
+- **A durable pending queue.** `chrome.storage.local`, not `session`. The
+  realistic sequence is applying to three jobs on a Friday evening and closing
+  the laptop, which `session` throws away by definition. Keyed by posting id so
+  a confirmation page reloaded twice is one question, not two, and capped so a
+  loop somewhere cannot grow it without bound — the same reasoning as
+  `MAX_CACHED_TABS`, in the store that is not cleared for us.
+- **A TTL, and the reason it is not load-bearing.** Entries expire after 14
+  days. The obvious argument for an expiry is that a stale "yes" would corrupt
+  the date the response funnel is anchored on — and that argument is *wrong*,
+  because it is being fixed at the source: see below. What the TTL is actually
+  for is narrower and worth stating as itself. Beyond a couple of weeks the user
+  cannot answer "did you apply to this" accurately, and a question that invites
+  a guess is worse than no question. One constant, easy to move.
+- **The confirmation's own timestamp, not the answer's.** `markApplied` stamps
+  `appliedAt: Date.now()` — the moment the button is clicked. That is already
+  slightly wrong today and becomes properly wrong the moment a prompt can be
+  answered days later: the record would claim an application date of whenever
+  the user next opened the panel. The pending entry carries the `confirmedAt`
+  the worker recorded when it saw the confirmation page, and that is what lands
+  on the record. This is what makes a durable prompt safe rather than merely
+  possible, and it is the reason the TTL gets to be a usability number instead
+  of a correctness one.
+- **The event demoted to a signal.** `application/submitted` currently carries
+  the `postingId` the panel renders from. Once the question is in a store, that
+  payload is a second source of truth for something already written down, and
+  the open-panel and closed-panel paths would be two code paths that must agree.
+  The event becomes "pending changed, re-read it", which is the shape
+  `detection/changed` has always had, and the panel gets **one** path: read the
+  queue on mount, and read it again when told to. The `postingId` field is
+  removed rather than left unused — a payload nothing reads is the same defect
+  as a comment nothing checks.
+- **Dismissal becomes durable, and the in-memory `answered` set goes.** Today a
+  dismissal is a ref that lives as long as the panel, because that was the only
+  place to put it. Retiring the entry in the store is strictly better and
+  removes the state: decision 13's amendment wants an answered question to stay
+  answered, and a set that dies with the panel only manages it until the panel
+  is closed.
+
+### The queue, and what skips versus what retires
+
+Answering advances to the next entry — `SubmissionPrompt` is unchanged and shows
+one record at a time, which keeps each answer a deliberate one.
+
+The distinction that has to survive the rewrite is the one phase 9 found by
+review: a record **open in the form** is skipped, not retired. Retiring it would
+discard a real question because the user happened to look at the record; the
+form and the prompt would both own it, and the form's stale `state: 'viewed'`
+would win. Filtering the queue on `editingId` rather than marking anything means
+the question comes back when editing stops, which is correct, and needs no
+second piece of state to track it.
+
+### Done when
+
+Apply to a posting with the panel closed, open the panel, and the question is
+waiting — with the date the confirmation page was seen, not the date it was
+answered. Three of them queue and answer one at a time. A dismissal survives a
+browser restart.
+
+### What using it changed
+
+**Nothing, and that is the first time.** The walkthrough confirmed the sequence
+the phase exists for — apply with the panel shut, open it later, the question is
+waiting — along with the confirmation's own date landing on the record, and a
+decision staying made across a panel close. No defect came out of it.
+
+Worth recording, because every phase since 6 has had one and phase 9's was found
+*only* by running the extension. Two things are different here, and neither is
+"more care was taken":
+
+- **The risky surface was a store, not a side effect.** Phase 9's badge lived in
+  the toolbar, which no test in this project can observe. This phase's state
+  lives in `chrome.storage.local`, which the suite reads directly. The thing
+  that made the previous defect untestable was its *location*, and this phase
+  did not put anything there.
+- **`App.test.tsx` already existed.** Phase 9 created it, under review, to catch
+  a prompt and a form owning one record at once. That is exactly the file this
+  phase's hardest cases needed, and it was written before the phase started.
+  A test file created in response to one defect caught the class of it in the
+  next phase, which is the argument for writing them at the level the defect
+  actually lives at rather than the level the code is organised at.
+
+Not a claim that the phase is defect-free. Two paths were not exercised by hand:
+the queue with several confirmations pending at once, and the reversal below —
+a prompt returning after the record is opened for editing and closed again.
+Both have tests; neither has been seen.
+
+### The TTL caught a bad test before review did
+
+Two tests seeded `confirmedAt` with epoch-era constants (`1_000`, and a fixed
+calendar date). Against the real clock both were months past `PENDING_TTL_MS`,
+so the store swept them and the prompt never rendered — the tests failed on
+their first run, which is the only reason it was noticed.
+
+The fixed date is the interesting one. It would have *passed* had it been chosen
+a few months later, and then silently stopped testing anything as it aged past
+the expiry. A fixture pinned to a wall-clock date, in a codebase with any
+expiry in it, is a test with a shelf life. Both are relative to `now` now.
+
+### What reversed from phase 9
+
+Opening a record for editing now **skips** its question rather than retiring it,
+so an unanswered question returns when the form lets go.
+
+Phase 9 retired it, and gave a sound reason: re-showing meant rendering a
+`Posting` captured before the user touched it, which the form may since have
+saved as `applied`. That objection is gone rather than overruled —
+`refreshPending` re-reads the record from the worker on every pass and retires
+anything that now says `applied`, so what comes back is current or does not come
+back. What remained was retiring a real question because the user clicked the row
+to see which job it named, which is the obvious thing to do when a prompt names a
+company and a title and nothing else.
+
+The general form is worth keeping: **a guard written around a stale copy should
+be revisited when the copy stops being stale.** The reason had outlived the
+constraint that produced it by one phase.
+
+### Deliberately not in phase 10
+
+- **Retrying a dropped content-script report.** This phase persists the
+  *question*, not the detection that produced it. If the content script never
+  reported, there is nothing to persist and the page is gone.
+- **A prompt for a page with no record behind it.** Unchanged from phase 8, and
+  for the same reason: a confirmation page carries nothing worth making a record
+  out of.
+- **Boards other than Greenhouse.** Still a permissions boundary, still the
+  honest thing to state rather than to work around.
+
 ## Recurring shapes
 
 Two shapes account for most of what review has found, across every phase that
@@ -972,6 +1114,25 @@ is gone.** If the answer is "a re-read that happens to run", it does not — a
 cache read returning the same value re-runs nothing, and an effect keyed on
 something that did not change does not fire. The invalidation belongs wherever
 the record is destroyed, not wherever it is displayed.
+
+**A fourth, and phase 10 was built entirely to fix one instance of it: a
+mechanism verified in the context where it works, whose ordinary context was
+never the one under test.** Phase 8's submission prompt was correct, tested end
+to end, and did nothing at all in practice, because every test of it mounted the
+panel first and the real user has the panel closed. Nothing was broken; the
+tested case was simply the rare one.
+
+It is the "declared rather than executed" pattern of decision 3 with the
+declaration *true* — the code runs, it is just never reached the way it is
+actually used. That makes it harder to find than the others, because a grep for
+the caller succeeds.
+
+The check: **for every feature, name the state the user is in when it fires, and
+ask whether any test puts them in it.** Not "is this covered" — coverage was
+never the problem — but "is the covered case the common one". Where a feature
+exists to catch someone at a moment they are doing something else, the answer is
+usually no, and the test that would have caught it is the one that sets up the
+inconvenient state first.
 
 ## Changes from the original plan
 
