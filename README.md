@@ -146,6 +146,55 @@ into the picker's folder field sometimes works too, but Chrome is inconsistent
 about loading extensions from network paths, so the Windows-side build is the
 one to rely on.
 
+### Testing submission detection without applying to anything
+
+Submission detection is a **URL match on page load**. It does not observe a form
+being submitted, and nothing about it requires an application to have happened:
+
+```
+https://job-boards.greenhouse.io/<token>/jobs/<numeric id>/confirmation
+```
+
+The content script checks that shape on every load and every SPA navigation, and
+the worker matches the derived posting URL against a stored record. So the whole
+path runs if you:
+
+1. **Save any Greenhouse posting** in the panel. Do not apply to it.
+2. **Navigate to that same URL with `/confirmation` on the end.**
+
+That is the real end-to-end test — content script, worker, `findDuplicate`, the
+pending store, the panel — and it is repeatable, because you can delete the
+record and do it again. Close the side panel first if you want to test the case
+the queue exists for.
+
+Two caveats. The fabricated URL is not a page Greenhouse serves, so expect a 404;
+what matters is whether the browser stays on that URL, since the content script
+reads `location.href`. And the prompt is only raised for a record that is not
+already `applied`, so a record is spent once you confirm it — `jt.unapply()`
+below puts it back.
+
+For the states that recipe cannot reach — a confirmation dated days ago, an
+expired one, or several queued at once without navigating repeatedly — paste
+[`tools/pending-console.js`](tools/pending-console.js) into the DevTools console
+of an **extension page** (the dashboard is convenient; a job board's console
+cannot reach `chrome.storage`). It defines:
+
+| | |
+|---|---|
+| `jt.list()` | saved postings, with ids |
+| `jt.pending()` | the queue, with each entry's age and whether it has expired |
+| `jt.queue(n)` | seed `n` questions a day apart, oldest asked first |
+| `jt.add(id, daysAgo)` | one question, backdated — use `14` or more to test expiry |
+| `jt.unapply(id)` | put a record back to `viewed` so it can be asked about again |
+| `jt.clear()` | empty the queue |
+
+Reopen the side panel after seeding; it reads the queue on mount.
+
+It seeds the store rather than faking a confirmation to the worker, deliberately.
+`application/submitted` takes its tab from `sender.tab`, which an extension page
+does not have, so a "simulated" submission would be answered `{ matched: false }`
+and would exercise a path the real one never takes.
+
 ## Layout
 
 ```
@@ -164,6 +213,7 @@ src/lib/backup/            the export file format, its validator, the CSV report
 src/test/fixtures/         real captured job pages the adapters are tested against
 tools/make-icons.py        regenerates public/icons/*.png
 tools/build-win.sh         builds to the Windows filesystem, for WSL
+tools/pending-console.js   drives the submission prompt without applying to jobs
 .prettierrc.json           formatting; run `npm run format` before committing
 docs/ROADMAP.md            the phase plan
 docs/DECISIONS.md          architecture decisions and their revisit conditions
