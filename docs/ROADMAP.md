@@ -19,7 +19,8 @@ then merged.
 | 8 ✅ | `feat/outcomes`, `feat/submit-detect` | Schema v3 `stage`/`outcome`; response funnel, endings and silence on the dashboard; Greenhouse confirmation-URL detection behind a prompt | The dashboard says what happened after you applied, and a real Greenhouse submission raises a prompt |
 | 9 ✅ | `feat/edit-record` | Editing a saved posting from the panel — the capability phase 7's docs assumed already existed, and which phase 8's fields need to be worth anything; a filter to find the record, and delete | Change a record's stage and outcome weeks after saving it, without writing a second record |
 | 10 ✅ | `feat/pending-submissions` | A confirmed submission survives a closed panel: a durable pending queue, an event demoted to a signal, and the confirmation's own timestamp on the record | Apply with the panel shut, open it later, and the question is waiting with the right date on it |
-| later | — | Workday, Ashby, iCIMS, SmartRecruiters adapters; diagnostics action | — |
+| — ✅ | `feat/ashby-adapter` | An Ashby adapter, on its own branch rather than as a phase — reading a fourth board is additive and needed no new mechanism | A posting on `jobs.ashbyhq.com` fills the form |
+| later | — | Workday, iCIMS, SmartRecruiters adapters; diagnostics action | — |
 
 ## Phase 1 — schema and storage
 
@@ -1008,10 +1009,27 @@ Worth recording, because every phase since 6 has had one and phase 9's was found
   next phase, which is the argument for writing them at the level the defect
   actually lives at rather than the level the code is organised at.
 
-Not a claim that the phase is defect-free. Two paths were not exercised by hand:
-the queue with several confirmations pending at once, and the reversal below —
-a prompt returning after the record is opened for editing and closed again.
-Both have tests; neither has been seen.
+The walkthrough covers every path this phase added, including the two that
+needed a way to fake a submission before they could be reached at all: a queue of
+several confirmations pending at once, and the reversal below — a prompt
+returning after the record is opened for editing and closed again.
+
+That those two were reachable by hand at all is the tooling's doing, and it is
+worth recording that **the tooling found its own defect first**. The recipe as
+first written said to add `/confirmation` "to the end" of the posting URL, and a
+real Greenhouse URL ends in a `gh_src` tracking parameter — so following it
+produced `?gh_src=abc/confirmation`, leaving the path untouched.
+`confirmationTarget` reads `parsed.pathname` and correctly declined.
+
+It failed in the worst possible way: Greenhouse ignored the mangled parameter and
+served the same page without a 404, and the content script parsed it happily
+under the new URL. Every observable signal said the mechanism had run. Only the
+unobservable one disagreed, and the first conclusion drawn from it was that the
+extension was broken.
+
+The recipe had been checked against `/jobs/4021/confirmation` — a URL with no
+query string, which is not the URL anybody has. That is the fourth shape below,
+committed by the notes that had just finished describing it.
 
 ### The TTL caught a bad test before review did
 

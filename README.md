@@ -8,24 +8,20 @@ There is no server and no account. Nothing is transmitted anywhere.
 
 ## Status
 
-**Phase 8 — what happened after you applied.** An applied posting now records
-how far it got and how it ended, on two separate controls: a **stage**
-(screening, interviewing, offer) and an **outcome** (rejected, withdrawn,
-accepted). They are separate because the commonest result in a job search —
-rejected after two interviews — needs both, and a single status list would throw
-one of them away.
+**What happened after you applied.** An applied posting records how far it got
+and how it ended, on two separate controls: a **stage** (screening, interviewing,
+offer) and an **outcome** (rejected, withdrawn, accepted). They are separate
+because the commonest result in a job search — rejected after two interviews —
+needs both, and a single status list would throw one of them away.
 
 Leaving them alone is the normal thing to do. Blank means "nothing heard yet"
 and "still open", and how long something has been quiet is worked out from the
 date you applied, so there is nothing to keep up to date.
 
-> **These can only be set when you first save a posting.** There is not yet any
-> way to edit a record afterwards, which means you cannot come back three weeks
-> later and mark a job rejected — and re-entering it saves a second copy rather
-> than updating the first. Editing is phase 9, and until it lands the dashboard
-> section below will mostly say everything is still open. It is listed here
-> rather than left to be discovered, because the charts will look authoritative
-> either way.
+**Any saved posting can be edited from the panel** — search for it by company or
+title, change what you need, and save. That is what makes the two controls above
+worth having: a rejection three weeks later goes onto the record it belongs to
+rather than into a second copy of it. Records can be deleted from the same place.
 
 The dashboard gained a section for it: how many applications got a reply, how
 many reached an interview, how many ended in an offer, and how many are still
