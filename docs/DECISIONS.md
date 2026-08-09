@@ -745,6 +745,39 @@ cache (decision 15) — and that is a change to what the panel restores on open,
 not a line in the worker. Until then the honest description of the feature is
 "notices a submission **if the panel is open**", and the README says so.
 
+**Amended — closed in phase 10, and `session` was the wrong home.** The question
+is written down before it is announced, and the event demoted to "the queue
+moved, go and look". The panel reads the store on mount and on signal and keeps
+no list of its own, which is what makes the panel-open and panel-closed cases one
+path rather than two that have to agree.
+
+`chrome.storage.local`, not the `session` this entry predicted. The realistic
+sequence is applying to several jobs in an evening and closing the laptop, and
+`session` discards exactly that by definition — the property that makes it right
+for the detection cache, which is page-derived and worthless once the page is
+gone, makes it wrong for a question the user still owes an answer to.
+
+Persisting a prompt does not weaken this decision, which is the thing worth
+being explicit about: it is still a prompt. Nothing is written until the user
+answers, a wrong match still costs one dismissal, and the extension still
+declines to manufacture a record from a confirmation page.
+
+One consequence that was not obvious until the prompt could outlive the session.
+`markApplied` stamped `Date.now()` — the moment of the click — which is a
+tolerable approximation while a prompt lives for seconds and a lie once it can
+be answered on Monday about a Friday application. The worker timestamps the
+confirmation page when it sees it, and that is what lands on the record.
+**`appliedAt` is what every wait in the response funnel is measured from**, so
+the field that made durable prompts worth having is also the field they would
+have quietly corrupted. The general form: *a value that is "near enough now" is
+only near enough while the gap is small, and the change that widens the gap is
+rarely the change that touches the value.*
+
+The expiry that ships with it — 14 days — is therefore a usability bound and not
+a correctness one. Beyond a fortnight nobody can say whether they applied to a
+particular posting, and a question that invites a guess is worse than no
+question.
+
 **Revisit when.** A detector reaches a precision on real submissions high enough
 that silent writes would not manufacture history. Auto-writing without a prompt
 needs stronger evidence than auto-prompting did.

@@ -22,34 +22,36 @@ export interface DetectionChanged {
 }
 
 /**
- * A tracked posting was just applied to, as far as the confirmation page says.
+ * The pending-submission queue changed. Go and read it.
  *
- * Carries the record's id rather than the record, so the panel reads the
- * current one instead of rendering a copy that was already stale when it was
- * put in the message.
+ * **Carries no posting id, deliberately.** It used to, and the panel rendered
+ * the prompt straight from the payload — which worked only while the panel was
+ * open to receive it, and phase 10 wrote the questions down precisely because
+ * that is the uncommon case. Once they are in a store, an id in the event is a
+ * second copy of a fact already recorded, and the panel would have two routes to
+ * the same prompt: the payload when it happens to be open, the store when it is
+ * not. Two routes that must agree is the shape this project keeps paying for.
  *
- * This is the second member of the union, which decision 16 said would be the
- * moment "refresh everything" stopped being the right answer for the panel —
- * and it is: this event asks a question about one record, and refreshing the
- * active tab's detection would neither ask it nor answer it.
+ * So this is a signal, exactly like `detection/changed` above: it says something
+ * moved, and the panel re-reads the one place the answer lives. Decision 16's
+ * "refresh everything" still does not apply — the panel refreshes the queue, not
+ * the active tab's detection, which would neither ask this question nor answer
+ * it.
  */
-export interface ApplicationSubmitted {
-  type: 'application/submitted'
+export interface SubmissionsPending {
+  type: 'submission/pending'
   tabId: number
-  postingId: string
 }
 
-export type ExtensionEvent = DetectionChanged | ApplicationSubmitted
+export type ExtensionEvent = DetectionChanged | SubmissionsPending
 
 export function isEvent(value: unknown): value is ExtensionEvent {
   if (typeof value !== 'object' || value === null) return false
 
-  const event = value as { type?: unknown; tabId?: unknown; postingId?: unknown }
+  const event = value as { type?: unknown; tabId?: unknown }
   if (typeof event.tabId !== 'number') return false
 
-  if (event.type === 'detection/changed') return true
-
-  return event.type === 'application/submitted' && typeof event.postingId === 'string'
+  return event.type === 'detection/changed' || event.type === 'submission/pending'
 }
 
 /**

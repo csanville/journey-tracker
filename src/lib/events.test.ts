@@ -6,19 +6,30 @@ describe('isEvent', () => {
     expect(isEvent({ type: 'detection/changed', tabId: 4 })).toBe(true)
   })
 
-  it('accepts a submission, which carries the record it is about', () => {
-    expect(isEvent({ type: 'application/submitted', tabId: 4, postingId: 'p1' })).toBe(true)
+  it('accepts a pending-submission signal, which names no record', () => {
+    expect(isEvent({ type: 'submission/pending', tabId: 4 })).toBe(true)
   })
 
   /**
-   * The second member of the union is where "refresh everything" stops being
-   * the right answer for the panel (decision 16), so the panel branches on
-   * `type` — and a submission without a `postingId` would take that branch and
-   * ask about a record that was never named.
+   * Phase 10 demoted this event from a payload to a signal, and the guard has
+   * to follow or the demotion is only half done.
+   *
+   * It used to carry the `postingId` the panel rendered from, which worked only
+   * for a panel already open — the case the questions are now written down to
+   * survive. With them in a store, an id on the event would be a second copy of
+   * a recorded fact and the panel would have two routes to the same prompt.
+   * Anything extra is ignored rather than rejected: the sender is this
+   * extension's own worker, and a stricter guard would only break the next
+   * build that adds a field.
    */
-  it('rejects a submission that does not say which record', () => {
-    expect(isEvent({ type: 'application/submitted', tabId: 4 })).toBe(false)
-    expect(isEvent({ type: 'application/submitted', tabId: 4, postingId: 7 })).toBe(false)
+  it('ignores a payload left over from the old event shape', () => {
+    expect(isEvent({ type: 'submission/pending', tabId: 4, postingId: 'p1' })).toBe(true)
+  })
+
+  it('rejects the event type it used to be', () => {
+    expect(isEvent({ type: 'application/submitted', tabId: 4, postingId: 'p1' })).toBe(
+      false,
+    )
   })
 
   it('rejects an event type it does not know', () => {

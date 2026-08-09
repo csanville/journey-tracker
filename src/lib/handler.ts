@@ -11,6 +11,7 @@ import {
 } from './detection'
 import { broadcast } from './events'
 import { now } from './ids'
+import { readPending, recordPending, retirePending } from './pending'
 import type {
   ImportBatchResult,
   Request,
@@ -136,6 +137,10 @@ async function dispatch(
 
       return { matched: await announceSubmission(db, context.tabId, request.url) }
     }
+    case 'submission/pending':
+      return readPending()
+    case 'submission/retire':
+      return { retired: await retirePending(request.postingId) }
     case 'detection/get':
       return getDetectionSummary(request.tabId)
     case 'status':
@@ -235,7 +240,18 @@ async function announceSubmission(
   if (!match || match.matchedOn !== 'url') return false
   if (match.posting.state === 'applied') return false
 
-  await broadcast({ type: 'application/submitted', tabId, postingId: match.posting.id })
+  // Written down before it is announced, and that order is the phase. The
+  // broadcast is best-effort by design — `broadcast` swallows the rejection when
+  // no panel is listening, which is the ordinary case — so a question that
+  // existed only in the event was lost every time somebody applied with the
+  // panel closed. Recording first means the announcement is an optimisation: it
+  // gets an open panel to ask immediately, and a closed one loses nothing.
+  //
+  // `Date.now()` here rather than at the click is the other half. This is the
+  // moment the confirmation page was seen, and it is what will land on the
+  // record however much later the user answers.
+  await recordPending(match.posting.id)
+  await broadcast({ type: 'submission/pending', tabId })
 
   return true
 }

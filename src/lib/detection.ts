@@ -1,6 +1,7 @@
 import type { ExtractedFields, FieldName, Tier } from './extract'
 import { FIELD_NAMES, TIER_ORDER } from './extract'
 import { SNAPSHOT_CAP_BYTES } from './extract/snapshot'
+import { createSerializer } from './serialize'
 import type { Salary, SalaryPeriod, WorkMode } from './types'
 
 /**
@@ -226,32 +227,19 @@ async function writeCache(cache: Cache): Promise<void> {
 /**
  * Serializes every read-modify-write of the cache.
  *
- * `chrome.storage` is asynchronous, so a read and the write that depends on it
- * are two turns with a gap between them, and the worker is free to service
- * another message in that gap. Two tabs reporting at once is not a rare
- * interleaving to reason about — it is what happens every time somebody
- * middle-clicks two postings from a search page, because both content scripts
- * fire their first attempt on the same timer. Interleaved, the second write
- * lands on a snapshot of the cache taken before the first, and one tab's
- * detection disappears: the panel says "no posting detected" for a page whose
- * content script parsed it perfectly, with nothing in any console.
+ * The mechanism and the reasoning now live in `serialize.ts`, which phase 10
+ * extracted so `pending.ts` could have the same guarantee over its own key. The
+ * failure it prevents here is specific and worth keeping named: two tabs
+ * reporting at once — every time somebody middle-clicks two postings from a
+ * search page — interleave, the second write lands on a cache snapshot taken
+ * before the first, and one tab's detection disappears. The panel then says "no
+ * posting detected" for a page whose content script parsed it perfectly, with
+ * nothing in any console.
  *
- * A promise chain is enough. The worker is single-threaded, so the only
- * concurrency is this — awaits interleaving inside one thread — and queueing
- * the whole read-modify-write behind the previous one removes it. The queue is
- * per-worker-lifetime, which is the same lifetime as the only writer there is
- * (decision 4).
+ * This queue is per-worker-lifetime, which is the same lifetime as the only
+ * writer there is (decision 4).
  */
-let queue: Promise<unknown> = Promise.resolve()
-
-function serialized<T>(operation: () => Promise<T>): Promise<T> {
-  // The failure of one operation must not poison the queue for the next, so the
-  // chain is continued from a settled promise rather than the returned one.
-  const result = queue.then(operation, operation)
-  queue = result.catch(() => undefined)
-
-  return result
-}
+const serialized = createSerializer()
 
 export function summarize(detection: CachedDetection): DetectionSummary {
   const { snapshot: kept, ...rest } = detection

@@ -1,4 +1,5 @@
 import type { DetectionReport, DetectionSummary } from './detection'
+import type { PendingSubmission } from './pending'
 import type { DuplicateMatch, Posting, PostingInput, Snapshot } from './types'
 
 /**
@@ -126,6 +127,27 @@ export interface RequestMap {
   'application/submitted': {
     payload: { url: string }
     result: { matched: boolean }
+  }
+  /**
+   * Every submission the user has not yet confirmed or dismissed, oldest first.
+   *
+   * The panel asks on mount and whenever the worker says the queue changed. It
+   * asks rather than being told because phase 10 demoted the event to a signal:
+   * with the questions written down, an event carrying one of them would be a
+   * second source of truth for something already stored, and the panel-open and
+   * panel-closed paths would be two routes that have to agree.
+   */
+  'submission/pending': { payload: NoPayload; result: PendingSubmission[] }
+  /**
+   * Answers a pending submission, whichever button answered it.
+   *
+   * Confirming sends `posting/upsert` as well — this only retires the question.
+   * Keeping them separate is what lets a dismissal be as durable as a
+   * confirmation without inventing a write that means "no".
+   */
+  'submission/retire': {
+    payload: { postingId: string }
+    result: { retired: boolean }
   }
   /** What the panel asks about the tab it is sitting next to. */
   'detection/get': { payload: { tabId: number }; result: DetectionSummary | null }

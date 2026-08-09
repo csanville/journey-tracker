@@ -8,34 +8,38 @@ There is no server and no account. Nothing is transmitted anywhere.
 
 ## Status
 
-**Phase 8 — what happened after you applied.** An applied posting now records
-how far it got and how it ended, on two separate controls: a **stage**
-(screening, interviewing, offer) and an **outcome** (rejected, withdrawn,
-accepted). They are separate because the commonest result in a job search —
-rejected after two interviews — needs both, and a single status list would throw
-one of them away.
+**What happened after you applied.** An applied posting records how far it got
+and how it ended, on two separate controls: a **stage** (screening, interviewing,
+offer) and an **outcome** (rejected, withdrawn, accepted). They are separate
+because the commonest result in a job search — rejected after two interviews —
+needs both, and a single status list would throw one of them away.
 
 Leaving them alone is the normal thing to do. Blank means "nothing heard yet"
 and "still open", and how long something has been quiet is worked out from the
 date you applied, so there is nothing to keep up to date.
 
-> **These can only be set when you first save a posting.** There is not yet any
-> way to edit a record afterwards, which means you cannot come back three weeks
-> later and mark a job rejected — and re-entering it saves a second copy rather
-> than updating the first. Editing is phase 9, and until it lands the dashboard
-> section below will mostly say everything is still open. It is listed here
-> rather than left to be discovered, because the charts will look authoritative
-> either way.
+**Any saved posting can be edited from the panel** — search for it by company or
+title, change what you need, and save. That is what makes the two controls above
+worth having: a rejection three weeks later goes onto the record it belongs to
+rather than into a second copy of it. Records can be deleted from the same place.
 
 The dashboard gained a section for it: how many applications got a reply, how
 many reached an interview, how many ended in an offer, and how many are still
 waiting on a first response after three weeks.
 
-**On Greenhouse, the extension notices when an application goes in** — provided
-the side panel is open at the time. Submitting one lands on a confirmation page,
-and if that posting is already saved the panel asks whether to mark it applied.
-It asks rather than acting: a wrong guess costs one dismissed banner. With the
-panel closed there is nothing listening and the moment passes unnoticed.
+**On Greenhouse, the extension notices when an application goes in.** Submitting
+one lands on a confirmation page, and if that posting is already saved the
+extension asks whether to mark it applied. It asks rather than acting: a wrong
+guess costs one dismissed banner.
+
+The panel does not have to be open at the time — which is just as well, since
+almost nobody has a side panel open while filling in an application form. The
+question waits until you next open it, several of them queue up one at a time,
+and answering sticks whether or not you say yes. The date recorded is the day the
+confirmation page appeared, not the day you got round to answering, so the
+"still waiting on a reply" figures stay honest. Unanswered questions are
+forgotten after a fortnight, on the grounds that by then the answer would be a
+guess.
 
 This only works on Greenhouse, and that is a real limit rather than a gap to be
 filled later. Reading the moment of submission needs the extension to be running
@@ -138,6 +142,70 @@ into the picker's folder field sometimes works too, but Chrome is inconsistent
 about loading extensions from network paths, so the Windows-side build is the
 one to rely on.
 
+### Testing submission detection without applying to anything
+
+Submission detection is a **URL match on page load**. It does not observe a form
+being submitted, and nothing about it requires an application to have happened:
+
+```
+https://job-boards.greenhouse.io/<token>/jobs/<numeric id>/confirmation
+```
+
+The content script checks that shape on every load and every SPA navigation, and
+the worker matches the derived posting URL against a stored record. So the whole
+path runs if you:
+
+1. **Save any Greenhouse posting** in the panel. Do not apply to it.
+2. **Add `/confirmation` to the end of the _path_** — before any `?`, not after
+   it — and navigate there.
+
+```
+posting   https://job-boards.greenhouse.io/otter/jobs/8355059002?gh_src=cca791e3
+                                           └──────── path ──────┘└─── query ───┘
+
+correct   https://job-boards.greenhouse.io/otter/jobs/8355059002/confirmation
+wrong     https://job-boards.greenhouse.io/otter/jobs/8355059002?gh_src=cca791e3/confirmation
+```
+
+The second one is the mistake worth naming, because it fails *silently and
+convincingly*: `confirmationTarget` reads `parsed.pathname`, which is still
+`/otter/jobs/8355059002`, so it declines. Greenhouse ignores the mangled
+`gh_src`, serves the same page without even a 404, and the content script parses
+it happily under the new URL — so everything looks like it worked except the one
+thing being tested. Drop the query string, or put it after `/confirmation`;
+both are fine, since the query is discarded when the posting URL is derived.
+
+That is the real end-to-end test — content script, worker, `findDuplicate`, the
+pending store, the panel — and it is repeatable, because you can delete the
+record and do it again. Close the side panel first if you want to test the case
+the queue exists for.
+
+One other thing to know: the prompt is only raised for a record that is not
+already `applied`, so a record is spent once you confirm it — `jt.unapply()`
+below puts it back.
+
+For the states that recipe cannot reach — a confirmation dated days ago, an
+expired one, or several queued at once without navigating repeatedly — paste
+[`tools/pending-console.js`](tools/pending-console.js) into the DevTools console
+of an **extension page** (the dashboard is convenient; a job board's console
+cannot reach `chrome.storage`). It defines:
+
+| | |
+|---|---|
+| `jt.list()` | saved postings, with ids |
+| `jt.pending()` | the queue, with each entry's age and whether it has expired |
+| `jt.queue(n)` | seed `n` questions a day apart, oldest asked first |
+| `jt.add(id, daysAgo)` | one question, backdated — use `14` or more to test expiry |
+| `jt.unapply(id)` | put a record back to `viewed` so it can be asked about again |
+| `jt.clear()` | empty the queue |
+
+Reopen the side panel after seeding; it reads the queue on mount.
+
+It seeds the store rather than faking a confirmation to the worker, deliberately.
+`application/submitted` takes its tab from `sender.tab`, which an extension page
+does not have, so a "simulated" submission would be answered `{ matched: false }`
+and would exercise a path the real one never takes.
+
 ## Layout
 
 ```
@@ -156,6 +224,7 @@ src/lib/backup/            the export file format, its validator, the CSV report
 src/test/fixtures/         real captured job pages the adapters are tested against
 tools/make-icons.py        regenerates public/icons/*.png
 tools/build-win.sh         builds to the Windows filesystem, for WSL
+tools/pending-console.js   drives the submission prompt without applying to jobs
 .prettierrc.json           formatting; run `npm run format` before committing
 docs/ROADMAP.md            the phase plan
 docs/DECISIONS.md          architecture decisions and their revisit conditions
