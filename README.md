@@ -38,13 +38,21 @@ It asks rather than acting: a wrong guess costs one dismissed banner. With the
 panel closed there is nothing listening and the moment passes unnoticed.
 
 This only works on Greenhouse, and that is a real limit rather than a gap to be
-filled later. Reading the moment of submission needs the extension to be running
-on the page when it happens, which it only is on the job boards listed under
-Privacy below. Everywhere else — Workday, iCIMS, LinkedIn, a company's own
-careers page — the honest answer is that it cannot see it, and reaching them
-would mean asking for permission to read every site you visit. Lever is left out
-too: employers there can send you anywhere after you apply, so there is nothing
-dependable to watch for.
+filled later. It is also a narrower claim than it looks: *reading* a posting
+works on Lever and Ashby too, and it is only the moment of submission that
+Greenhouse alone gives up.
+
+Reading that moment needs the extension to be running on the page when it
+happens, which it only is on the job boards listed under Privacy below.
+Everywhere else — Workday, iCIMS, LinkedIn, a company's own careers page — the
+honest answer is that it cannot see it, and reaching them would mean asking for
+permission to read every site you visit. Lever is left out for a different
+reason: employers there can send you anywhere after you apply, so there is
+nothing dependable to watch for. Ashby is left out for a third — its application
+form is drawn by JavaScript rather than served, so what the page does after a
+successful submission has not been established, and a guessed-at signal would be
+the kind of thing that gets recorded as working because it was written rather
+than because it was watched.
 
 Before that: the **Dashboard** link opens a tab showing what the saved records
 add up to — how many you have applied to against how many you only looked at,
@@ -70,9 +78,9 @@ it back.
 - **Erase everything** — behind a confirmation, because the way to find out a
   backup is real is to wipe and restore it.
 
-Before that: postings are read off Greenhouse and Lever automatically, any other
-page by right-clicking it, the form follows as you tab between postings without
-ever clobbering what you have typed, and a page you have already tracked says so
+Before that: postings are read off Greenhouse, Lever and Ashby automatically, any
+other page by right-clicking it, the form follows as you tab between postings
+without ever clobbering what you have typed, and a page you have already tracked says so
 — in the panel and on the toolbar badge — before you type a thing.
 
 See `docs/ROADMAP.md` for the phase plan and `docs/DECISIONS.md` for the
@@ -175,7 +183,7 @@ The manifest requests six permissions, and no host permissions at all:
 | `contextMenus` | the right-click item that asks for the read — the only discoverable gesture Chrome grants `activeTab` through |
 
 None of these grants standing access to page content. Automatic reading happens
-only on the three job-board hosts named in `content_scripts.matches`; anywhere
+only on the four job-board hosts named in `content_scripts.matches`; anywhere
 else it is click-initiated through `activeTab`, which reaches one tab, once, at
 your request.
 

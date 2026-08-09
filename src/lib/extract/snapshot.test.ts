@@ -6,6 +6,7 @@ import { SNAPSHOT_CAP_BYTES, buildSnapshot } from './snapshot'
 
 const GREENHOUSE_URL = 'https://job-boards.greenhouse.io/discord/jobs/8433948002'
 const LEVER_URL = 'https://jobs.lever.co/leverdemo/004f960b-c8be-4e98-8d37-b3be47f99ea0'
+const ASHBY_URL = 'https://jobs.ashbyhq.com/ramp/d1183b00-6590-4fe4-a585-28d84e578fe3'
 
 describe('buildSnapshot', () => {
   it('produces a document the adapters can parse again', () => {
@@ -23,6 +24,29 @@ describe('buildSnapshot', () => {
         extract(live, url).fields,
       )
     }
+  })
+
+  it('round-trips an Ashby posting except for the work mode, by design', () => {
+    // Ashby is deliberately not in the loop above, and this is the statement of
+    // why rather than a quiet omission.
+    //
+    // Ashby's work mode comes from `window.__appData`, and dropping inline
+    // non-JSON-LD scripts takes that tier with it. The JSON-LD that survives
+    // does carry `jobLocationType`, but on this board it says TELECOMMUTE for
+    // hybrid roles, so `adapters/ashby.ts` refuses it — which means a re-parsed
+    // Ashby snapshot has no source for the field at all and returns null.
+    //
+    // Null is the intended outcome. The alternative on offer is not "hybrid",
+    // it is "remote" on a job that is not remote.
+    const live = loadFixture('ashby-job.html')
+    const { trimmedSource } = buildSnapshot(live)
+
+    const replayed = extract(parseHtml(trimmedSource), ASHBY_URL).fields
+    const original = extract(live, ASHBY_URL).fields
+
+    expect(original.workMode).toBe('hybrid')
+    expect(replayed.workMode).toBeNull()
+    expect({ ...replayed, workMode: null }).toEqual({ ...original, workMode: null })
   })
 
   it('keeps the class names the DOM tier selects on', () => {
