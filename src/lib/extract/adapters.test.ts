@@ -2,6 +2,7 @@
 import { describe, expect, it } from 'vitest'
 import { loadFixture, parseHtml } from '../../test/dom'
 import { extract, selectAdapter } from './index'
+import { ashbyReaders } from './adapters/ashby'
 import { greenhouseReaders } from './adapters/greenhouse'
 import { leverReaders } from './adapters/lever'
 import { readJsonLd } from './tiers/jsonld'
@@ -21,6 +22,7 @@ import { readMeta } from './tiers/meta'
 
 const GREENHOUSE_URL = 'https://job-boards.greenhouse.io/discord/jobs/8433948002'
 const LEVER_URL = 'https://jobs.lever.co/leverdemo/004f960b-c8be-4e98-8d37-b3be47f99ea0'
+const ASHBY_URL = 'https://jobs.ashbyhq.com/ramp/d1183b00-6590-4fe4-a585-28d84e578fe3'
 
 describe('selectAdapter', () => {
   it('routes each board to its own adapter', () => {
@@ -29,6 +31,7 @@ describe('selectAdapter', () => {
       'greenhouse',
     )
     expect(selectAdapter(LEVER_URL).name).toBe('lever')
+    expect(selectAdapter(ASHBY_URL).name).toBe('ashby')
   })
 
   it('falls back to the generic adapter for everything else', () => {
@@ -41,6 +44,8 @@ describe('selectAdapter', () => {
   it('is not fooled by a hostname that merely ends in the board’s name', () => {
     expect(selectAdapter('https://notgreenhouse.io/jobs/1').name).toBe('generic')
     expect(selectAdapter('https://lever.co.evil.example/x').name).toBe('generic')
+    expect(selectAdapter('https://notashbyhq.com/acme/1').name).toBe('generic')
+    expect(selectAdapter('https://ashbyhq.com.evil.example/x').name).toBe('generic')
   })
 })
 
@@ -275,6 +280,240 @@ describe('lever', () => {
     // the title dedupe key.
     expect(readMeta(document).jobTitle).toBe('Lever Demo 2 - Software Engineer')
     expect(extract(document, LEVER_URL).fields.jobTitle).toBe('Software Engineer')
+  })
+})
+
+describe('ashby', () => {
+  const document = loadFixture('ashby-job.html')
+
+  it('reads the posting from schema.org JobPosting', () => {
+    expect(readJsonLd(document)).toMatchObject({
+      company: 'Ramp',
+      jobTitle: 'Software Engineer, Stablecoin',
+      location: 'New York City, NY, USA',
+    })
+  })
+
+  it('reads the posting from Ashby’s own state blob', () => {
+    // Reached by parsing the script element's *text*: a content script runs in
+    // an isolated world and cannot see `window.__appData`.
+    expect(ashbyReaders.readAppState(document)).toMatchObject({
+      company: 'Ramp',
+      jobTitle: 'Software Engineer, Stablecoin',
+      location: 'New York, NY (HQ) · San Francisco, CA',
+      workMode: 'hybrid',
+    })
+  })
+
+  it('needs the lazy pattern, because the loader script follows the JSON', () => {
+    // Ashby's bundle loader sits in the same script and contains `};`, so a
+    // greedy match runs past the end of the object and does not parse. If a
+    // retrim of the fixture drops that trailing function expression, this test
+    // stops proving anything and `readScriptJson`'s pattern order stops being
+    // exercised at all.
+    const script = [...document.querySelectorAll('script:not([src])')]
+      .map((element) => element.textContent ?? '')
+      .find((text) => text.includes('window.__appData'))
+
+    expect(script).toBeDefined()
+    expect(
+      /window\.__appData\s*=\s*(\{[\s\S]*\})\s*;/.exec(script ?? '')?.[1],
+    ).toBeDefined()
+    expect(() =>
+      JSON.parse(/window\.__appData\s*=\s*(\{[\s\S]*\})\s*;/.exec(script ?? '')?.[1] ?? ''),
+    ).toThrow()
+  })
+
+  it('reads employer and role from the page title, having no markup to read', () => {
+    // The entire DOM tier. Ashby's body is a spinner — see the next test — so
+    // `<title>` is the only thing on the page a selector could reach.
+    expect(ashbyReaders.readDom(document)).toMatchObject({
+      company: 'Ramp',
+      jobTitle: 'Software Engineer, Stablecoin',
+    })
+  })
+
+  it('takes the last " @ " when the role itself contains one', () => {
+    const document = parseHtml(
+      '<html><head><title>Engineer @ Scale @ Initech</title></head><body></body></html>',
+    )
+
+    expect(ashbyReaders.readDom(document).company).toBe('Initech')
+  })
+
+  it('is served an empty shell, which is why there are no selectors', () => {
+    // Not an artefact of trimming the fixture: Ashby renders the posting
+    // client-side into `#root` under hashed CSS-module class names. Anyone
+    // tempted to add a `.job-title` selector to this adapter should see this
+    // fail to find one.
+    expect(document.querySelector('h1')).toBeNull()
+    expect(document.querySelector('#root')).not.toBeNull()
+    expect(document.querySelector('#root')?.textContent?.trim()).toBe('')
+  })
+
+  it('calls a hybrid role hybrid, though the JSON-LD calls it remote', () => {
+    // The bug this adapter is shaped around. Ashby emits
+    // `jobLocationType: TELECOMMUTE` on everything that is not `OnSite`, so on
+    // a hybrid posting schema.org's own field says remote while the board's
+    // `workplaceType` says Hybrid. `TIER_ORDER` puts jsonld above appstate, so
+    // without the strip in `readJsonLdFields` the wrong answer wins silently.
+    //
+    // Both halves are asserted deliberately. The day Ashby fixes its markup,
+    // the first expectation fails and tells you, rather than the second one
+    // quietly starting to pass for a different reason.
+    expect(readJsonLd(document).workMode).toBe('remote')
+    expect(ashbyReaders.readJsonLdFields(document)).not.toHaveProperty('workMode')
+
+    const result = extract(document, ASHBY_URL)
+
+    expect(result.fields.workMode).toBe('hybrid')
+    expect(result.provenance.workMode).toBe('appstate')
+  })
+
+  it('extracts the whole record, crediting the strongest tier that answered', () => {
+    const result = extract(document, ASHBY_URL)
+
+    expect(result.source).toBe('ashby')
+    expect(result.adapterVersion).toBe('ashby@1')
+    expect(result.fields).toMatchObject({
+      company: 'Ramp',
+      jobTitle: 'Software Engineer, Stablecoin',
+      workMode: 'hybrid',
+    })
+    expect(result.fields.salary).toMatchObject({ min: 189000, max: 330000, period: 'year' })
+    expect(result.provenance.company).toBe('jsonld')
+    expect(result.provenance.salary).toBe('jsonld')
+  })
+
+  it('still lets JSON-LD win the location, which is narrower but not wrong', () => {
+    // The obvious follow-up to the work-mode strip is to strip this too: the
+    // blob knows the role is in New York *and* San Francisco and the JSON-LD
+    // names only the first. But "New York City, NY, USA" is a true statement
+    // about this job, where "remote" was a false one, and thinning the trusted
+    // tier every time a lower one is more detailed is how tier order stops
+    // meaning anything. Incomplete is not the same failure as wrong.
+    expect(extract(document, ASHBY_URL).fields.location).toBe('New York City, NY, USA')
+    expect(ashbyReaders.readAppState(document).location).toBe(
+      'New York, NY (HQ) · San Francisco, CA',
+    )
+  })
+
+  it('falls back to the state blob when the JSON-LD is gone', () => {
+    const withoutJsonLd = parseHtml(
+      document.documentElement.outerHTML.replace(
+        /<script type="application\/ld\+json">[\s\S]*?<\/script>/,
+        '',
+      ),
+    )
+
+    const result = extract(withoutJsonLd, ASHBY_URL)
+
+    expect(result.fields).toMatchObject({
+      company: 'Ramp',
+      jobTitle: 'Software Engineer, Stablecoin',
+      location: 'New York, NY (HQ) · San Francisco, CA',
+      workMode: 'hybrid',
+    })
+    expect(result.provenance.company).toBe('appstate')
+  })
+
+  it('loses the work mode rather than inventing one when the blob is gone', () => {
+    // This is what a re-parsed snapshot looks like: `buildSnapshot` drops inline
+    // non-JSON-LD scripts, so the appstate tier is simply not there. The work
+    // mode then has no honest source — jsonld's is the wrong one — and comes
+    // back null. A gap the user can fill from a dropdown is the right way for
+    // this to fail.
+    const withoutState = parseHtml(
+      document.documentElement.outerHTML.replace(
+        /<script nonce="[^"]*">[\s\S]*?<\/script>/,
+        '',
+      ),
+    )
+
+    const result = extract(withoutState, ASHBY_URL)
+
+    expect(result.fields).toMatchObject({
+      company: 'Ramp',
+      jobTitle: 'Software Engineer, Stablecoin',
+    })
+    expect(result.fields.workMode).toBeNull()
+  })
+
+  it('offers nothing on a board’s listing page, link preview included', () => {
+    // `/{org}` is inside `content_scripts.matches` and carries the same blob
+    // with `posting: null`. The posting tiers say nothing there on their own —
+    // but `og:title` on the real page is "Ramp Jobs", and the shared meta tier
+    // would hand that back as a job title. `isWorthOffering` needs only a
+    // title, so the panel would offer to track "Ramp Jobs" as a role.
+    //
+    // Found by running this adapter against a real untrimmed board page; the
+    // hand-written version of this test passed happily without the og:title.
+    const listing = parseHtml(
+      `<html><head><title>Ramp Jobs</title>
+       <meta property="og:title" content="Ramp Jobs"></head>
+       <body><script>window.__appData = ${JSON.stringify({
+         organization: { name: 'Ramp' },
+         posting: null,
+       })};</script></body></html>`,
+    )
+
+    expect(readMeta(listing).jobTitle).toBe('Ramp Jobs')
+    expect(ashbyReaders.readAppState(listing)).toEqual({})
+    expect(ashbyReaders.readMetaFields(listing)).toEqual({})
+
+    const result = extract(listing, 'https://jobs.ashbyhq.com/ramp')
+
+    expect(result.fields.company).toBeNull()
+    expect(result.fields.jobTitle).toBeNull()
+  })
+
+  it('keeps the link preview when there is no blob to say otherwise', () => {
+    // The other side of the guard. A re-parsed snapshot has no inline scripts
+    // at all, and suppressing the lower tiers on a missing blob would throw
+    // away a real posting to avoid a hypothetical listing page.
+    const snapshotted = parseHtml(
+      `<html><head><title>Staff Engineer @ Initech</title>
+       <meta property="og:title" content="Staff Engineer"></head><body></body></html>`,
+    )
+
+    expect(ashbyReaders.readMetaFields(snapshotted).jobTitle).toBe('Staff Engineer')
+    expect(extract(snapshotted, ASHBY_URL).fields).toMatchObject({
+      company: 'Initech',
+      jobTitle: 'Staff Engineer',
+    })
+  })
+
+  it('ignores a workplace type it has never seen', () => {
+    // A fourth value Ashby invents later must read as "nothing said". Sniffing
+    // the string instead would let a label like "Remote-first Hybrid" resolve to
+    // whichever word the pattern list happens to reach first.
+    const document = parseHtml(
+      `<html><body><script>window.__appData = ${JSON.stringify({
+        organization: { name: 'Initech' },
+        posting: {
+          title: 'Engineer',
+          locationName: 'Austin',
+          workplaceType: 'FlexibleAnywhere',
+        },
+      })};</script></body></html>`,
+    )
+
+    expect(ashbyReaders.readAppState(document).workMode).toBeNull()
+  })
+
+  it('never writes a requisition id, though the blob states one', () => {
+    // `posting.id` really is the requisition — and it is the same value
+    // `normalize/ats.ts` already reads out of the URL, where it exists before
+    // any parsing and survives into exports. Decision 7: the URL owns that key.
+    expect(document.documentElement.innerHTML).toContain(
+      'd1183b00-6590-4fe4-a585-28d84e578fe3',
+    )
+    expect(extract(document, ASHBY_URL).fields.atsReqId).toBeNull()
+  })
+
+  it('does not let the link preview answer for a tier that knows more', () => {
+    expect(readMeta(document).jobTitle).toBe('Software Engineer, Stablecoin')
+    expect(extract(document, ASHBY_URL).provenance.jobTitle).toBe('jsonld')
   })
 })
 

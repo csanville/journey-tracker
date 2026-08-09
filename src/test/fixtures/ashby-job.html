@@ -1,0 +1,162 @@
+<!--
+  Captured 2026-08-09 from
+  https://jobs.ashbyhq.com/ramp/d1183b00-6590-4fe4-a585-28d84e578fe3
+  and trimmed: the font/icon links, the loading-spinner styles, the description
+  bodies (in the JSON-LD, the meta tags and `__appData`), and most of the Vite
+  bundle loader that follows the `__appData` assignment.
+
+  Three things about this capture are load-bearing and must survive any retrim.
+
+  1. **The body is a spinner and nothing else.** Ashby serves an empty SPA shell
+     and renders the posting client-side into `#root` with hashed CSS-module
+     class names. That is not an artefact of trimming — it is what the page
+     really is, and it is why this adapter has no selector-based DOM tier.
+
+  2. **`jobLocationType` is `TELECOMMUTE` while `workplaceType` is `Hybrid`.**
+     Both are verbatim from the live page. This contradiction is the reason the
+     adapter drops JSON-LD's `workMode`; see `adapters/ashby.ts`.
+
+  3. **The `__appData` assignment is followed by more JavaScript.** A greedy
+     regex therefore runs past the closing brace and fails to parse, and the
+     lazy one is what succeeds. Trimming the trailing script away entirely would
+     leave the fixture passing for a reason the live page does not share.
+-->
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Software Engineer, Stablecoin @ Ramp</title>
+    <meta name="title" content="Software Engineer, Stablecoin @ Ramp" />
+    <meta name="description" content="Ramp is building the smart infrastructure for finance teams. (Trimmed for this fixture.)" />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://jobs.ashbyhq.com/ramp/d1183b00-6590-4fe4-a585-28d84e578fe3" />
+    <meta property="og:title" content="Software Engineer, Stablecoin" />
+    <meta property="og:description" content="Ramp is building the smart infrastructure for finance teams. (Trimmed for this fixture.)" />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="Software Engineer, Stablecoin" />
+    <meta name="twitter:description" content="Ramp is building the smart infrastructure for finance teams. (Trimmed for this fixture.)" />
+
+    <script type="application/ld+json">
+{
+  "@context": "https://schema.org/",
+  "@type": "JobPosting",
+  "title": "Software Engineer, Stablecoin",
+  "description": "<p>Ramp is building the smart infrastructure for finance teams. (Description body trimmed for this fixture.)</p>",
+  "directApply": true,
+  "identifier": {
+    "@type": "PropertyValue",
+    "name": "Ramp",
+    "value": "d1183b00-6590-4fe4-a585-28d84e578fe3"
+  },
+  "datePosted": "2026-05-13",
+  "hiringOrganization": {
+    "@type": "Organization",
+    "name": "Ramp",
+    "sameAs": "https://ramp.com",
+    "logo": "https://app.ashbyhq.com/api/images/org-theme-logo/7a158cac-9866-4881-95a8-bc946d3dca79/c68257b4-5a2d-4ecc-93a6-fe3c6766ce8b/55852d64-3584-498c-8afb-0679e5c9dede.png"
+  },
+  "jobLocation": {
+    "@type": "Place",
+    "address": {
+      "@type": "PostalAddress",
+      "addressLocality": "New York City",
+      "addressRegion": "NY",
+      "addressCountry": "USA"
+    }
+  },
+  "employmentType": "FULL_TIME",
+  "baseSalary": {
+    "@type": "MonetaryAmount",
+    "currency": "USD",
+    "value": {
+      "@type": "QuantitativeValue",
+      "minValue": 189000,
+      "maxValue": 330000,
+      "unitText": "YEAR"
+    }
+  },
+  "jobLocationType": "TELECOMMUTE",
+  "applicantLocationRequirements": {
+    "@type": "Country",
+    "name": "USA"
+  }
+}
+    </script>
+  </head>
+  <body>
+    <noscript>
+      You need to enable JavaScript to run this app.
+    </noscript>
+    <div id="root">
+      <div class="center">
+        <div class="fade-in">
+          <div class="spinner"></div>
+        </div>
+      </div>
+    </div>
+    <script nonce="QCy07YIC7OhloeIyOdJM7W4ts0Az5vzqnYQL7vuLGUQ">
+      window.__appData = {
+  "environment": "production",
+  "organization": {
+    "organizationId": "7a158cac-9866-4881-95a8-bc946d3dca79",
+    "name": "Ramp",
+    "publicWebsite": "https://ramp.com",
+    "hostedJobsPageSlug": "ramp",
+    "allowJobPostIndexing": true,
+    "isDemoOrg": false,
+    "timezone": "America/New_York"
+  },
+  "posting": {
+    "id": "d1183b00-6590-4fe4-a585-28d84e578fe3",
+    "title": "Software Engineer, Stablecoin",
+    "departmentName": "Engineering",
+    "departmentExternalName": "Engineering",
+    "locationName": "New York, NY (HQ)",
+    "workplaceType": "Hybrid",
+    "isListed": true,
+    "isConfidential": false,
+    "employmentType": "FullTime",
+    "descriptionHtml": "<p>Description body trimmed for this fixture.</p>",
+    "secondaryLocationNames": [
+      "San Francisco, CA"
+    ],
+    "teamNames": [
+      "Engineering",
+      "Software Engineering - Industry",
+      "Backend"
+    ],
+    "compensationTierSummary": "$189K – $330K • Offers Equity",
+    "scrapeableCompensationSalarySummary": "$189K - $330K",
+    "applicationDeadline": null
+  },
+  "jobBoard": null,
+  "routerPrefix": "/"
+};
+      fetch("https://cdn.ashbyprd.com/frontend_non_user/.vite/manifest.json")
+        .then(function (res) { return res.json() })
+        .then(function (manifest) {
+          const indexData = manifest["index.html"];
+          let bundleLoaded = false;
+          function loadBundle() {
+            if (bundleLoaded === true) {
+              return;
+            }
+            bundleLoaded = true;
+          }
+          const loadedSheets = [];
+          indexData.css.forEach(function (sheet) {
+            const link = document.createElement("link");
+            // This assignment is why the greedy pattern cannot work: `};` ends a
+            // function expression here, well past the end of the JSON above.
+            link.onload = function () {
+              loadedSheets.push(sheet);
+              if (loadedSheets.length === indexData.css.length) {
+                loadBundle();
+              }
+            };
+            document.head.appendChild(link);
+          });
+        });
+    </script>
+  </body>
+</html>

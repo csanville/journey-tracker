@@ -23,7 +23,8 @@
       "matches": [
         "https://job-boards.greenhouse.io/*",
         "https://boards.greenhouse.io/*",
-        "https://jobs.lever.co/*"
+        "https://jobs.lever.co/*",
+        "https://jobs.ashbyhq.com/*"
       ],
       "js": ["src/content/content-script.ts"],
       "run_at": "document_idle"

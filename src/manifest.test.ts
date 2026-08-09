@@ -24,6 +24,9 @@ describe('the content script allowlist', () => {
       'https://job-boards.greenhouse.io/*',
       'https://boards.greenhouse.io/*',
       'https://jobs.lever.co/*',
+      // Ashby's board host, and only it. `app.ashbyhq.com` is the recruiter
+      // console — the same reason the Greenhouse wildcard came out above.
+      'https://jobs.ashbyhq.com/*',
     ])
   })
 
