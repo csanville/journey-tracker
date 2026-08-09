@@ -19,7 +19,18 @@
  * panel — runs if you simply:
  *
  *   1. Save any Greenhouse posting in the panel. Do not apply to it.
- *   2. Navigate to that same URL with `/confirmation` on the end.
+ *   2. Add `/confirmation` to the end of the **path** and navigate there.
+ *
+ * Step 2 means before any `?`, not after it. A posting URL usually carries a
+ * `gh_src` tracking parameter, and appending to the end of the whole URL puts
+ * `/confirmation` inside that parameter's value — the path is unchanged,
+ * `confirmationTarget` reads `parsed.pathname` and declines, and Greenhouse
+ * serves the same page without a 404 while the content script parses it happily
+ * under the new URL. Everything looks like it worked except the thing being
+ * tested.
+ *
+ *     yes  https://job-boards.greenhouse.io/otter/jobs/8355059002/confirmation
+ *     no   https://job-boards.greenhouse.io/otter/jobs/8355059002?gh_src=x/confirmation
  *
  * That is the honest end-to-end test, it is repeatable, and it is undone by
  * deleting the record. Prefer it. Use this file only for the states it cannot

@@ -160,16 +160,31 @@ the worker matches the derived posting URL against a stored record. So the whole
 path runs if you:
 
 1. **Save any Greenhouse posting** in the panel. Do not apply to it.
-2. **Navigate to that same URL with `/confirmation` on the end.**
+2. **Add `/confirmation` to the end of the _path_** — before any `?`, not after
+   it — and navigate there.
+
+```
+posting   https://job-boards.greenhouse.io/otter/jobs/8355059002?gh_src=cca791e3
+                                           └──────── path ──────┘└─── query ───┘
+
+correct   https://job-boards.greenhouse.io/otter/jobs/8355059002/confirmation
+wrong     https://job-boards.greenhouse.io/otter/jobs/8355059002?gh_src=cca791e3/confirmation
+```
+
+The second one is the mistake worth naming, because it fails *silently and
+convincingly*: `confirmationTarget` reads `parsed.pathname`, which is still
+`/otter/jobs/8355059002`, so it declines. Greenhouse ignores the mangled
+`gh_src`, serves the same page without even a 404, and the content script parses
+it happily under the new URL — so everything looks like it worked except the one
+thing being tested. Drop the query string, or put it after `/confirmation`;
+both are fine, since the query is discarded when the posting URL is derived.
 
 That is the real end-to-end test — content script, worker, `findDuplicate`, the
 pending store, the panel — and it is repeatable, because you can delete the
 record and do it again. Close the side panel first if you want to test the case
 the queue exists for.
 
-Two caveats. The fabricated URL is not a page Greenhouse serves, so expect a 404;
-what matters is whether the browser stays on that URL, since the content script
-reads `location.href`. And the prompt is only raised for a record that is not
+One other thing to know: the prompt is only raised for a record that is not
 already `applied`, so a record is spent once you confirm it — `jt.unapply()`
 below puts it back.
 
