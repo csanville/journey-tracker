@@ -107,8 +107,15 @@ body {
   color: var(--ink);
 }
 
+/*
+ * Wraps because the detected banner grew a third action. A side panel is a few
+ * hundred pixels wide and the choice offered while a record is open — dismiss,
+ * new record, update this one — does not fit on one line at that width; without
+ * the wrap the row overflows and the primary button is the one that leaves.
+ */
 .notice__actions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: calc(var(--step) * 0.5);
 }
@@ -156,6 +163,10 @@ body {
 
 .detected--quiet {
   display: flex;
+  flex-wrap: wrap;
+  /* Folded away, this is one button — or two while a record is open, which
+     without a gap read as a single run of text. */
+  gap: calc(var(--step) * 0.5);
   justify-content: flex-start;
   margin: 0;
   padding: 0;

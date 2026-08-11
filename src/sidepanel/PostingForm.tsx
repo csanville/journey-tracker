@@ -59,6 +59,23 @@ interface Filled {
   draft: Draft
 }
 
+/**
+ * What a fill is being asked to do about the record the form is holding.
+ *
+ * There is no default, and that is the point. `applyFill` used to take a base
+ * draft and nothing else, so every caller silently kept whatever `draftId` was
+ * loaded — including the callers reached while a stored record was open, which
+ * is how a fill came to overwrite the record it was filling beside. A required
+ * parameter is the cheapest way to make the question unskippable: a new caller
+ * cannot compile without answering it.
+ *
+ * - `update` — the page describes the record that is open, so the fill lands on
+ *   it. The id is kept.
+ * - `new` — the page describes a different job, so the record is let go of
+ *   first and the fill starts a record of its own.
+ */
+type FillIntent = 'update' | 'new'
+
 export function PostingForm({
   onSaved,
   onDeleted,
@@ -87,8 +104,13 @@ export function PostingForm({
   const [phase, setPhase] = useState<Phase>({ name: 'editing' })
   const [showErrors, setShowErrors] = useState(false)
   const [filled, setFilled] = useState<Filled | null>(null)
-  /** Set when a fill would overwrite typed work and is waiting to be confirmed. */
-  const [confirmingFill, setConfirmingFill] = useState(false)
+  /**
+   * The fill that would overwrite typed work and is waiting to be confirmed.
+   *
+   * The intent rather than a flag, because while a record is open there are two
+   * fills on offer and confirming one must not arm the other.
+   */
+  const [confirmingFill, setConfirmingFill] = useState<FillIntent | null>(null)
   /** The detection whose banner has been folded away, by id. */
   const [dismissed, setDismissed] = useState<string | null>(null)
   /** A record this page matches, found before anything was typed. */
@@ -200,22 +222,46 @@ export function PostingForm({
    * by then, so a full-height offer to file it again is not what that moment
    * calls for.
    */
+  /**
+   * Lets go of the stored record, so that what happens next writes beside it
+   * rather than over it.
+   *
+   * **This is the one place where `draftId` stops being the stored record's**,
+   * which is the whole of the invariant: the id is what makes an edit an edit,
+   * so an edit ends here or it does not end. `reset` used to own that sentence
+   * and be wrong about it — `applyFill` was a fourth exit from editing that
+   * never came through, and the next save wrote the page it had just read over
+   * the record still held. Not a lost draft: a destroyed record.
+   *
+   * `onStopEditing` matters as much as the id. Without it the panel still holds
+   * the request, and the effect below hands the same record straight back into
+   * the form the user has just walked away from.
+   *
+   * Called unconditionally rather than guarded on `edited`, by callers that
+   * sometimes hold nothing. That is deliberate: with no record held, minting an
+   * id is what a fresh draft wants anyway and `onStopEditing` is a no-op. A
+   * guard here would only create a second answer to "did the id move", which is
+   * the question this function exists to have exactly one of.
+   */
+  const releaseRecord = () => {
+    setDraftId(newId())
+    setEdited(null)
+    // The record it was armed against is no longer the one in the form.
+    setConfirmingDelete(false)
+    onStopEditing()
+  }
+
   const reset = () => {
     setDraft(EMPTY_DRAFT)
-    setDraftId(newId())
     setShowErrors(false)
     setPhase({ name: 'editing' })
     setFilled(null)
-    setConfirmingFill(false)
+    setConfirmingFill(null)
     setDismissed(detection?.detectionId ?? null)
-    // Letting go of the record as well, and telling the owner of the request so
-    // it does not immediately hand the same one back. Every exit from editing
-    // runs through here — saved, discarded, deleted — so there is one place
-    // where the id stops being the stored record's.
-    setEdited(null)
     setConfirmingEdit(null)
-    setConfirmingDelete(false)
-    onStopEditing()
+    // Every exit from editing goes through here — saved, discarded, deleted —
+    // and through `applyFill`'s `new` branch, which is the one it used to miss.
+    releaseRecord()
   }
 
   /** Loads a stored record into the form, under its own id. */
@@ -230,7 +276,7 @@ export function PostingForm({
     // behind: `save` prefers `filled` over `edited`, so a stale one here would
     // stamp this record with the last detected page's adapter.
     setFilled(null)
-    setConfirmingFill(false)
+    setConfirmingFill(null)
     setConfirmingEdit(null)
     setConfirmingDelete(false)
   }
@@ -262,8 +308,8 @@ export function PostingForm({
   /**
    * Applies a detection to the form.
    *
-   * `base` is what the fill layers onto, and the two callers want different
-   * things from it.
+   * `base` is what the fill layers onto, and the callers want different things
+   * from it.
    *
    * An explicit click layers onto the **current draft**, so status, notes, tags
    * and the applied date — none of which a job board knows anything about —
@@ -276,13 +322,59 @@ export function PostingForm({
    * posting's location or salary sitting under the new one wherever the new
    * page happened to be quieter — a record that is a blend of two jobs and
    * looks like neither.
+   *
+   * `intent` is the record half of the same question, and it is required
+   * because the answer used to be assumed. Every fill meets here, so this is
+   * where the id is let go of — guarding the destination rather than the routes,
+   * since it was a second route to the hazard that produced the bug this
+   * parameter exists to close.
    */
-  const applyFill = (summary: DetectionSummary, base: Draft = draft) => {
+  const applyFill = (summary: DetectionSummary, base: Draft, intent: FillIntent) => {
+    // Before the fill, not after: `save` reads `edited` for provenance and for
+    // the duplicate check, and both have to see a form that has let go.
+    if (intent === 'new') releaseRecord()
+
     const next = draftFromDetection(summary, base)
     setDraft(next)
     setFilled({ detection: summary, draft: next })
-    setConfirmingFill(false)
+    setConfirmingFill(null)
     if (phase.name === 'duplicate' || phase.name === 'failed') setPhase({ name: 'editing' })
+  }
+
+  /**
+   * A fill the user asked for, in whichever of its two meanings they asked for.
+   *
+   * The confirm step is decision 13's: "fill from this page" is not the same
+   * request as "throw away what I wrote", so a form with typed work in it asks
+   * first. Keyed on the intent so that arming one of the two buttons does not
+   * arm the other — pressing Update once and then changing your mind and
+   * pressing "new record" should ask again, about the thing it is now about to
+   * do.
+   *
+   * The base each intent takes is the part worth reading twice:
+   *
+   * - **`update` always layers onto the current draft, confirmed or not.** The
+   *   confirmed path elsewhere replaces from empty, and doing that here would
+   *   blank the record's own notes, tags, stage and outcome — none of which the
+   *   page has any answer for — and then write that emptiness over the record.
+   *   A confirmation to replace typed *fields* is not permission to erase the
+   *   half of a record a job board has never heard of.
+   * - **`new` layers onto an empty draft whenever a record is open**, because
+   *   "this is a different job" is exactly the claim being made by pressing it.
+   *   Carrying the record's location or salary into the new one under a heading
+   *   naming a different company is the blend `applyFill` describes above.
+   * - With no record open, `new` keeps today's rule: confirmed replaces from
+   *   empty, unconfirmed layers onto the draft, because there the draft *is*
+   *   the thing the user is working on.
+   */
+  const requestFill = (summary: DetectionSummary, intent: FillIntent) => {
+    if (dirty && confirmingFill !== intent) {
+      setConfirmingFill(intent)
+      return
+    }
+
+    const replacing = edited !== null || confirmingFill === intent
+    applyFill(summary, intent === 'new' && replacing ? EMPTY_DRAFT : draft, intent)
   }
 
   /**
@@ -311,7 +403,11 @@ export function PostingForm({
 
     // `announce` and `nothing` are both "leave the form alone" here — the
     // banner below renders from `offered` on its own.
-    if (action === 'fill' && offered) applyFill(offered, EMPTY_DRAFT)
+    //
+    // `new` is the only honest answer: `swapAction` returns `announce` whenever
+    // a record is held, so a swap that reaches here is holding none, and the
+    // release it performs is a fresh id for a form that wanted one anyway.
+    if (action === 'fill' && offered) applyFill(offered, EMPTY_DRAFT, 'new')
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [offered?.detectionId, busy, dirty, prompting, dismissed, holdingRecord])
 
@@ -577,38 +673,21 @@ export function PostingForm({
           // Every way into the form has to be shut while a save is in flight,
           // not just the inputs.
           busy={busy}
-          onFill={() => {
-            // Decision 13 in its explicit-click form. A pristine form fills
-            // straight away; a form with typed work in it asks first, because
-            // "fill from this page" is not the same request as "throw away what
-            // I wrote". Live auto-fill, and the swap rules around it, are
-            // phase 5.
-            if (dirty && !confirmingFill) {
-              setConfirmingFill(true)
-              return
-            }
-
-            // A confirmed replace replaces. The button the user just pressed
-            // said "Replace what you have typed?", and layering onto the
-            // current draft answered yes to that question by keeping the
-            // notes, tags, status and applied date — so tabbing to a different
-            // job and confirming the replace carried the previous job's notes
-            // onto it, under a heading naming the new one.
-            //
-            // Unconfirmed, the layering is still right and is the whole point:
-            // no confirmation was asked for because there was nothing to
-            // protect, and "fill this in" means answer what this page knows
-            // about the record in front of me. The two paths want different
-            // bases because they are different requests — see `applyFill`.
-            applyFill(offered, confirmingFill ? EMPTY_DRAFT : draft)
-          }}
+          // The record the fill would land on, or `null` when the form is
+          // holding none. Naming it in the notice is half the fix: nothing on
+          // this screen used to say that "Fill form" was aimed at a stored
+          // record, so the destructive reading of the button was also the
+          // invisible one.
+          record={edited?.posting ?? null}
+          onUpdate={() => requestFill(offered, 'update')}
+          onFillNew={() => requestFill(offered, 'new')}
           onDismiss={() => {
             // Folds the banner down to a one-line offer rather than removing
             // it. Decision 13 is explicit that dismissing must not discard the
             // detection silently, and a button that has quietly stopped
             // existing is not something a user can ask for again.
             setDismissed(offered.detectionId)
-            setConfirmingFill(false)
+            setConfirmingFill(null)
           }}
         />
       )}
@@ -891,36 +970,70 @@ function DetectedNotice({
   confirming,
   quiet,
   busy,
-  onFill,
+  record,
+  onUpdate,
+  onFillNew,
   onDismiss,
 }: {
   detection: DetectionSummary
   changes: number
-  confirming: boolean
+  confirming: FillIntent | null
   quiet: boolean
   busy: boolean
-  onFill: () => void
+  /**
+   * The stored record the form is holding, if it is holding one.
+   *
+   * Its presence is what splits one button into two. With no record open there
+   * is only one thing a fill can mean and asking would be noise; with one open
+   * there are two, they differ by which record gets written, and the difference
+   * is invisible from the page.
+   */
+  record: Posting | null
+  onUpdate: () => void
+  onFillNew: () => void
   onDismiss: () => void
 }) {
   const { company, jobTitle } = detection.fields
   const heading = [jobTitle, company].filter(Boolean).join(' · ')
+  const held = record && [record.company, record.jobTitle].filter(Boolean).join(' · ')
 
   if (quiet) {
     return (
       <p className="detected detected--quiet">
-        <button
-          type="button"
-          className="button button--quiet"
-          onClick={onFill}
-          disabled={busy}
-        >
-          {/* The confirm step has to be visible here too. Dismissed, the
-              banner is a single button, and asking for confirmation by
-              flipping a state nothing renders made the first click look like a
-              dead button — the fill only happened on the second, for no reason
-              the user could see. */}
-          {confirming ? 'Replace what you typed?' : 'Fill from this page'}
-        </button>
+        {/* The confirm step has to be visible here too. Dismissed, the banner
+            is a button or two and nothing else, and asking for confirmation by
+            flipping a state nothing renders made the first click look like a
+            dead button — the fill only happened on the second, for no reason
+            the user could see. */}
+        {record ? (
+          <>
+            <button
+              type="button"
+              className="button button--quiet"
+              onClick={onUpdate}
+              disabled={busy}
+            >
+              {confirming === 'update' ? 'Overwrite what you typed?' : 'Update this record'}
+            </button>
+            <button
+              type="button"
+              className="button button--quiet"
+              onClick={onFillNew}
+              disabled={busy}
+            >
+              {confirming === 'new' ? 'Discard what you typed?' : 'Save as a new record'}
+            </button>
+          </>
+        ) : (
+          <button
+            type="button"
+            className="button button--quiet"
+            onClick={onFillNew}
+            disabled={busy}
+          >
+            {confirming ? 'Replace what you typed?' : 'Fill from this page'}
+          </button>
+        )}
       </p>
     )
   }
@@ -938,6 +1051,15 @@ function DetectedNotice({
         {` · read by ${detection.source}`}
         {detection.snapshotBytes > 0 && ' · page kept for re-parsing'}
       </p>
+      {/* The sentence the old single button did not have room to say. A user
+          who can read which record is open before choosing does not have to
+          discover the answer by losing it. */}
+      {held && (
+        <p className="notice__detail">
+          You have {held} open. Updating writes this page onto it; a new record leaves it as
+          it is.
+        </p>
+      )}
       <div className="notice__actions">
         <button
           type="button"
@@ -947,13 +1069,33 @@ function DetectedNotice({
         >
           Not now
         </button>
+        {record && (
+          <button
+            type="button"
+            className="button button--quiet"
+            onClick={onFillNew}
+            // Never gated on `changes`, which counts against the record in the
+            // form. A page identical to the record still supports "this is a
+            // separate application" — and if it is not, the duplicate check
+            // that this path re-arms is the thing that says so.
+            disabled={busy}
+          >
+            {confirming === 'new' ? 'Discard and start a new one' : 'Save as a new record'}
+          </button>
+        )}
         <button
           type="button"
           className="button"
-          onClick={onFill}
-          disabled={busy || (changes === 0 && !confirming)}
+          onClick={record ? onUpdate : onFillNew}
+          disabled={busy || (changes === 0 && confirming === null)}
         >
-          {confirming ? 'Replace' : 'Fill form'}
+          {record
+            ? confirming === 'update'
+              ? 'Overwrite this record'
+              : 'Update this record'
+            : confirming
+              ? 'Replace'
+              : 'Fill form'}
         </button>
       </div>
     </div>
