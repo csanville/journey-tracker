@@ -59,6 +59,25 @@ from a cache of every page the adapters declined. That cache would be a log of
 browsing on a matched board, kept locally for a question usually never asked,
 which is a poor thing for this extension of all extensions to hold.
 
+**Amended again — the gesture is the one that already exists.** Phase 11 planned
+a "Diagnose this page" button in the panel and could not build it: `activeTab` is
+granted by four gestures and a side-panel button is not among them, and the
+extension holds no `host_permissions` at all, so every page needs the grant.
+
+What shipped is smaller and better for it. The right-click that already reads a
+page into the tracker is the gesture, the grant, and the moment the user is
+asking about this page all at once. When the read succeeds the form fills as
+before; when it comes back with nothing, that is when a reason is worth having,
+and it is precisely the case the code used to drop in silence. **Reading the page
+is a gesture; reading the report is a button** — copying needs no grant — which
+is the boundary decision 2 has drawn since phase 5.
+
+One consequence for this decision specifically: the report renders even when the
+service worker does not answer, carrying the page half and saying the install
+half could not be read. A worker that does not respond is the most
+report-worthy state there is, and the first version made it the only state that
+could produce no report.
+
 **Revisit when.** Cross-device sync becomes a real requirement, or the extension
 grows a user base large enough that blind bug reports stop scaling. Note that
 adding any automatic egress means amending the store disclosure and likely
@@ -624,11 +643,13 @@ migration is not itself rewriting.
 **Consequences.** Migration tests from every prior version are part of the test
 suite, and the number of them grows over time. Accepted cost.
 
-**Amended — the waiting half has never run.** The sentence above says "the panel
-and dashboard wait on that flag rather than querying through it". They do not,
-and never have. `waitForMigration` exists in `settings.ts`, is covered by seven
-tests, is named in a comment in `migrations.ts` — and has **no production caller
-anywhere**. Neither surface waits; both query straight through.
+**Amended — the waiting half never ran, and has now been deleted.** The sentence
+above says "the panel and dashboard wait on that flag rather than querying
+through it". They did not, and never did. `waitForMigration` existed in
+`settings.ts`, was covered by seven tests, was named in a comment in
+`migrations.ts` — and had **no production caller anywhere**. Neither surface
+waited; both queried straight through. Phase 11 removed it; see the second
+amendment below.
 
 Found in phase 8, when a dashboard function that trusted the migrated record
 shape turned out to be reachable with an unmigrated one, on a restored tab or
@@ -673,9 +694,25 @@ their shape is unknown, and this project's oldest recurring defect is a surface
 that states more than it can support. `usePostings` has had a distinct `failed`
 state since phase 7 for exactly this.
 
-`waitForMigration` is kept — the flag is real, and a diagnostics surface is the
-plausible caller — but it is now documented as a utility rather than as a
+`waitForMigration` is kept for now — the flag is real, and a diagnostics surface
+is the plausible caller — but it is documented as a utility rather than as a
 protection anything relies on.
+
+**Amended — the plausible caller arrived and declined.** Phase 11 built the
+diagnostics surface and deleted `waitForMigration` rather than wire it, on the
+strength of the paragraph above rather than against it. A reader watching the
+flag cannot *make* a torn-down worker migrate: it would see `false` and read
+stale data with confidence. Asking the worker through `await ready()` is what
+causes the migration to run, and the diagnostics panel reads through the worker
+like everything else in the extension, so it inherits the stronger guarantee for
+free.
+
+The flag itself stays and is still set and cleared honestly — `migrations.ts`
+depends on it to recognise its own interrupted run, and the diagnostics report
+prints it, because a migration in progress explains a record count that looks
+wrong. What is gone is only the helper that waited on it. **A function kept for a
+named future caller should be deleted when that caller arrives and does not want
+it**, which is the whole of what "documented as a utility" was deferring.
 
 **Revisit when.** Never.
 
