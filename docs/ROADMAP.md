@@ -21,7 +21,8 @@ then merged.
 | 10 ✅ | `feat/pending-submissions` | A confirmed submission survives a closed panel: a durable pending queue, an event demoted to a signal, and the confirmation's own timestamp on the record | Apply with the panel shut, open it later, and the question is waiting with the right date on it |
 | — ✅ | `feat/ashby-adapter` | An Ashby adapter, on its own branch rather than as a phase — reading a fourth board is additive and needed no new mechanism | A posting on `jobs.ashbyhq.com` fills the form |
 | 11 ✅ | `feat/diagnostics` | A diagnostics report the user can send: a pulled parse of the current page, an allowlisted payload shown before it is copied, and the retirement of re-parse | On a page the extension cannot read, one gesture produces a report that names the board and what each tier returned, and carries no company, title or URL path |
-| later | — | Workday, iCIMS, SmartRecruiters adapters | — |
+| 12 | `fix/fill-while-editing`, `feat/workday-adapter` | The fill that overwrites a record, closed by asking which record it means; and a Workday adapter, the first board whose host is per-tenant | Filling from a page while editing asks update-or-new and neither answer destroys a record; and a posting on `*.myworkdayjobs.com` fills the form |
+| later | — | iCIMS, SmartRecruiters adapters | — |
 
 ## Known bugs
 
@@ -1404,6 +1405,140 @@ regression test until it has failed against that defect.**
   arrive with a defect that actually cost something.
 - **Deleting the snapshot store.** Measured here, decided later. The `full`
   export depends on it and that is a user-facing feature, not an internal one.
+
+## Phase 12 — the fill that means two things, and a fourth board
+
+Two pieces of work that share a branch point and nothing else. The first is the
+data-loss bug under **Known bugs**, which has been reachable since phase 9. The
+second is the next adapter, which is additive and needs no new mechanism — the
+same shape as the Ashby branch, which is why that one was not a phase either.
+
+The bug goes first, and alone if the phase has to be cut. It destroys records.
+
+### What the fill should do, which is the part that needed deciding
+
+The bug entry above stops short of a fix on purpose: `applyFill` has to let go of
+the record, but *letting go* is only one of two defensible answers, and the file
+says so — "filling from a page while editing might reasonably mean 'update this
+record from this page' rather than 'start a new one', and those want different
+ids."
+
+**Both readings are real, so the panel asks rather than picks.** While a record
+is open for editing, `DetectedNotice` offers two actions instead of one:
+
+- **Update this record** — keeps `draftId`, keeps `edited`, layers the page over
+  the current draft. This is the case `fill.ts` already argued for in
+  `swapAction`'s comment: "Re-reading a posting whose description changed is a
+  real thing to want."
+- **Save as a new record** — releases the record before filling, so `draftId` is
+  fresh, `edited` is `null`, the duplicate check is re-armed, and the stored
+  record is untouched.
+
+The rejected alternative worth recording is **inferring it from a match** — run
+the page through `findDuplicate`'s join keys, treat a hit as "update" and a miss
+as "new". It is more elegant and it fails in the direction that costs a record:
+a canonical URL that moved, a req id the adapter missed, and a silent inference
+picks "new" when the user meant "update" — or worse, the reverse. Decision 13's
+rule is that the form never overwrites the user's own work without being told
+to, and an inference is not being told. The two buttons cost one click in a
+sequence that is already deliberate.
+
+That the buttons are *in the notice* also fixes the thing that made the bug
+invisible: today the panel gives no sign, while a record is open, that "Fill from
+this page" is about to write to it. The notice names the record it would
+overwrite.
+
+- **`applyFill` gains the exit `reset` owns.** Not by calling `reset` — that
+  wipes the draft, and the new-record path has to keep the fill it just applied.
+  The id-releasing half (`setDraftId(newId())`, `setEdited(null)`,
+  `onStopEditing()`) becomes its own function that both call, so there is still
+  one place where the id stops being the stored record's, and `reset`'s comment
+  stays true.
+- **`onStopEditing` has to fire on the new-record path**, or the panel hands the
+  same record straight back through the `editing` effect and the form reopens
+  what the user just walked away from. Phase 9's review found this exact
+  interaction once already, in the delete path.
+- **Provenance follows the id.** Update keeps `edited`, so `editContextFor`
+  still answers for a record whose fill was refused, and `saveContextFor` wins
+  when a fill lands — which is right in both branches, since the page was read in
+  both. The bug's second symptom, a record stamped as captured off a board it
+  never came from, goes away with the id.
+- **The duplicate check stops being disabled by accident.** `if (!force &&
+  !edited)` is correct on its own terms: an edit writes to a known id and cannot
+  create a second record. It only misfired because `edited` outlived the edit.
+  No change here — this is what the fix restores rather than what it touches.
+
+### The guard audit this bug is an argument for
+
+This bug is the fifth shape in **Recurring shapes** below, already written up
+there with its check: for each guard, list the callers that reach the guarded
+state *without* passing through it. What that entry adds to the fix above is
+the reason `applyFill` is the right place for the release — "prefer guarding the
+*destination* over the routes … it is the one place all the fills meet." The
+check is cheap enough to run deliberately here rather than waiting for review to
+find the next instance.
+
+Kept to guards that stand between the user and a destroyed or wrong record:
+`swapAction`'s `editing` branch (the one that failed), the duplicate check's
+`!edited`, the `busy` locks on the fieldset and the notice, the pending queue's
+skip-a-record-open-for-editing rule, and `onStopEditing`. Anything found is a
+finding, not automatically a fix — some other path may be legitimately open, and
+saying so in a comment is the outcome for those.
+
+### Workday, and the permission question it raises
+
+The first board whose host is **per-tenant**: `acme.wd1.myworkdayjobs.com`,
+`acme.wd5.myworkdayjobs.com`, with the numbered data-center segment varying too.
+Every previous board sat on one fixed host, so the manifest listed it and that
+was the end of it. This one needs `https://*.myworkdayjobs.com/*`, and that is a
+wildcard over a domain the user does not control, which is decision 2's
+territory — worth stating explicitly in the phase rather than discovered in the
+manifest diff. It is still a single registrable domain and still narrower than
+the `<all_urls>` decision 2 refuses; the `activeTab` path stays the fallback for
+tenants on a vanity domain, which the wildcard cannot reach and which no
+allowlist could.
+
+Two things are already built and tested, which is most of why this is additive:
+
+- **`atsReqId`** — `normalize/ats.ts` already returns `workday` and parses
+  `…/job/SF/Engineer_R-12345`, including the cases that are *not* requisitions
+  (a title with an underscore, a title ending in a year).
+- **URL canonicalization** — `normalize/url.test.ts` already holds two Workday
+  requisitions that must not collapse into each other.
+
+So the work is the adapter, its fixture, and its rung order. Workday renders
+client-side like Ashby, so the expectation is JSON-LD where the tenant enabled
+it, the embedded state blob where it did not, and no selector tier — for Ashby's
+reason, that hashed class names are not site knowledge, they are this week's
+build. **What the tiers actually return is a question for the fixture, not for
+this file**: phase 11's lesson was that an enum written by imagining the failures
+loses two of its three values. Capture a real posting first, then write the
+adapter against it.
+
+The submission-confirmation path (decision 12) is **not** extended to Workday
+here. Greenhouse's detection works because its confirmation is a URL; whether
+Workday has an equivalent is unknown, and inventing one is how a heuristic gets
+in.
+
+### Done when
+
+Open a saved record, tab to a different posting, and the notice names the record
+it would overwrite and offers both answers; "Save as a new record" leaves the
+original exactly as it was; "Update this record" writes to it and to nothing
+else. Each regression test has been **run against the unfixed code and seen to
+fail** — phase 11's rule, which caught a vacuous test the one time it was
+skipped. And a real posting on a `*.myworkdayjobs.com` tenant fills the form,
+with the diagnostics report from phase 11 as the tool for reading the ones that
+do not.
+
+### Deliberately not in phase 12
+
+- **Inferring update-or-new from a match.** Rejected above, not deferred.
+- **Workday submission detection.** No signal is known to exist; decision 12's
+  bar is a confirmation that is not a heuristic.
+- **iCIMS and SmartRecruiters.** One new board at a time, so that what the
+  Workday fixture teaches about per-tenant hosts is known before the next one
+  commits to a pattern.
 
 ## Recurring shapes
 
