@@ -246,6 +246,18 @@ export interface StatusReport {
   postingCount: number
   /** Reported so the panel can say what a `full` export is about to include. */
   snapshotCount: number
+  /**
+   * What this origin is using on disk, and its quota. `null` where the API
+   * declined.
+   *
+   * The origin's total rather than the snapshot store's, because no API reports
+   * one store and measuring it exactly means reading every snapshot back. Next
+   * to `snapshotCount` it is enough to answer the question decision 6 is now
+   * carrying: whether keeping the pages is worth what it costs. See
+   * `readStorageUsage`.
+   */
+  usageBytes: number | null
+  quotaBytes: number | null
   /** When a JSON backup was last taken, or `null` if never. */
   lastBackupAt: number | null
 }

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   buildReport,
+  formatBytes,
   formatReport,
   type DiagnosticsInput,
   type PageParse,
@@ -69,6 +70,8 @@ function aStatus(overrides: Partial<StatusReport> = {}): StatusReport {
     evictionSafe: true,
     postingCount: 41,
     snapshotCount: 39,
+    usageBytes: 12_582_912,
+    quotaBytes: 10_737_418_240,
     lastBackupAt: 1_754_000_000_000,
     ...overrides,
   }
@@ -282,5 +285,42 @@ describe('what the report says', () => {
     )
 
     expect(text).toContain('v3, data at v2, migrating')
+  })
+})
+
+describe('formatBytes', () => {
+  it('scales to the unit the number belongs in', () => {
+    expect(formatBytes(512)).toBe('512 B')
+    expect(formatBytes(2048)).toBe('2.0 KB')
+    expect(formatBytes(12_582_912)).toBe('12 MB')
+    expect(formatBytes(10_737_418_240)).toBe('10 GB')
+  })
+
+  /**
+   * Chrome rounds and pads `estimate()` on purpose, to make cross-origin
+   * storage fingerprinting harder. Printing every digit would dress a
+   * deliberate approximation as a measurement.
+   */
+  it('keeps a decimal only while the number is small enough to need one', () => {
+    expect(formatBytes(5_242_880)).toBe('5.0 MB')
+    expect(formatBytes(52_428_800)).toBe('50 MB')
+  })
+
+  it('says unknown rather than zero when nothing was reported', () => {
+    expect(formatBytes(null)).toBe('unknown')
+  })
+})
+
+describe('what the report says about disk', () => {
+  it('reports usage against quota', () => {
+    expect(formatReport(buildReport(anInput()))).toContain('on disk    12 MB of 10 GB')
+  })
+
+  it('says unknown when the browser declined to estimate', () => {
+    const text = formatReport(
+      buildReport(anInput({ status: aStatus({ usageBytes: null, quotaBytes: null }) })),
+    )
+
+    expect(text).toContain('on disk    unknown of unknown')
   })
 })

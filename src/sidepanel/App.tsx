@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { send } from '../lib/client'
 import { openDashboard } from '../lib/dashboard-tab'
 import type { CachedFailedParse, DetectionSummary } from '../lib/detection'
-import { formatReport } from '../lib/diagnostics'
+import { formatBytes, formatReport } from '../lib/diagnostics'
 import { isEvent } from '../lib/events'
 import type { StatusReport } from '../lib/messages'
 import { requestPersistence } from '../lib/persistence'
@@ -471,6 +471,14 @@ export function App() {
                 : 'evictable'}
           </Row>
           <Row label="Postings">{status ? String(status.postingCount) : '—'}</Row>
+          {/* Pages kept against disk used, which is the pair decision 6's open
+              question turns on: whether keeping the snapshots is worth it. The
+              figure is the whole origin's, since no API reports one store. */}
+          <Row label="Pages kept">
+            {status
+              ? `${status.snapshotCount} · ${formatBytes(status.usageBytes)} on disk`
+              : '—'}
+          </Row>
           {/* The one probe that answers "is the content script running?", which
               is otherwise invisible from inside the panel. */}
           <Row label="This page">

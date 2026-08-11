@@ -24,7 +24,7 @@ import type {
   StatusReport,
 } from './messages'
 import { noteImportedVersion, resumeImportMigration } from './migrations'
-import { recordStorageProtection } from './persistence'
+import { recordStorageProtection, readStorageUsage } from './persistence'
 import * as repo from './repository'
 import { patchSettings, readSettings } from './settings'
 import { postingInputFromDetection, setTrackedBadge } from './tracked'
@@ -458,7 +458,11 @@ async function importSnapshots(
 }
 
 async function status(db: JourneyTrackerDb): Promise<StatusReport> {
-  const settings = await readSettings()
+  // Read live rather than from settings, unlike the protection flags beside it:
+  // this changes with every capture, and a stored copy would be a number that
+  // was true once. `estimate()` is exposed to workers, so the worker can ask.
+  const [settings, usage] = await Promise.all([readSettings(), readStorageUsage()])
+
   return {
     schemaVersion: SCHEMA_VERSION,
     dataVersion: settings.dataVersion,
@@ -468,6 +472,8 @@ async function status(db: JourneyTrackerDb): Promise<StatusReport> {
     evictionSafe: Boolean(settings.storageUnlimited || settings.storagePersisted),
     postingCount: await repo.countPostings(db),
     snapshotCount: await repo.countSnapshots(db),
+    usageBytes: usage.usageBytes,
+    quotaBytes: usage.quotaBytes,
     lastBackupAt: settings.lastBackupAt,
   }
 }

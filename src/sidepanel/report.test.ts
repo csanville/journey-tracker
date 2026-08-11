@@ -62,6 +62,8 @@ function aStatus(): StatusReport {
     evictionSafe: true,
     postingCount: 41,
     snapshotCount: 39,
+    usageBytes: 12_582_912,
+    quotaBytes: 10_737_418_240,
     lastBackupAt: 1_754_000_000_000,
   }
 }

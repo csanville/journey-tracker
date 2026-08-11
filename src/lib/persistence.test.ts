@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { readStorageProtection, requestPersistence } from './persistence'
+import { readStorageProtection, readStorageUsage, requestPersistence } from './persistence'
 
 /**
  * Two things are under test here. The *combination* — either defence alone is
@@ -142,5 +142,47 @@ describe('requestPersistence', () => {
     stubEnvironment({ unlimitedGranted: false, persisted: true, workerContext: true })
 
     expect(await requestPersistence()).toBe(true)
+  })
+})
+
+describe('readStorageUsage', () => {
+  function stubEstimate(estimate: (() => Promise<StorageEstimate>) | undefined) {
+    vi.stubGlobal('navigator', { storage: estimate ? { estimate } : {} })
+  }
+
+  it('reports what the origin is using and what it is allowed', async () => {
+    stubEstimate(async () => ({ usage: 12_582_912, quota: 10_737_418_240 }))
+
+    expect(await readStorageUsage()).toEqual({
+      usageBytes: 12_582_912,
+      quotaBytes: 10_737_418_240,
+    })
+  })
+
+  /**
+   * Every failure here is the same answer: the diagnostics drawer says
+   * "unknown" and everything else in the report still renders. A throw would
+   * take the whole `status` round trip with it, and this is the least important
+   * number in it.
+   */
+  it('answers nulls rather than throwing when the API is missing', async () => {
+    stubEstimate(undefined)
+
+    expect(await readStorageUsage()).toEqual({ usageBytes: null, quotaBytes: null })
+  })
+
+  it('answers nulls rather than throwing when the API refuses', async () => {
+    stubEstimate(async () => Promise.reject(new Error('nope')))
+
+    expect(await readStorageUsage()).toEqual({ usageBytes: null, quotaBytes: null })
+  })
+
+  it('treats fields the browser omitted as unknown rather than zero', async () => {
+    // A reported 0 and an absent number are different claims, and "using no
+    // disk at all" is the more alarming of the two to print next to a snapshot
+    // count that is not zero.
+    stubEstimate(async () => ({}))
+
+    expect(await readStorageUsage()).toEqual({ usageBytes: null, quotaBytes: null })
   })
 })

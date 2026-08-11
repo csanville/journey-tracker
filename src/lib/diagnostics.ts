@@ -135,6 +135,13 @@ export interface InstallFacts {
   storageUnlimited: boolean | null
   postingCount: number
   snapshotCount: number
+  /**
+   * Disk used by the whole origin, and the quota. Safe to send: it is a rounded
+   * number about the user's own machine, and `postingCount` beside it already
+   * says more about the size of their job search than this does.
+   */
+  usageBytes: number | null
+  quotaBytes: number | null
 }
 
 /**
@@ -215,8 +222,34 @@ export function buildReport(input: DiagnosticsInput): DiagnosticsReport {
       storageUnlimited: status.storageUnlimited,
       postingCount: status.postingCount,
       snapshotCount: status.snapshotCount,
+      usageBytes: status.usageBytes,
+      quotaBytes: status.quotaBytes,
     },
   }
+}
+
+/**
+ * Bytes, at the precision the number deserves.
+ *
+ * Chrome rounds and pads what `estimate()` reports on purpose, to make
+ * cross-origin storage fingerprinting harder, so printing every digit would
+ * dress a deliberate approximation as a measurement. One decimal place at MB
+ * and above says what it knows and no more.
+ */
+export function formatBytes(bytes: number | null): string {
+  if (bytes === null) return 'unknown'
+  if (bytes < 1024) return `${bytes} B`
+
+  const units = ['KB', 'MB', 'GB']
+  let value = bytes / 1024
+  let unit = 0
+
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024
+    unit++
+  }
+
+  return `${value.toFixed(value < 10 ? 1 : 0)} ${units[unit]}`
 }
 
 /**
@@ -271,6 +304,13 @@ export function formatReport(report: DiagnosticsReport): string {
     line(
       'records',
       `${report.install.postingCount} postings, ${report.install.snapshotCount} snapshots`,
+    ),
+    // The origin's total, not the snapshot store's — see `readStorageUsage`.
+    // Reported next to the snapshot count because that pair is what decision 6's
+    // open question is decided on.
+    line(
+      'on disk',
+      `${formatBytes(report.install.usageBytes)} of ${formatBytes(report.install.quotaBytes)}`,
     ),
     '',
   ]
