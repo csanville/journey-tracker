@@ -31,6 +31,34 @@ into an issue. That is compliant because the user initiates it and chooses where
 it goes. The diagnostics action is not yet built and is not scheduled; it is the
 intended answer to blind bug reports, not a commitment for any current phase.
 
+**Amended — it is scheduled, and it is an allowlist shown before it is copied.**
+Phase 11 builds it. Three things about the shape were not obvious when the
+sentence above was written.
+
+The clipboard blob is **the only egress path in the product**, and the product's
+whole claim is that there is none. So what goes in is a list of what is
+permitted, held as data, and never a list of what is excluded — a denylist fails
+open, and a record has already gained fields twice under migration (join keys at
+v2, `stage` and `outcome` at v3), each of which a denylist would have leaked by
+saying nothing about them.
+Everything on the list is a version string, a hostname, a tier name or a count:
+`source`, `adapterVersion`, the `provenance` map, which fields came back
+non-null, the confidence score, and the `StatusReport` health fields. Field
+*values* are not on it, nor the URL path or query, nor the snapshot source, nor
+the user's own notes and tags. "A redacted parse result" above turns out to mean
+the parse's *shape* and never its content.
+
+It is also **rendered in the panel before the copy**. Asking someone to trust a
+clipboard they cannot read is not consent, and this decision is the reason they
+would have to. The PII standard is the one decision 6 already had to discover:
+a real Greenhouse capture carried a prefilled self-identification questionnaire.
+
+And it is **pulled, not pushed**. The report is produced by a gesture on the
+current tab through `activeTab` — the same trade as decision 2 — rather than
+from a cache of every page the adapters declined. That cache would be a log of
+browsing on a matched board, kept locally for a question usually never asked,
+which is a poor thing for this extension of all extensions to hold.
+
 **Revisit when.** Cross-device sync becomes a real requirement, or the extension
 grows a user base large enough that blind bug reports stop scaling. Note that
 adding any automatic egress means amending the store disclosure and likely
@@ -398,8 +426,48 @@ the kept subtree and the page title — but a future adapter that depended on th
 blob would find it gone. Keeping the user's demographic answers on disk to
 preserve a parser tier is not a trade this project makes.
 
-**Revisit when.** Storage pressure becomes real. Tighten retention or trimming
-before abandoning snapshots.
+**Amended — the re-parse is withdrawn, and this decision is now on notice.**
+Phase 11 retires it. It was never built, and the message layer is where that
+shows: export reads snapshots in bulk through `snapshot/ids` and
+`snapshot/list`, while `snapshot/get` — the single-record read a re-parse of one
+posting would use — has no sender outside its own tests. Seven phases after the
+capture was built, snapshots are written, trimmed, capped, swept and exported,
+and nothing has ever read one back to parse it.
+
+The reasoning at the top does not survive contact with what the fields turned
+out to be worth. Every field a parser can get wrong — `workMode`, `location`,
+`salary`, `jobTitle` — feeds nothing that is reported. The dashboard's figures
+derive from `state`, `appliedAt`, `stage` and `outcome`, and all four are
+user-set and never parsed (decisions 8 and 18). So "a parser bug means
+permanently lost data" is not true here: it means a wrong label on a record that
+phase 9 made editable, at a volume of a few hundred records. The Ashby adapter
+supplies the worked example — its `TELECOMMUTE` misreading would have recorded
+every hybrid role as remote, and the repair is to correct the field.
+
+There is also a defect waiting in the repair itself. Provenance is per *record*
+(`source`, `sourceConfidence`, `adapterVersion`), not per field, so a re-parse
+cannot distinguish a value an adapter wrote from one the user typed — and since
+phase 9 there are records holding both. It would either refuse to fix the case
+it exists for, or overwrite hand-entered work. Doing it properly needs per-field
+provenance and a schema change. That is a large and risky mechanism standing
+behind a small and correctable problem, which is the wrong way round.
+
+**What this leaves is a question, not an answer.** Re-parse *is* this decision's
+justification. Without it the store is a debugging aid and the `full` export
+payload, and it is still charging a 256KB cap, a trimming policy, a retention
+sweep, an exclusion from the lean export, and the PII exposure two amendments
+above. None of that is a reason to delete it — the `full` export is a shipped
+feature and users have taken backups — but the case has to be made again on the
+remaining grounds rather than inherited. Phase 11 does not decide it; it adds
+`navigator.storage.estimate()` to the status report so the cost side stops being
+a guess.
+
+**Revisit when.** Now, on the next phase that touches storage — the paragraph
+above is an open question and not a settled decision. Or when storage pressure
+becomes real, in which case tighten retention or trimming before abandoning
+snapshots. If a re-parse is ever wanted back, it needs per-field provenance
+first, and it should arrive behind a defect that actually cost somebody
+something.
 
 ---
 

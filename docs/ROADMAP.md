@@ -20,7 +20,8 @@ then merged.
 | 9 ✅ | `feat/edit-record` | Editing a saved posting from the panel — the capability phase 7's docs assumed already existed, and which phase 8's fields need to be worth anything; a filter to find the record, and delete | Change a record's stage and outcome weeks after saving it, without writing a second record |
 | 10 ✅ | `feat/pending-submissions` | A confirmed submission survives a closed panel: a durable pending queue, an event demoted to a signal, and the confirmation's own timestamp on the record | Apply with the panel shut, open it later, and the question is waiting with the right date on it |
 | — ✅ | `feat/ashby-adapter` | An Ashby adapter, on its own branch rather than as a phase — reading a fourth board is additive and needed no new mechanism | A posting on `jobs.ashbyhq.com` fills the form |
-| later | — | Workday, iCIMS, SmartRecruiters adapters; diagnostics action | — |
+| 11 🚧 | `feat/diagnostics` | A diagnostics report the user can send: a pulled parse of the current page, an allowlisted payload shown before it is copied, and the retirement of re-parse | On a page the extension cannot read, one gesture produces a report that names the board and what each tier returned, and carries no company, title or URL path |
+| later | — | Workday, iCIMS, SmartRecruiters adapters | — |
 
 ## Phase 1 — schema and storage
 
@@ -1071,6 +1072,145 @@ constraint that produced it by one phase.
   out of.
 - **Boards other than Greenhouse.** Still a permissions boundary, still the
   honest thing to state rather than to work around.
+
+## Phase 11 — diagnostics you can send
+
+Decision 1 bought "does not collect user data" by giving up crash reporting and
+usage analytics, and named exactly one mitigation for the bugs that would then
+arrive blind: a copy-diagnostics action putting adapter versions, the failing
+hostname and a redacted parse result on the clipboard. It has never been built,
+and the decision says so — "not yet built and is not scheduled". This phase
+schedules it.
+
+There is already a `<details>` section in the panel called Diagnostics, added in
+phase 3 when the panel was a probe readout and kept when it stopped being one. It
+answers *is the extension working*: worker responding, schema version, storage
+protection, posting count, and what the current tab looks like. That is a
+different question from *why did it fail on this page*, and only the first has an
+answer today.
+
+**The page this exists for is the page that reports nothing.** `report()` in
+`content/capture.ts` calls `extract`, tests `isWorthOffering`, and returns early
+when it is false — no message, no cache entry, no `DetectionSummary`. So on a
+page the adapters could not read, the worker holds nothing, and the panel's own
+diagnostics row says `no posting detected`, which is the whole of what it knows.
+The one input a report needs is discarded a context away from where the report
+would be assembled.
+
+This is the fourth recurring shape below, and the first time it has been caught
+before the code was written rather than after: the state the user is in when the
+feature fires is *standing on a page where extraction failed*, and every existing
+test of the detection path asserts a successful parse.
+
+- **A pull, not a push.** The alternative is to report failures automatically,
+  which means a message from every non-posting page on a matched board — a
+  board's own listing page, its search results — to populate a cache for a
+  question nobody has asked yet. Instead the report is produced on request,
+  reusing the `activeTab` + `chrome.scripting` path `injected.ts` already uses
+  for manual capture. No new permission, nothing cached, nothing written, and it
+  reaches sites with no content script at all, which is where a blind bug report
+  actually comes from. It is decision 2's trade applied a second time and for
+  the same reason.
+- **It reads what the tiers returned, not whether the result was worth
+  offering.** Same `extract` call, same adapters, same `mergeTiers`. The
+  difference is only which question is asked of the result: `isWorthOffering`
+  collapses it to a boolean and throws the rest away, and `provenance` —
+  `Record<FieldName, Tier | null>`, already computed and already carried on
+  every `DetectionReport` — is the thing worth sending. It says which tier
+  answered which field and, more usefully, which fields nothing answered.
+- **The payload is an allowlist, and it is rendered before it is copied.** This
+  blob is the only egress path in the product, and the product's claim is that
+  there is none. A denylist is the wrong shape: it fails open, on a codebase
+  where the fields keep growing. The list of what goes in is data, in `lib/`,
+  and every field on it is either a version string, a hostname, a tier name or a
+  count. And it is shown in the panel first — asking someone to trust a
+  clipboard they cannot read is not consent, it is a request for one.
+- **The PII was already found once.** Decision 6's trimming amendment exists
+  because a real Greenhouse capture carried a voluntary self-identification
+  questionnaire — gender, race, veteran and disability status — prefilled from a
+  logged-in session. That is the standard this payload is held to. No field
+  values, no URL path or query, no snapshot source, and none of the user's own
+  writing.
+
+### What comes out, and what a version of it is for
+
+`source` and `adapterVersion` name the parser that ran. `provenance` and the
+confidence score say what it managed. The hostname says where. The
+`StatusReport` half — schema version against data version, eviction safety,
+counts — says whether the report is even about a healthy install, which is the
+first thing worth ruling out and currently takes a screenshot to establish.
+
+The panel footer's hardcoded `Phase 10 · pending submissions` is folded in here.
+A phase label edited by hand every phase is a claim that goes stale on its own,
+and a version string belongs in the readout rather than in the chrome.
+
+### Re-parse is retired, and what that leaves
+
+Decision 6 justifies the snapshot store on one promise: a parser fix is followed
+by a re-parse of history, and a generic capture is upgraded once a real adapter
+exists. Nothing re-parses, and the message layer says so more plainly than the
+prose does. Export reads snapshots in bulk, through `snapshot/ids` and
+`snapshot/list`. The single-record read — `snapshot/get`, the exact shape a
+re-parse of one posting would use — has **no sender outside its own tests**.
+
+The promise is being withdrawn rather than kept. Every field a parser can get
+wrong — `workMode`, `location`, `salary`, `jobTitle` — feeds nothing that is
+reported: the dashboard's figures all derive from `state`, `appliedAt`, `stage`
+and `outcome`, which are user-set and never parsed. So a parser bug cannot move
+a number; it puts a wrong label on a record that phase 9 made editable, at a
+volume of a few hundred. Against that, a re-parse has to decide what to do with
+a field the user typed by hand, and the record carries provenance per *record*
+and not per field — so it cannot tell. The repair mechanism would be more
+dangerous than the damage.
+
+What that leaves is a snapshot store whose stated purpose is gone: a debugging
+aid and the `full` export payload, against a 256KB cap, a trimming policy, a
+retention sweep, an exclusion from the lean export, and page-derived PII. That
+is a real question and this phase does not answer it — it takes the measurement
+the answer needs, by putting `navigator.storage.estimate()` into the status
+report, so how much the store costs stops being a guess. See decision 6.
+
+### The cleanup this phase has to settle
+
+`waitForMigration` is kept in `settings.ts` explicitly because "a diagnostics
+surface is the obvious future caller". This is that surface, so the phase either
+wires it or deletes it, and the answer is to delete it. The comment already
+concedes the argument: the worker's `await ready()` is cause where the flag is
+observation, a reader watching it cannot make a torn-down worker migrate, and
+would read `false` and trust stale data. A diagnostics panel that asks the
+worker inherits the stronger guarantee. Keeping a function whose only stated
+justification has arrived and declined it is the defect this file keeps counting.
+
+`snapshot/get` goes with it, for the same reason arriving from the other side:
+it is the single-posting read a re-parse would have used, it has no sender, and
+retiring the re-parse is what settles that it never will. `snapshot/put`,
+`snapshot/ids` and `snapshot/list` stay — the capture and the export need them.
+A request kind nothing sends is a payload nothing reads, which phase 10 already
+deleted an example of.
+
+### Done when
+
+On a page the extension cannot parse — a Workday posting, a company careers
+page, a board with no adapter — one gesture produces a report naming the host,
+the adapter that ran and what each tier returned; the report is visible in the
+panel before it is copied; and the pasted text contains no company, no job
+title, and no URL path. The same gesture on a working Greenhouse posting reports
+which tier answered which field.
+
+### Deliberately not in phase 11
+
+- **Automatic failure reporting.** Even locally. A cache of every page the
+  adapters declined is a log of browsing on a matched board, kept for a question
+  that is usually never asked. The gesture is the feature, not a limitation of
+  it.
+- **Sending anything anywhere.** The clipboard is the whole of the egress, and
+  it is the user's clipboard. Decision 1 stands; a "report a bug" button that
+  opened a pre-filled issue would be a network call in everything but name.
+- **Re-parsing snapshots.** Retired above rather than deferred. If this ever
+  comes back it needs per-field provenance and a schema change, and it should
+  arrive with a defect that actually cost something.
+- **Deleting the snapshot store.** Measured here, decided later. The `full`
+  export depends on it and that is a user-facing feature, not an internal one.
 
 ## Recurring shapes
 
