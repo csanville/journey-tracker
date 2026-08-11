@@ -4,9 +4,13 @@ import {
   findSnapshot,
   forgetTab,
   getDetectionSummary,
+  getFailedParse,
   recordDetection,
+  recordFailedParse,
+  sanitizeFailedParse,
   sanitizeReport,
   type DetectionReport,
+  type FailedParseReport,
 } from './detection'
 
 function aReport(overrides: Partial<DetectionReport> = {}): DetectionReport {
@@ -227,5 +231,114 @@ describe('the detection cache', () => {
     // And forgetting a tab that was never there is not an error — it is just a
     // "no".
     await expect(forgetTab(99)).resolves.toBe(false)
+  })
+})
+
+describe('a read that found nothing', () => {
+  function aFailedParse(overrides: Partial<FailedParseReport> = {}): FailedParseReport {
+    return {
+      url: 'https://careers.acme.com/openings/staff-engineer',
+      source: 'generic',
+      adapterVersion: 'generic@2',
+      confidence: 0,
+      provenance: {
+        company: null,
+        jobTitle: null,
+        location: null,
+        workMode: null,
+        atsReqId: null,
+        salary: null,
+      },
+      ...overrides,
+    }
+  }
+
+  /**
+   * The whole reason this is a separate sanitizer. `sanitizeReport` rejects a
+   * report with neither a company nor a title, which is right for a detection
+   * and would reject every failed parse there is — the condition it screens out
+   * is the condition being reported.
+   */
+  it('accepts a report with no fields at all, which sanitizeReport rejects', async () => {
+    const empty = aFailedParse()
+
+    expect(sanitizeFailedParse(empty)).not.toBeNull()
+    expect(sanitizeReport({ ...empty, detectionId: 'det-1', fields: {} })).toBeNull()
+  })
+
+  it('drops a tier name the page invented rather than passing it on', () => {
+    const failed = sanitizeFailedParse(
+      aFailedParse({
+        provenance: { company: 'trust-me' } as unknown as FailedParseReport['provenance'],
+      }),
+    )
+
+    // It reaches a report the user may paste into a public issue, so a page
+    // choosing its own strings is not a cosmetic problem.
+    expect(failed?.provenance.company).toBeNull()
+  })
+
+  it('rejects a report missing the fields a diagnostic is made of', () => {
+    expect(sanitizeFailedParse({ ...aFailedParse(), url: '' })).toBeNull()
+    expect(sanitizeFailedParse({ ...aFailedParse(), adapterVersion: '' })).toBeNull()
+    expect(sanitizeFailedParse({ ...aFailedParse(), confidence: 4 })).toBeNull()
+    expect(sanitizeFailedParse(null)).toBeNull()
+  })
+
+  it('round-trips against the tab that reported it', async () => {
+    await recordFailedParse(7, aFailedParse(), 1000)
+
+    const failed = await getFailedParse(7)
+    expect(failed?.source).toBe('generic')
+    expect(failed?.capturedAt).toBe(1000)
+    expect(await getFailedParse(9)).toBeNull()
+  })
+
+  /**
+   * Two caches, because they answer different questions. A failed parse
+   * surfacing as a detection would fill the form from a page that gave up
+   * nothing and light the badge for a record that does not exist.
+   */
+  it('never surfaces as a detection', async () => {
+    await recordFailedParse(7, aFailedParse(), 1000)
+
+    expect(await getDetectionSummary(7)).toBeNull()
+  })
+
+  it('does not displace the detection on the same tab', async () => {
+    await recordDetection(7, aReport(), 1000)
+    await recordFailedParse(7, aFailedParse(), 2000)
+
+    expect(await getDetectionSummary(7)).not.toBeNull()
+    expect(await getFailedParse(7)).not.toBeNull()
+  })
+
+  it('is cleared when the tab navigates away', async () => {
+    await recordFailedParse(7, aFailedParse(), 1000)
+    await forgetTab(7)
+
+    expect(await getFailedParse(7)).toBeNull()
+  })
+
+  /**
+   * `forgetTab`'s answer drives a badge repaint and a broadcast, and a blank
+   * read never painted a badge. Reporting one as a drop would wake the worker
+   * into work with nothing to do on every navigation away from an unreadable
+   * page.
+   */
+  it('does not on its own make forgetTab claim it dropped something', async () => {
+    await recordFailedParse(7, aFailedParse(), 1000)
+
+    await expect(forgetTab(7)).resolves.toBe(false)
+    expect(await getFailedParse(7)).toBeNull()
+  })
+
+  it('evicts the oldest once more tabs than the bound have reported', async () => {
+    for (let tab = 0; tab <= MAX_CACHED_TABS; tab++) {
+      await recordFailedParse(tab, aFailedParse(), 1000 + tab)
+    }
+
+    expect(await getFailedParse(0)).toBeNull()
+    expect(await getFailedParse(MAX_CACHED_TABS)).not.toBeNull()
   })
 })

@@ -1,4 +1,9 @@
-import type { DetectionReport, DetectionSummary } from './detection'
+import type {
+  CachedFailedParse,
+  DetectionReport,
+  DetectionSummary,
+  FailedParseReport,
+} from './detection'
 import type { PendingSubmission } from './pending'
 import type { DuplicateMatch, Posting, PostingInput, Snapshot } from './types'
 
@@ -149,8 +154,33 @@ export interface RequestMap {
     payload: { postingId: string }
     result: { retired: boolean }
   }
+  /**
+   * A content script saying it read the page and found nothing worth offering.
+   *
+   * Sent **only by the injected bundle**, never by the declared content script,
+   * and that asymmetry is the whole design. The declared script runs on every
+   * page of three boards without being asked, so reporting its blanks would
+   * accumulate a record of ordinary browsing — a board's search results, its
+   * listing pages — for a question nobody has asked. The injected one runs
+   * because the user just right-clicked *this page* and asked for it, which is
+   * both the permission (`activeTab`) and the consent.
+   *
+   * Returns whether it survived validation, like `detection/report`. There is no
+   * id to hand back: a failed parse is keyed by tab and nothing refers to one.
+   */
+  'diagnostic/report': {
+    payload: { report: FailedParseReport }
+    result: { recorded: boolean }
+  }
   /** What the panel asks about the tab it is sitting next to. */
   'detection/get': { payload: { tabId: number }; result: DetectionSummary | null }
+  /**
+   * Why the tab next to the panel gave up nothing, or `null` if it never said.
+   *
+   * Separate from `detection/get` because the two answer different questions and
+   * exactly one of them is ever non-null for a given read.
+   */
+  'diagnostic/get': { payload: { tabId: number }; result: CachedFailedParse | null }
   status: { payload: NoPayload; result: StatusReport }
   /**
    * Re-reads storage protection and records the answer. The panel sends this
@@ -243,6 +273,10 @@ export function isRequest(value: unknown): value is Request {
 const CONTENT_SCRIPT_KINDS: readonly RequestKind[] = [
   'detection/report',
   'application/submitted',
+  // Reporting a blank read is allowed; *reading* one back is not. A content
+  // script has no business asking what the extension knows about any tab,
+  // including its own.
+  'diagnostic/report',
 ]
 
 export function allowedFromContentScript(kind: RequestKind): boolean {

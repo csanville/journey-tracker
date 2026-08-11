@@ -6,7 +6,10 @@ import {
   findSnapshot,
   findTabForDetection,
   getDetectionSummary,
+  getFailedParse,
   recordDetection,
+  recordFailedParse,
+  sanitizeFailedParse,
   sanitizeReport,
 } from './detection'
 import { broadcast } from './events'
@@ -141,8 +144,28 @@ async function dispatch(
       return readPending()
     case 'submission/retire':
       return { retired: await retirePending(request.postingId) }
+    case 'diagnostic/report': {
+      // Same rule as `detection/report`: no tab, no owner, nothing the panel
+      // could ever ask for.
+      if (context.tabId === undefined) return { recorded: false }
+
+      const failed = sanitizeFailedParse(request.report)
+      if (!failed) return { recorded: false }
+
+      await recordFailedParse(context.tabId, failed)
+
+      // Announced on the same channel a detection uses. The panel's question is
+      // "what happened on this tab", and a blank read is an answer to it — a
+      // second event type would be a second thing to subscribe to for one more
+      // way of saying the same tab moved.
+      await broadcast({ type: 'detection/changed', tabId: context.tabId })
+
+      return { recorded: true }
+    }
     case 'detection/get':
       return getDetectionSummary(request.tabId)
+    case 'diagnostic/get':
+      return getFailedParse(request.tabId)
     case 'status':
       return status(db)
     case 'storage/reassess':

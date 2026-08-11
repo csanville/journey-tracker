@@ -1132,6 +1132,34 @@ test of the detection path asserts a successful parse.
   values, no URL path or query, no snapshot source, and none of the user's own
   writing.
 
+### The trigger cannot live in the panel, and the plan nearly put it there
+
+Building it turned up a constraint this file had already written down twice.
+`activeTab` is granted by four gestures — an action, a context menu item, a
+`commands` shortcut, an omnibox suggestion — and **a button in the side panel is
+not one of them**. `capture.ts` calls that "the single most important fact about
+this feature". The extension holds no `host_permissions` at all (decision 2's
+amendment: the allowlist is `content_scripts.matches`), so *every* page needs the
+grant, including the three boards the manifest matches.
+
+A "Diagnose this page" button in the panel therefore cannot read the page. The
+working notes for this phase had one, and it was the same claim-that-outruns-the
+-code shape as everything else in this list — written because it is the obvious
+affordance, not because anything checked whether it could work.
+
+What survives is better than what was planned, because the trigger already
+exists. The user right-clicks **Read this page into JourneyTracker**, which is
+already the gesture, already the grant, and already the moment they are asking a
+question about this page. When the read succeeds the form fills, as now. When it
+comes back with nothing, that is when a diagnostic is worth having, and it is
+exactly the case the old code dropped on the floor. No second menu item, no
+second gesture to teach, no new bundle.
+
+The panel keeps the half it can do: rendering the report and copying it. Copying
+needs no grant. So the split is that **reading the page is a gesture and reading
+the report is a button**, which is the same boundary decision 2 has drawn since
+phase 5.
+
 ### What comes out, and what a version of it is for
 
 `source` and `adapterVersion` name the parser that ran. `provenance` and the

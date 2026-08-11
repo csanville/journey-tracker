@@ -37,6 +37,17 @@ import type { Salary, SalaryPeriod, WorkMode } from './types'
 const CACHE_KEY = 'detections'
 
 /**
+ * Failed parses live under their own key rather than in the cache above.
+ *
+ * Sharing one would be cheaper and would be wrong: `getDetectionSummary` is what
+ * the panel fills the form from and what the badge is painted off, and a failed
+ * parse answering that call would offer the user a page with nothing on it. Two
+ * keys means "what is on this tab" and "why did this tab give us nothing" stay
+ * two questions, which is what they are.
+ */
+const FAILED_KEY = 'failedParses'
+
+/**
  * How many tabs to remember at once.
  *
  * `chrome.storage.session` has a 10MB budget and a snapshot is capped at 256KB,
@@ -75,7 +86,38 @@ export type DetectionSummary = Omit<CachedDetection, 'snapshot'> & {
   snapshotBytes: number
 }
 
+/**
+ * A read that ran and came back with nothing worth offering.
+ *
+ * The mirror image of a `DetectionReport`, and it exists because the ordinary
+ * path throws this case away. `capture.ts` tests `isWorthOffering` and returns
+ * without sending, so a page the adapters could not read leaves no trace
+ * anywhere — which is fine for the declared content script, and is exactly
+ * wrong on the page a user just asked the extension to read.
+ *
+ * **No `fields` and no `snapshot`.** There are no fields worth carrying, by
+ * definition. The snapshot is left behind on purpose: this is the input to a
+ * report the user may send onward, and the page source is the one thing that
+ * must never travel (decision 1, and the trimming amendment on decision 6).
+ * What survives is provenance — which tier answered which field, and which
+ * fields nothing answered at all.
+ */
+export interface FailedParseReport {
+  url: string
+  source: string
+  adapterVersion: string
+  confidence: number
+  provenance: Record<FieldName, Tier | null>
+}
+
+/** What the worker stores, plus its own trusted timestamp. */
+export interface CachedFailedParse extends FailedParseReport {
+  capturedAt: number
+}
+
 type Cache = Record<string, CachedDetection>
+
+type FailedCache = Record<string, CachedFailedParse>
 
 /* -------------------------------------------------------------------------- */
 /* Validation                                                                  */
@@ -209,6 +251,34 @@ export function sanitizeReport(value: unknown): DetectionReport | null {
   }
 }
 
+/**
+ * Validates a reported failed parse, or returns `null` if it is not one.
+ *
+ * The same guard as `sanitizeReport` and for the same reason — everything in it
+ * came off a web page — but without the check that killed this case in the first
+ * place. `sanitizeReport` rejects a report with neither a company nor a title,
+ * which is right for a detection and is precisely the condition being reported
+ * here. A failed parse with no fields is not a malformed message; it is the
+ * message.
+ *
+ * `provenance` still goes through the same reader, so a page that invented a
+ * tier name gets `null` for that field rather than putting a string of its own
+ * choosing into something the user may paste into an issue.
+ */
+export function sanitizeFailedParse(value: unknown): FailedParseReport | null {
+  if (typeof value !== 'object' || value === null) return null
+  const raw = value as Record<string, unknown>
+
+  const url = text(raw.url, MAX_URL)
+  const source = text(raw.source, 64)
+  const adapterVersion = text(raw.adapterVersion, 64)
+  const confidence = finite(raw.confidence, 0, 1)
+
+  if (!url || !source || !adapterVersion || confidence === null) return null
+
+  return { url, source, adapterVersion, confidence, provenance: provenance(raw.provenance) }
+}
+
 /* -------------------------------------------------------------------------- */
 /* The cache                                                                   */
 /* -------------------------------------------------------------------------- */
@@ -261,20 +331,66 @@ export function recordDetection(
     const detection: CachedDetection = { ...report, capturedAt }
 
     cache[String(tabId)] = detection
+    await writeCache(evict(cache))
 
-    const entries = Object.entries(cache)
-    if (entries.length > MAX_CACHED_TABS) {
-      const survivors = entries
-        .sort(([, a], [, b]) => b.capturedAt - a.capturedAt)
-        .slice(0, MAX_CACHED_TABS)
-
-      await writeCache(Object.fromEntries(survivors))
-      return detection
-    }
-
-    await writeCache(cache)
     return detection
   })
+}
+
+/**
+ * Drops the least recently captured entries once a per-tab cache is over its
+ * bound, newest kept.
+ *
+ * Shared by both caches below rather than written twice. The bound applies to
+ * each independently, which is the conservative reading of `MAX_CACHED_TABS`:
+ * the budget it was sized against is `chrome.storage.session`'s 10MB, and a
+ * failed parse is a few hundred bytes against a detection's up-to-256KB
+ * snapshot, so the second cache cannot meaningfully move that number.
+ */
+function evict<T extends { capturedAt: number }>(
+  cache: Record<string, T>,
+): Record<string, T> {
+  const entries = Object.entries(cache)
+  if (entries.length <= MAX_CACHED_TABS) return cache
+
+  return Object.fromEntries(
+    entries.sort(([, a], [, b]) => b.capturedAt - a.capturedAt).slice(0, MAX_CACHED_TABS),
+  )
+}
+
+async function readFailedCache(): Promise<FailedCache> {
+  const stored = await chrome.storage.session.get(FAILED_KEY)
+  const cache = stored[FAILED_KEY]
+
+  return typeof cache === 'object' && cache !== null ? (cache as FailedCache) : {}
+}
+
+/**
+ * Stores why a tab gave up nothing, against the tab that reported it.
+ *
+ * Serialized on the same queue as the detection cache. It has to be: `forgetTab`
+ * touches both keys in one pass, so an unqueued write here could interleave with
+ * that pass and resurrect the entry it had just cleared.
+ */
+export function recordFailedParse(
+  tabId: number,
+  report: FailedParseReport,
+  capturedAt: number = Date.now(),
+): Promise<CachedFailedParse> {
+  return serialized(async () => {
+    const cache = await readFailedCache()
+    const failed: CachedFailedParse = { ...report, capturedAt }
+
+    cache[String(tabId)] = failed
+    await chrome.storage.session.set({ [FAILED_KEY]: evict(cache) })
+
+    return failed
+  })
+}
+
+/** Why a tab gave up nothing, or `null` if it never said. */
+export async function getFailedParse(tabId: number): Promise<CachedFailedParse | null> {
+  return (await readFailedCache())[String(tabId)] ?? null
 }
 
 /** The panel's view of what is on a tab, or `null` if nothing was detected. */
@@ -348,10 +464,22 @@ export async function findTabForDetection(detectionId: string): Promise<number |
  */
 export function forgetTab(tabId: number): Promise<boolean> {
   return serialized(async () => {
-    const cache = await readCache()
-    if (!(String(tabId) in cache)) return false
+    const key = String(tabId)
 
-    delete cache[String(tabId)]
+    // Cleared alongside, and unconditionally: a failed parse is a claim about
+    // the page the tab *was* showing, and a tab that has navigated away has
+    // made it false. It does not affect the answer below — a badge is painted
+    // from a detection, and there was never one here to repaint.
+    const failed = await readFailedCache()
+    if (key in failed) {
+      delete failed[key]
+      await chrome.storage.session.set({ [FAILED_KEY]: failed })
+    }
+
+    const cache = await readCache()
+    if (!(key in cache)) return false
+
+    delete cache[key]
     await writeCache(cache)
     return true
   })
