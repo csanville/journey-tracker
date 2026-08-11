@@ -1485,6 +1485,38 @@ skip-a-record-open-for-editing rule, and `onStopEditing`. Anything found is a
 finding, not automatically a fix — some other path may be legitimately open, and
 saying so in a comment is the outcome for those.
 
+**The sweep found two, and the first is the same defect one layer up.**
+
+- **The pending queue's skip was reading the request, not the record.**
+  `refreshPending` suppresses a submission prompt for a record the form has
+  loaded, because confirming it writes `applied` behind a form whose next Save
+  puts `viewed` and a null `appliedAt` back over it — the comment on the skip
+  says exactly this. It tested `editing`, which is the record the panel *asked*
+  for, and the form is allowed to refuse. Open a record, then click a different
+  row: the request names the second, the form goes on holding the first, and the
+  prompt for the first came back up while it was still open. A guard tested
+  against a proxy for the state it guards, which is the fifth shape again, with
+  the proxy agreeing with the state everywhere except the one route that matters.
+
+  The form now reports what it holds — `onHolding`, called where a record is
+  taken and where it is let go — and the queue reads that. It is deliberately
+  *not* the same signal as `onStopEditing`: "Keep what I have" settles the
+  request while the form goes on holding what it already had, so collapsing the
+  two would have that click report an empty form and rebuild the defect.
+
+- **The `busy` lock missed the question raised between the two places that
+  have it.** The fieldset has it, the detected notice has it and its comment
+  generalises — "every way into the form has to be shut while a save is in
+  flight, not just the inputs" — and "Open a different posting? / Open it" sat
+  between them with neither. It replaces the draft and the id behind a save that
+  has already snapshotted both, and the reset that follows wipes the record just
+  opened. No record is corrupted; the click is swallowed with no sign it was
+  taken. One `disabled={busy}` on each button, which is the rule the two
+  neighbours were already following.
+
+Both were proven the phase's way: written as tests, run against the unfixed
+code, seen to fail, and seen to fail alone.
+
 ### Workday, and the permission question it raises
 
 The first board whose host is **per-tenant**: `acme.wd1.myworkdayjobs.com`,

@@ -173,6 +173,42 @@ describe('a submission prompt and the form claiming the same record', () => {
     expect(el.textContent).not.toContain('Looks like you applied')
   })
 
+  /**
+   * The guard above reads what the form *holds*, not what was *asked for*, and
+   * this is the case that separates them.
+   *
+   * Clicking a second row while the first is open leaves the request naming the
+   * second record and the form still holding the first — it refuses, and asks.
+   * Keyed on the request, the queue decided the first record was no longer open
+   * and put its prompt back up. Confirming it writes `applied` and an
+   * `appliedAt` to a record whose stale `viewed` is sitting in a form one Save
+   * away from overwriting both.
+   *
+   * Found by the phase 12 guard sweep, which is the same shape as the fill bug
+   * that prompted the sweep: a guard tested against a proxy for the state it
+   * guards, and a route where the proxy and the state disagree.
+   */
+  it('keeps the prompt down while the form still holds that record', async () => {
+    const open = await upsertPosting(db, aPosting({ state: 'viewed' }))
+    await upsertPosting(
+      db,
+      aPosting({ company: 'Globex', jobTitle: 'Analyst', state: 'viewed' }),
+    )
+    const el = await render()
+
+    await announce(open.id)
+    const rows = () => [...el.querySelectorAll('.recent__open')]
+    await click(rows().find((r) => r.textContent?.includes('Initech'))!)
+    expect(el.textContent).not.toContain('Looks like you applied')
+
+    // The form is holding Initech and refuses to swap, so it goes on holding it.
+    await click(rows().find((r) => r.textContent?.includes('Globex'))!)
+    expect(el.textContent).toContain('Editing a saved posting')
+
+    // The question about the record the form is still holding must stay down.
+    expect(el.textContent).not.toContain('Looks like you applied')
+  })
+
   it('leaves a prompt about some other record alone', async () => {
     const open = await upsertPosting(db, aPosting({ state: 'viewed' }))
     const other = await upsertPosting(

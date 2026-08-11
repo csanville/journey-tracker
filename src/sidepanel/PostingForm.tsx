@@ -81,6 +81,7 @@ export function PostingForm({
   onDeleted,
   detection,
   editing,
+  onHolding,
   onStopEditing,
 }: {
   onSaved: () => void
@@ -97,7 +98,33 @@ export function PostingForm({
    * work, and a prop cannot be refused.
    */
   editing: Posting | null
-  /** The form is no longer holding a stored record — saved, discarded or deleted. */
+  /**
+   * Which record the form is actually holding, or `null` for none.
+   *
+   * Both halves of one fact, deliberately, because the panel had been inferring
+   * this half from the request above and the two can disagree. A record open in
+   * the form while the user clicks a *different* row leaves `editing` naming the
+   * second record and the form still holding the first — and the pending-queue
+   * guard, which suppresses a submission prompt for a record the form has
+   * loaded, was reading the request. It let the prompt through, and confirming
+   * it writes `applied` behind a form whose next Save puts `viewed` back over
+   * it.
+   *
+   * A request is refusable, so it cannot answer "what is loaded". Only the form
+   * knows, and this is how it says so — announced when a record is taken and
+   * when it is let go, from the two functions that do those things.
+   */
+  onHolding: (postingId: string | null) => void
+  /**
+   * The outstanding request has been settled and must not be raised again.
+   *
+   * Separate from `onHolding` because they are separate facts, and the refusal
+   * path is what proves it: "Keep what I have" drops the request while the form
+   * goes on holding the record it already had. Collapsing the two would make
+   * that click report an empty form and hand the pending queue back a question
+   * about a record still open — which is the defect this pair was split to fix,
+   * rebuilt one layer up.
+   */
   onStopEditing: () => void
 }) {
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT)
@@ -233,9 +260,10 @@ export function PostingForm({
    * never came through, and the next save wrote the page it had just read over
    * the record still held. Not a lost draft: a destroyed record.
    *
-   * `onStopEditing` matters as much as the id. Without it the panel still holds
-   * the request, and the effect below hands the same record straight back into
-   * the form the user has just walked away from.
+   * Telling the panel matters as much as the id, in both of its senses: the
+   * form is holding nothing now, and the request is finished. Without the
+   * second the panel still holds the request, and the effect below hands the
+   * same record straight back into the form the user has just walked away from.
    *
    * Called unconditionally rather than guarded on `edited`, by callers that
    * sometimes hold nothing. That is deliberate: with no record held, minting an
@@ -248,6 +276,7 @@ export function PostingForm({
     setEdited(null)
     // The record it was armed against is no longer the one in the form.
     setConfirmingDelete(false)
+    onHolding(null)
     onStopEditing()
   }
 
@@ -270,6 +299,10 @@ export function PostingForm({
     setDraft(next)
     setDraftId(posting.id)
     setEdited({ posting, draft: next })
+    // Taking a record is as much news as letting one go, and it is the half the
+    // panel could not work out for itself — this is the only place a request
+    // becomes a record the form is holding.
+    onHolding(posting.id)
     setShowErrors(false)
     setPhase({ name: 'editing' })
     // A record arriving replaces a fill, and must not leave its provenance
@@ -624,10 +657,17 @@ export function PostingForm({
               ? 'Your unsaved changes to the current one would be lost.'
               : 'What is in the form now would be lost.'}
           </p>
+          {/* Locked while a save is in flight, like every other way into the
+              form. `Open it` replaces the draft and the id behind a save that
+              has already snapshotted both, and the reset that follows then
+              wipes the record just opened — a click swallowed with no sign it
+              was taken. The fieldset and the detected notice had this; the
+              question raised between them did not. */}
           <div className="notice__actions">
             <button
               type="button"
               className="button button--quiet"
+              disabled={busy}
               onClick={() => {
                 // The request is refused rather than parked. Left pending, the
                 // effect above would re-raise it on the next thing that moved,
@@ -641,6 +681,7 @@ export function PostingForm({
             <button
               type="button"
               className="button"
+              disabled={busy}
               onClick={() => openForEdit(confirmingEdit)}
             >
               Open it

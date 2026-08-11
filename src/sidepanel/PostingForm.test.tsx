@@ -59,6 +59,20 @@ interface Props {
   onSaved?: () => void
   onDeleted?: () => void
   onStopEditing?: () => void
+  onHolding?: (postingId: string | null) => void
+}
+
+function element(props: Props) {
+  return (
+    <PostingForm
+      editing={props.editing}
+      detection={props.detection ?? null}
+      onSaved={props.onSaved ?? (() => {})}
+      onDeleted={props.onDeleted ?? (() => {})}
+      onStopEditing={props.onStopEditing ?? (() => {})}
+      onHolding={props.onHolding ?? (() => {})}
+    />
+  )
 }
 
 async function render(props: Props): Promise<HTMLDivElement> {
@@ -67,20 +81,26 @@ async function render(props: Props): Promise<HTMLDivElement> {
 
   await act(async () => {
     root = createRoot(host!)
-    root.render(
-      <PostingForm
-        editing={props.editing}
-        detection={props.detection ?? null}
-        onSaved={props.onSaved ?? (() => {})}
-        onDeleted={props.onDeleted ?? (() => {})}
-        onStopEditing={props.onStopEditing ?? (() => {})}
-      />,
-    )
+    root.render(element(props))
   })
 
   // The seeding effect and the revisit lookup both settle after the first paint.
   await settle()
   return host
+}
+
+/**
+ * Hands the form a different request, which is a thing only the panel can do.
+ *
+ * `editing` is a prop, so the states that depend on it changing under a form
+ * that already holds something — the "Open a different posting?" question, and
+ * everything downstream of refusing it — are unreachable from a single render.
+ */
+async function rerender(props: Props): Promise<void> {
+  await act(async () => {
+    root!.render(element(props))
+  })
+  await settle()
 }
 
 /** Lets pending effects and their round trips through the handler finish. */
@@ -497,6 +517,67 @@ describe('a detection arriving while a record is open', () => {
     await click(button(el, 'Overwrite this record'))
     expect((control(el, 'Company') as HTMLInputElement).value).toBe('Some Other Company')
     expect(await db.postings.count()).toBe(1)
+  })
+})
+
+describe('a save in flight', () => {
+  /**
+   * Holds `posting/upsert` open so the form can be caught mid-save.
+   *
+   * Everything else still answers immediately: the point is the gap between
+   * `toPostingInput` snapshotting the draft and the write landing, not a panel
+   * where nothing works.
+   */
+  function stallTheSave(): { finish: () => void } {
+    let release = () => {}
+    const held = new Promise<void>((resolve) => {
+      release = resolve
+    })
+
+    vi.mocked(chrome.runtime.sendMessage).mockImplementation((async (request: unknown) => {
+      if ((request as { type?: string }).type === 'posting/upsert') await held
+      return handleRequest(db, request as never)
+    }) as never)
+
+    return { finish: release }
+  }
+
+  /**
+   * The `busy` lock reached the fieldset and the detected notice, and its
+   * comment says why — "every way into the form has to be shut while a save is
+   * in flight, not just the inputs". This question is a way into the form and
+   * was not shut: `Open it` replaces the draft and the id behind a save that has
+   * already snapshotted both, and the reset that follows the save then wipes the
+   * record the user had just opened. The click is swallowed, silently.
+   *
+   * Found by the phase 12 guard sweep.
+   */
+  it('shuts the open-a-different-posting question too', async () => {
+    const first = await upsertPosting(db, stored())
+    const second = await upsertPosting(
+      db,
+      stored({ id: 'posting-second', company: 'Globex', jobTitle: 'Analyst' }),
+    )
+    const el = await render({ editing: first })
+
+    await rerender({ editing: second })
+    expect(el.textContent).toContain('Open a different posting?')
+
+    const stalled = stallTheSave()
+    await act(async () => {
+      el.querySelector('form')!.dispatchEvent(
+        new Event('submit', { bubbles: true, cancelable: true }),
+      )
+      // Long enough for the handler to reach its awaited send and set `saving`,
+      // and no longer: the send itself is held open on purpose.
+      await Promise.resolve()
+    })
+
+    expect(button(el, 'Open it').disabled).toBe(true)
+    expect(button(el, 'Keep what I have').disabled).toBe(true)
+
+    stalled.finish()
+    await settle()
   })
 })
 

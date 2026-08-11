@@ -56,20 +56,32 @@ export function App() {
    * whether it can be taken. Held here because the list that raises it is here.
    */
   const [editing, setEditing] = useState<Posting | null>(null)
+  /**
+   * Which record the form reports it is holding, which is not the same question
+   * as `editing` above.
+   *
+   * `editing` is what was *asked for* and the form may refuse it — while it
+   * holds one record, clicking another leaves the request naming the second and
+   * the form still holding the first. Everything below that means "the form has
+   * this record loaded" has to read this one; the request answers a different
+   * question and answering with it was a guard reading a proxy for the state it
+   * guarded.
+   */
+  const [held, setHeld] = useState<string | null>(null)
   const version = chrome.runtime.getManifest().version
 
   /**
-   * Mirrors `editing` for the callback that must not close over a changing value.
+   * Mirrors `held` for the callback that must not close over a changing value.
    *
    * `refreshPending` is built once and is reached from a listener that lives for
-   * the life of the panel; reading `editing` directly would pin it to whatever
-   * was open when the listener was installed. It also runs across awaits — a
+   * the life of the panel; reading `held` directly would pin it to whatever was
+   * open when the listener was installed. It also runs across awaits — a
    * `posting/get` per entry — so the ref is read at the moment each decision is
    * made rather than at the moment the pass started, which is the distinction
    * phase 9 spent a defect on.
    */
-  const editingId = useRef<string | null>(null)
-  editingId.current = editing?.id ?? null
+  const heldId = useRef<string | null>(null)
+  heldId.current = held
 
   const refresh = useCallback(async (): Promise<StatusReport | null> => {
     try {
@@ -165,7 +177,7 @@ export function App() {
         // set `applied` and the form's next Save would put its own stale
         // `viewed` and a null `appliedAt` straight back over it. The question
         // returns by itself once editing stops, because this runs again.
-        if (editingId.current === entry.postingId) continue
+        if (heldId.current === entry.postingId) continue
 
         const posting = await send('posting/get', { id: entry.postingId })
 
@@ -223,10 +235,15 @@ export function App() {
    * the same call: opening one drops its prompt if it was up, closing brings it
    * back if it is still open. Keyed on the id so it fires on a change of which
    * record is being edited, not on every render of the same one.
+   *
+   * On `held` rather than on `editing`: a request the form refused changes the
+   * latter without changing what is loaded, and re-running on it asked the queue
+   * a question whose answer had not moved — then acted on it, because the guard
+   * inside read the request too.
    */
   useEffect(() => {
     void refreshPending()
-  }, [editing?.id, refreshPending])
+  }, [held, refreshPending])
 
   useEffect(() => {
     void refreshDetection()
@@ -373,6 +390,10 @@ export function App() {
       <PostingForm
         detection={detection}
         editing={editing}
+        onHolding={setHeld}
+        // A settled request, whether taken back or refused. What the form is
+        // holding is `onHolding`'s answer and not this one — "Keep what I have"
+        // drops the request and goes on holding the record it already had.
         onStopEditing={() => setEditing(null)}
         onSaved={() => {
           void refresh()
