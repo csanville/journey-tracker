@@ -246,9 +246,38 @@ export function sanitizeReport(value: unknown): DetectionReport | null {
     adapterVersion,
     confidence,
     fields: parsed,
-    provenance: provenance(raw.provenance),
+    provenance: provenanceFor(parsed, raw.provenance),
     snapshot: snapshot(raw.snapshot),
   }
+}
+
+/**
+ * The reported tiers, with any tier dropped whose field this validator rejected.
+ *
+ * `fields` and `provenance` are validated independently and could disagree:
+ * `text()` nulls anything over `MAX_TEXT`, and nothing was dropping the tier
+ * that had claimed it. A DOM selector that grabs a container instead of a label
+ * — a 600-character location is an ordinary way for an adapter to go wrong —
+ * produced a record with no location sitting beside a provenance saying
+ * `location: dom`.
+ *
+ * It matters because the diagnostics report reads provenance as a proxy for
+ * which fields came back, on the stated grounds that `mergeTiers` sets a field
+ * and its tier in the same step. That is true there, and here is where it
+ * stopped being true. Rather than teach the report about the exception, the
+ * exception is removed: a field this validator rejected has no tier that
+ * answered it, because as far as anything downstream can observe, nothing did.
+ */
+function provenanceFor(
+  parsed: ExtractedFields,
+  reported: unknown,
+): Record<FieldName, Tier | null> {
+  const claimed = provenance(reported)
+  for (const name of FIELD_NAMES) {
+    if (parsed[name] === null) claimed[name] = null
+  }
+
+  return claimed
 }
 
 /**
@@ -450,7 +479,22 @@ export async function findTabForDetection(detectionId: string): Promise<number |
 }
 
 /**
- * Drops a tab's detection, and says whether there was one to drop.
+ * What a tab was holding before it was forgotten.
+ *
+ * Two answers rather than one, because the callers act on them differently and
+ * a single boolean served only the first. A badge is painted from a detection,
+ * so only `detection` calls for a repaint — but the *panel* renders from either,
+ * so a broadcast is owed whenever either was dropped. Returning only the badge's
+ * answer meant a tab holding a diagnostic and no detection navigated away in
+ * silence, and the panel went on offering a report about the page it had left.
+ */
+export interface Forgotten {
+  detection: boolean
+  diagnostic: boolean
+}
+
+/**
+ * Drops whatever a tab was holding, and says what that was.
  *
  * Serialized for the same reason as `recordDetection`, and against a sharper
  * failure: interleaved with a report from another tab, an unqueued delete
@@ -462,25 +506,26 @@ export async function findTabForDetection(detectionId: string): Promise<number |
  * only tabs showing a posting are among them, so "was this tab one of ours" is
  * the cheapest possible filter and it is already answered here.
  */
-export function forgetTab(tabId: number): Promise<boolean> {
+export function forgetTab(tabId: number): Promise<Forgotten> {
   return serialized(async () => {
     const key = String(tabId)
 
-    // Cleared alongside, and unconditionally: a failed parse is a claim about
-    // the page the tab *was* showing, and a tab that has navigated away has
-    // made it false. It does not affect the answer below — a badge is painted
-    // from a detection, and there was never one here to repaint.
+    // Cleared alongside: a failed parse is a claim about the page the tab *was*
+    // showing, and a tab that has navigated away has made it false.
     const failed = await readFailedCache()
-    if (key in failed) {
+    const hadDiagnostic = key in failed
+    if (hadDiagnostic) {
       delete failed[key]
       await chrome.storage.session.set({ [FAILED_KEY]: failed })
     }
 
     const cache = await readCache()
-    if (!(key in cache)) return false
+    const hadDetection = key in cache
+    if (hadDetection) {
+      delete cache[key]
+      await writeCache(cache)
+    }
 
-    delete cache[key]
-    await writeCache(cache)
-    return true
+    return { detection: hadDetection, diagnostic: hadDiagnostic }
   })
 }

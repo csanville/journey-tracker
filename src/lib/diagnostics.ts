@@ -98,7 +98,14 @@ export interface DiagnosticsInput {
    * ever learns are the ones a content script reported about itself.
    */
   url: string | null
-  status: StatusReport
+  /**
+   * What the worker said about itself, or `null` when it did not answer.
+   *
+   * Nullable because a worker that does not respond is the single most
+   * report-worthy state there is, and gating the report on a successful `status`
+   * round trip made it the one state that could not produce one.
+   */
+  status: StatusReport | null
   parse: PageParse
 }
 
@@ -159,7 +166,8 @@ export interface DiagnosticsReport {
   /** `null` when the page could not be read; `unreachable` then says why. */
   parse: ParseFacts | null
   unreachable: UnreachableReason | null
-  install: InstallFacts
+  /** `null` when the service worker did not answer, which is itself the report. */
+  install: InstallFacts | null
 }
 
 /**
@@ -213,18 +221,21 @@ export function buildReport(input: DiagnosticsInput): DiagnosticsReport {
         }
       : null,
     unreachable: input.parse.read ? null : input.parse.reason,
-    install: {
-      schemaVersion: status.schemaVersion,
-      dataVersion: status.dataVersion,
-      migrationInProgress: status.migrationInProgress,
-      evictionSafe: status.evictionSafe,
-      storagePersisted: status.storagePersisted,
-      storageUnlimited: status.storageUnlimited,
-      postingCount: status.postingCount,
-      snapshotCount: status.snapshotCount,
-      usageBytes: status.usageBytes,
-      quotaBytes: status.quotaBytes,
-    },
+    install:
+      status === null
+        ? null
+        : {
+            schemaVersion: status.schemaVersion,
+            dataVersion: status.dataVersion,
+            migrationInProgress: status.migrationInProgress,
+            evictionSafe: status.evictionSafe,
+            storagePersisted: status.storagePersisted,
+            storageUnlimited: status.storageUnlimited,
+            postingCount: status.postingCount,
+            snapshotCount: status.snapshotCount,
+            usageBytes: status.usageBytes,
+            quotaBytes: status.quotaBytes,
+          },
   }
 }
 
@@ -283,6 +294,39 @@ function line(label: string, value: string): string {
  * without a renderer and does not assume one — wrapping it in a code fence is
  * the pasting user's call, and a fence pasted into a plain textarea is noise.
  */
+/**
+ * What the worker said about itself, or the fact that it said nothing.
+ *
+ * A missing install is not a gap in the report — it *is* the report. "The
+ * service worker did not answer" is the most useful single line this file can
+ * produce, and the version that gated the whole section on a successful `status`
+ * round trip printed nothing at all in exactly that case.
+ */
+function installRows(install: InstallFacts | null): string[] {
+  if (install === null) {
+    return [line('worker', 'no answer — status could not be read')]
+  }
+
+  return [
+    line('worker', 'responding'),
+    line(
+      'schema',
+      `v${install.schemaVersion}, data at v${install.dataVersion}${
+        install.migrationInProgress ? ', migrating' : ''
+      }`,
+    ),
+    line('storage', storageLine(install)),
+    line('records', `${install.postingCount} postings, ${install.snapshotCount} snapshots`),
+    // The origin's total, not the snapshot store's — see `readStorageUsage`.
+    // Reported next to the snapshot count because that pair is what decision 6's
+    // open question is decided on.
+    line(
+      'on disk',
+      `${formatBytes(install.usageBytes)} of ${formatBytes(install.quotaBytes)}`,
+    ),
+  ]
+}
+
 export function formatReport(report: DiagnosticsReport): string {
   const rows: string[] = [
     `JourneyTracker diagnostics · ${new Date(report.at).toISOString()}`,
@@ -294,24 +338,7 @@ export function formatReport(report: DiagnosticsReport): string {
         : `${report.page.host} (${report.page.scheme ?? '?'})`,
     ),
     line('extension', report.extensionVersion),
-    line(
-      'schema',
-      `v${report.install.schemaVersion}, data at v${report.install.dataVersion}${
-        report.install.migrationInProgress ? ', migrating' : ''
-      }`,
-    ),
-    line('storage', storageLine(report.install)),
-    line(
-      'records',
-      `${report.install.postingCount} postings, ${report.install.snapshotCount} snapshots`,
-    ),
-    // The origin's total, not the snapshot store's — see `readStorageUsage`.
-    // Reported next to the snapshot count because that pair is what decision 6's
-    // open question is decided on.
-    line(
-      'on disk',
-      `${formatBytes(report.install.usageBytes)} of ${formatBytes(report.install.quotaBytes)}`,
-    ),
+    ...installRows(report.install),
     '',
   ]
 

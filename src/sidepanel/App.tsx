@@ -490,14 +490,15 @@ export function App() {
           </Row>
         </dl>
 
-        {status && (
-          <ReportToSend
-            status={status}
-            detection={detection}
-            diagnostic={diagnostic}
-            extensionVersion={version}
-          />
-        )}
+        {/* Not gated on `status`. A worker that does not answer is the single
+            most report-worthy state there is, and gating this on a successful
+            round trip made it the one state that could produce no report. */}
+        <ReportToSend
+          status={status}
+          detection={detection}
+          diagnostic={diagnostic}
+          extensionVersion={version}
+        />
       </details>
 
       <footer className="panel__foot">JourneyTracker {version}</footer>
@@ -591,7 +592,7 @@ function ReportToSend({
   diagnostic,
   extensionVersion,
 }: {
-  status: StatusReport
+  status: StatusReport | null
   detection: DetectionSummary | null
   diagnostic: CachedFailedParse | null
   extensionVersion: string
@@ -601,17 +602,26 @@ function ReportToSend({
   /**
    * Stamped when the facts change, not on every render.
    *
-   * `Date.now()` in the render body would move the timestamp line on every
-   * repaint — a preview that never sits still, and a `<pre>` whose content
-   * differs from the string copied a moment later. The memo makes `at` the
-   * moment the observation was taken, which is what the line claims to be.
+   * `Date.now()` in the render body would move the timestamp on every repaint —
+   * a preview that never sits still, and a `<pre>` whose content differs from
+   * the string copied a moment later.
+   *
+   * Keyed on the report's own *content* rather than on the objects it was built
+   * from, which review found to be the same bug wearing a memo. `refreshDetection`
+   * runs on every window focus and always sets a freshly deserialized
+   * `detection`, so identity deps changed when nothing had: clicking into the
+   * panel to select the text — which is exactly what the clipboard-refused
+   * message tells you to do — re-stamped the timestamp and dropped the
+   * selection mid-drag. Building the report twice is cheap; it is a dozen field
+   * copies.
    */
+  const facts = panelReport({ status, detection, diagnostic, extensionVersion, at: 0 })
+  const signature = JSON.stringify(facts)
+
   const text = useMemo(
-    () =>
-      formatReport(
-        panelReport({ status, detection, diagnostic, extensionVersion, at: Date.now() }),
-      ),
-    [status, detection, diagnostic, extensionVersion],
+    () => formatReport({ ...facts, at: Date.now() }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [signature],
   )
 
   // A new report is a different thing to have copied, so the acknowledgement

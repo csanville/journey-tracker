@@ -111,6 +111,53 @@ describe('panelReport', () => {
     expect(report.page.host).toBe('job-boards.greenhouse.io')
   })
 
+  /**
+   * The case review found. A matched board that navigates without a page load —
+   * Ashby is one — never fires `onUpdated`, so `forgetTab` never runs: a
+   * detection for posting A survives while the user clicks through to posting B
+   * and right-clicks it. Preferring the detection unconditionally described A,
+   * with `offered yes`, on the exact page being reported as unreadable.
+   */
+  it('prefers the newer entry when the two describe different pages', () => {
+    const report = panelReport(
+      anInput({
+        detection: aDetection({ capturedAt: 1_000 }),
+        diagnostic: aDiagnostic({ capturedAt: 2_000 }),
+      }),
+    )
+
+    expect(report.parse?.adapterVersion).toBe('generic@1')
+    expect(report.page.host).toBe('careers.acme.com')
+  })
+
+  it('keeps the detection when it is the newer of two different pages', () => {
+    const report = panelReport(
+      anInput({
+        detection: aDetection({ capturedAt: 2_000 }),
+        diagnostic: aDiagnostic({ capturedAt: 1_000 }),
+      }),
+    )
+
+    expect(report.parse?.adapterVersion).toBe('greenhouse@3')
+  })
+
+  /**
+   * The URL and the parse have to come from the *same* entry. Taking the host
+   * from one and the adapter from the other is how a report names one page and
+   * describes another, which is worse than either alone.
+   */
+  it('takes the host and the parse from one entry, never a blend', () => {
+    const report = panelReport(
+      anInput({
+        detection: aDetection({ capturedAt: 1_000 }),
+        diagnostic: aDiagnostic({ capturedAt: 2_000 }),
+      }),
+    )
+
+    expect(report.page.host).toBe('careers.acme.com')
+    expect(report.parse?.source).toBe('generic')
+  })
+
   it('says nothing has read the page when neither reported', () => {
     const report = panelReport(anInput())
 
@@ -127,6 +174,27 @@ describe('panelReport', () => {
 
     expect(text).toContain('41 postings')
     expect(text).toContain('v3, data at v3')
+  })
+
+  /**
+   * The state a user would most want to paste into an issue, and the one the
+   * first version could not produce a report for at all — the section was gated
+   * on a successful `status` round trip.
+   */
+  it('reports the worker not answering, rather than reporting nothing', () => {
+    const text = formatReport(panelReport(anInput({ status: null })))
+
+    expect(text).toContain('worker     no answer — status could not be read')
+    expect(text).toContain('JourneyTracker diagnostics')
+  })
+
+  it('still describes the page when the worker did not answer', () => {
+    const text = formatReport(
+      panelReport(anInput({ status: null, diagnostic: aDiagnostic() })),
+    )
+
+    expect(text).toContain('careers.acme.com')
+    expect(text).toContain('generic@1')
   })
 
   /**

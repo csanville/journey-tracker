@@ -389,6 +389,43 @@ describe('the report you can send', () => {
     return writeText
   }
 
+  /**
+   * Seeds a detection for the tab the panel sits beside.
+   *
+   * Load-bearing for the churn tests below, and the reason the first version of
+   * them was vacuous: with no detection, every refresh resolves `null`,
+   * `setDetection(null)` is a no-op React bails out of, and no identity ever
+   * changes. The churn needs a value that comes back as a new object each time,
+   * which is exactly what a real detection is.
+   */
+  async function seedDetection(): Promise<void> {
+    const report: DetectionReport = {
+      detectionId: 'det-churn',
+      url: 'https://jobs.lever.co/acme/00000000-0000-4000-8000-000000000000',
+      source: 'lever',
+      adapterVersion: 'lever@1',
+      confidence: 0.7,
+      fields: {
+        company: 'Acme',
+        jobTitle: 'Staff Engineer',
+        location: 'Berlin',
+        workMode: 'hybrid',
+        atsReqId: null,
+        salary: null,
+      },
+      provenance: {
+        company: 'jsonld',
+        jobTitle: 'jsonld',
+        location: 'jsonld',
+        workMode: 'dom',
+        atsReqId: null,
+        salary: null,
+      },
+      snapshot: { trimmedSource: '<html>the posting</html>', truncated: false },
+    }
+    await handleRequest(db, { kind: 'detection/report', report }, { tabId: 7 })
+  }
+
   function reportText(el: HTMLElement): string {
     const pre = el.querySelector('.report__text')
     if (!pre) throw new Error('no report rendered')
@@ -413,6 +450,22 @@ describe('the report you can send', () => {
 
     expect(writeText).toHaveBeenCalledWith(shown)
     expect(el.textContent).toContain('Copied')
+  })
+
+  /**
+   * The state a bug report is most likely to be about, and the one the first
+   * version rendered no report for at all — the section was gated on `status`.
+   */
+  it('still renders a report when the service worker does not answer', async () => {
+    stubClipboard()
+    vi.mocked(chrome.runtime.sendMessage).mockRejectedValue(
+      new Error('Could not establish connection'),
+    )
+
+    const el = await render()
+
+    expect(reportText(el)).toContain('worker     no answer')
+    expect(button(el, 'Copy report')).toBeTruthy()
   })
 
   it('says nothing has read the page when the tab never reported', async () => {
@@ -449,31 +502,7 @@ describe('the report you can send', () => {
 
   it('carries no field value out of a page that parsed', async () => {
     stubClipboard()
-    const report: DetectionReport = {
-      detectionId: 'det-lever',
-      url: 'https://jobs.lever.co/acme/00000000-0000-4000-8000-000000000000',
-      source: 'lever',
-      adapterVersion: 'lever@1',
-      confidence: 0.7,
-      fields: {
-        company: 'Acme',
-        jobTitle: 'Staff Engineer',
-        location: 'Berlin',
-        workMode: 'hybrid',
-        atsReqId: null,
-        salary: null,
-      },
-      provenance: {
-        company: 'jsonld',
-        jobTitle: 'jsonld',
-        location: 'jsonld',
-        workMode: 'dom',
-        atsReqId: null,
-        salary: null,
-      },
-      snapshot: { trimmedSource: '<html>the posting</html>', truncated: false },
-    }
-    await handleRequest(db, { kind: 'detection/report', report }, { tabId: 7 })
+    await seedDetection()
 
     const el = await render()
     const shown = reportText(el)
@@ -484,6 +513,48 @@ describe('the report you can send', () => {
     expect(shown).not.toContain('Acme')
     expect(shown).not.toContain('Staff Engineer')
     expect(shown).not.toContain('00000000-0000-4000-8000-000000000000')
+  })
+
+  /**
+   * The churn review found. `refreshDetection` runs on every window focus and
+   * always sets a freshly deserialized `detection`, so a memo keyed on object
+   * identity recomputed when nothing had changed — moving the timestamp and
+   * resetting the copied state.
+   *
+   * It bites hardest in the one flow that asks the user to interact with the
+   * text: the clipboard refuses, they are told to select it by hand, and
+   * clicking into the panel to do so fires the focus that wipes the selection
+   * and the message together.
+   */
+  it('leaves the report alone when a focus refresh changes nothing', async () => {
+    stubClipboard()
+    await seedDetection()
+    const el = await render()
+
+    const before = reportText(el)
+
+    await act(async () => {
+      globalThis.dispatchEvent(new Event('focus'))
+    })
+    await settle()
+
+    expect(reportText(el)).toBe(before)
+  })
+
+  it('keeps a copy acknowledgement across a focus refresh', async () => {
+    stubClipboard()
+    await seedDetection()
+    const el = await render()
+
+    await click(button(el, 'Copy report'))
+    expect(el.textContent).toContain('Copied')
+
+    await act(async () => {
+      globalThis.dispatchEvent(new Event('focus'))
+    })
+    await settle()
+
+    expect(el.textContent).toContain('Copied')
   })
 
   /**

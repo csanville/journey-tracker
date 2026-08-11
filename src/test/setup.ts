@@ -5,8 +5,15 @@ import { beforeEach, vi } from 'vitest'
  * A minimal in-memory `chrome.storage`.
  *
  * Hand-written rather than pulled from a mocking library because the surface
- * actually used is tiny, and `onChanged` fires for real — several modules watch
- * it, and a stub that skipped it would quietly make their tests vacuous.
+ * actually used is tiny.
+ *
+ * It has no `onChanged`. It used to, with a real listener set and change events
+ * emitted from `set` and `remove`, because `waitForMigration` was built on them.
+ * Phase 11 deleted that function and nothing in `src/` subscribes to
+ * `chrome.storage.onChanged` any more, so the emit machinery went with it — a
+ * faithful stub of an API nothing calls is the same "in case one might" the rest
+ * of this codebase declines. Anything that grows a subscription brings it back,
+ * with the test that needs it.
  *
  * Two areas, because they hold different things for different reasons. `local`
  * is settings and the migration flag: durable, and the one store a migration is
@@ -14,14 +21,7 @@ import { beforeEach, vi } from 'vitest'
  * page-derived, never written to disk, gone when the browser closes (see
  * `lib/detection.ts`).
  */
-type Listener = (
-  changes: Record<string, chrome.storage.StorageChange>,
-  areaName: string,
-) => void
-
-type Emit = (changes: Record<string, chrome.storage.StorageChange>, area: string) => void
-
-function createArea(name: string, emit: Emit) {
+function createArea() {
   let store: Record<string, unknown> = {}
 
   return {
@@ -37,22 +37,10 @@ function createArea(name: string, emit: Emit) {
         )
       },
       async set(items: Record<string, unknown>) {
-        const changes: Record<string, chrome.storage.StorageChange> = {}
-        for (const [key, newValue] of Object.entries(items)) {
-          changes[key] = { oldValue: store[key], newValue }
-          store[key] = newValue
-        }
-        emit(changes, name)
+        for (const [key, newValue] of Object.entries(items)) store[key] = newValue
       },
       async remove(keys: string | string[]) {
-        const doomed = Array.isArray(keys) ? keys : [keys]
-        const changes: Record<string, chrome.storage.StorageChange> = {}
-        for (const key of doomed) {
-          if (!(key in store)) continue
-          changes[key] = { oldValue: store[key], newValue: undefined }
-          delete store[key]
-        }
-        emit(changes, name)
+        for (const key of Array.isArray(keys) ? keys : [keys]) delete store[key]
       },
       async clear() {
         store = {}
@@ -62,27 +50,16 @@ function createArea(name: string, emit: Emit) {
 }
 
 function createStorageStub() {
-  const listeners = new Set<Listener>()
-
-  const emit: Emit = (changes, area) => {
-    for (const listener of [...listeners]) listener(changes, area)
-  }
-
-  const local = createArea('local', emit)
-  const session = createArea('session', emit)
+  const local = createArea()
+  const session = createArea()
 
   return {
     reset() {
       local.clear()
       session.clear()
-      listeners.clear()
     },
     local: local.api,
     session: session.api,
-    onChanged: {
-      addListener: (listener: Listener) => listeners.add(listener),
-      removeListener: (listener: Listener) => listeners.delete(listener),
-    },
   }
 }
 
@@ -162,7 +139,6 @@ vi.stubGlobal('chrome', {
   storage: {
     local: storage.local,
     session: storage.session,
-    onChanged: storage.onChanged,
   },
   runtime,
   tabs,

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { FIELD_NAMES } from './extract/types'
 import {
   MAX_CACHED_TABS,
   findSnapshot,
@@ -188,9 +189,9 @@ describe('the detection cache', () => {
     // the user loads a news article.
     await recordDetection(1, aReport(), 1000)
 
-    expect(await forgetTab(1)).toBe(true)
-    expect(await forgetTab(1)).toBe(false)
-    expect(await forgetTab(999)).toBe(false)
+    expect(await forgetTab(1)).toEqual({ detection: true, diagnostic: false })
+    expect(await forgetTab(1)).toEqual({ detection: false, diagnostic: false })
+    expect(await forgetTab(999)).toEqual({ detection: false, diagnostic: false })
   })
 
   it('keeps every tab when a full cache is written concurrently', async () => {
@@ -225,12 +226,58 @@ describe('the detection cache', () => {
 
   it('forgets a tab that closed', async () => {
     await recordDetection(7, aReport(), 1000)
-    await forgetTab(7)
+    await expect(forgetTab(7)).resolves.toMatchObject({ detection: true })
 
     expect(await getDetectionSummary(7)).toBeNull()
     // And forgetting a tab that was never there is not an error — it is just a
-    // "no".
-    await expect(forgetTab(99)).resolves.toBe(false)
+    // "no" to both halves.
+    await expect(forgetTab(99)).resolves.toEqual({ detection: false, diagnostic: false })
+  })
+})
+
+describe('provenance and fields staying in step', () => {
+  /**
+   * The report reads provenance as a proxy for which fields came back, on the
+   * grounds that `mergeTiers` sets a field and its tier in the same step. True
+   * there — and this validator was where it stopped being true, because `text()`
+   * nulls anything over `MAX_TEXT` while the tier survived untouched.
+   */
+  it('drops the tier for a field it rejected as too long', () => {
+    const report = sanitizeReport({
+      ...aReport(),
+      fields: { ...aReport().fields, location: 'x'.repeat(400) },
+    })
+
+    // A DOM selector that grabbed a container instead of a label. The record has
+    // no location, so nothing may claim a tier answered one.
+    expect(report?.fields.location).toBeNull()
+    expect(report?.provenance.location).toBeNull()
+  })
+
+  it('keeps the tier for every field it accepted', () => {
+    const report = sanitizeReport(aReport())
+
+    expect(report?.provenance.company).toBe('jsonld')
+    expect(report?.provenance.jobTitle).toBe('jsonld')
+  })
+
+  /**
+   * The invariant stated as itself, over every field at once: after this
+   * validator, a field is non-null exactly when its tier is.
+   */
+  it('leaves no field non-null without a tier, or a tier without a field', () => {
+    const report = sanitizeReport({
+      ...aReport(),
+      fields: {
+        ...aReport().fields,
+        location: 'y'.repeat(400),
+        atsReqId: null,
+      },
+    })
+
+    for (const name of FIELD_NAMES) {
+      expect(report!.fields[name] === null).toBe(report!.provenance[name] === null)
+    }
   })
 })
 
@@ -321,16 +368,27 @@ describe('a read that found nothing', () => {
   })
 
   /**
-   * `forgetTab`'s answer drives a badge repaint and a broadcast, and a blank
-   * read never painted a badge. Reporting one as a drop would wake the worker
-   * into work with nothing to do on every navigation away from an unreadable
-   * page.
+   * The two halves are reported separately because the callers act on them
+   * differently: a badge is painted from a detection, so only that half calls
+   * for a repaint — but the panel renders from either, so a broadcast is owed
+   * whenever either was dropped.
+   *
+   * A single boolean served only the badge, and review found what it cost: a tab
+   * holding a diagnostic and no detection navigated away in silence, and the
+   * panel went on offering a report about the page it had left.
    */
-  it('does not on its own make forgetTab claim it dropped something', async () => {
+  it('reports dropping a blank read even when there was no detection', async () => {
     await recordFailedParse(7, aFailedParse(), 1000)
 
-    await expect(forgetTab(7)).resolves.toBe(false)
+    await expect(forgetTab(7)).resolves.toEqual({ detection: false, diagnostic: true })
     expect(await getFailedParse(7)).toBeNull()
+  })
+
+  it('reports both halves when the tab held both', async () => {
+    await recordDetection(7, aReport(), 1000)
+    await recordFailedParse(7, aFailedParse(), 1000)
+
+    await expect(forgetTab(7)).resolves.toEqual({ detection: true, diagnostic: true })
   })
 
   it('evicts the oldest once more tabs than the bound have reported', async () => {

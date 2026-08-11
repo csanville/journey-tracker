@@ -21,22 +21,42 @@ import { runLadder } from './ladder'
 /** Cancels the in-flight ladder when a newer navigation supersedes it. */
 let generation = 0
 
-async function report(url: string): Promise<boolean> {
+/**
+ * What one read produced.
+ *
+ * Three outcomes rather than a boolean, because two of them are false and they
+ * mean opposite things about the page. `nothing` is the adapters declining to
+ * offer it; `undelivered` is the adapters succeeding and the *worker* being
+ * unreachable, which is the ordinary state of a torn-down MV3 worker. Collapsing
+ * them is what let a page that parsed perfectly be reported as a page that gave
+ * up nothing.
+ */
+type Attempt = 'offered' | 'nothing' | 'undelivered'
+
+async function report(url: string): Promise<Attempt> {
   const extraction = extract(document, url)
-  if (!isWorthOffering(extraction)) return false
+  if (!isWorthOffering(extraction)) return 'nothing'
 
   const { trimmedSource, truncated } = buildSnapshot(document)
 
-  await send('detection/report', {
-    report: {
-      detectionId: newId(),
-      url,
-      ...extraction,
-      snapshot: { trimmedSource, truncated },
-    },
-  })
+  try {
+    await send('detection/report', {
+      report: {
+        detectionId: newId(),
+        url,
+        ...extraction,
+        snapshot: { trimmedSource, truncated },
+      },
+    })
+  } catch (error) {
+    // Caught here rather than thrown into the ladder, which swallows a throw
+    // and would leave the caller unable to tell this apart from `nothing`. The
+    // ladder still retries: the rung reports a failure either way.
+    console.debug('[JourneyTracker] could not deliver this page', error)
+    return 'undelivered'
+  }
 
-  return true
+  return 'offered'
 }
 
 /**
@@ -83,18 +103,34 @@ export function capture(url: string, options: CaptureOptions = {}): void {
   const mine = ++generation
   const stillWanted = () => mine === generation && location.href === url
 
+  /**
+   * Whether any rung found the page worth offering, delivered or not.
+   *
+   * This, and not the ladder's own answer, is what decides whether a diagnostic
+   * is honest. `runLadder` resolves false for three different reasons — nothing
+   * found, nothing delivered, cancelled — and only the first is a page that gave
+   * up nothing. A rung that parsed the page and could not reach the worker has
+   * proved the opposite of what a diagnostic would claim.
+   */
+  let parsed = false
+
   void runLadder({
-    attempt: () => report(url),
+    attempt: async () => {
+      const outcome = await report(url)
+      if (outcome !== 'nothing') parsed = true
+
+      return outcome === 'offered'
+    },
     // Superseded by a newer navigation, or the page moved on underneath the
     // ladder. Either way the answer this would produce is about a URL that is
     // no longer the one being asked about.
     stillWanted,
   })
-    .then(async (offered) => {
-      // `runLadder` also resolves false when a newer navigation cancelled it, so
-      // `stillWanted` is re-checked: a diagnostic about a page the tab has
-      // already left is the same stale claim the ladder was cancelled to avoid.
-      if (offered || !options.reportEmpty || !stillWanted()) return
+    .then(async () => {
+      // `stillWanted` is re-checked because the ladder also resolves false when
+      // a newer navigation cancelled it: a diagnostic about a page the tab has
+      // already left is the same stale claim the cancellation exists to avoid.
+      if (parsed || !options.reportEmpty || !stillWanted()) return
 
       await reportEmptyParse(url)
     })

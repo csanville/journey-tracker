@@ -185,4 +185,39 @@ describe('when the worker cannot be reached', () => {
     // for this, and an unhandled rejection here would surface in the page.
     await expect(settle()).resolves.toBeUndefined()
   })
+
+  /**
+   * The defect review found, and the reason the test above did not catch it:
+   * asserting that nothing throws says nothing about what was *claimed*.
+   *
+   * `runLadder` resolves false when no rung found anything and also when every
+   * rung threw, and a torn-down MV3 worker makes the second ordinary. Reading
+   * that as "the page gave up nothing" reported a page that parsed perfectly as
+   * unreadable — and the diagnostic would have carried a full provenance set and
+   * printed `offered yes`, contradicting itself in the same breath.
+   */
+  it('does not call a page unreadable when it was merely undeliverable', async () => {
+    writePage('<h1>Staff Engineer</h1>')
+    givePageATitle()
+    send.mockRejectedValue(new Error('Could not establish connection'))
+
+    capture(location.href, { reportEmpty: true })
+    await settle()
+
+    // Three rungs tried to deliver a detection and failed. None of them is
+    // grounds for saying the adapters found nothing.
+    expect(kinds()).toEqual(['detection/report', 'detection/report', 'detection/report'])
+    expect(kinds()).not.toContain('diagnostic/report')
+  })
+
+  it('still reports a blank read when delivery is working', async () => {
+    writePage('<p>nothing here</p>')
+
+    capture(location.href, { reportEmpty: true })
+    await settle()
+
+    // The control for the case above: a page that really did give up nothing
+    // never reaches `send` on the detection path at all.
+    expect(kinds()).toEqual(['diagnostic/report'])
+  })
 })
