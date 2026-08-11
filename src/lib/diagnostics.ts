@@ -35,7 +35,7 @@
  * the user's, and they cannot make it on a clipboard they have not read.
  */
 
-import { FIELD_NAMES, type Extraction, type FieldName, type Tier } from './extract/types'
+import { FIELD_NAMES, type FieldName, type Tier } from './extract/types'
 import type { StatusReport } from './messages'
 
 /**
@@ -43,26 +43,61 @@ import type { StatusReport } from './messages'
  *
  * A closed set rather than the error that was caught, and that is a redaction
  * rule and not tidiness: Chrome's own injection failures read `Cannot access
- * contents of url "https://…"`, so passing the message through would put the
- * full URL into the payload by the one route that never looks like a leak.
+ * contents of url "https://…"`, so passing a message through would put the full
+ * URL into the payload by the one route that never looks like a leak.
+ *
+ * **One value, and the two that were cut are the more interesting half.** The
+ * first draft also had `restricted-page` and `no-response`, for a `chrome://`
+ * tab that refuses injection and an injection that never answered. Neither is
+ * reachable. The panel does not trigger reads — the context menu does, through
+ * the worker — so it never learns that one was refused; and the worker, having
+ * no `tabs` permission, cannot supply the URL and adapter a report needs. Both
+ * were written because they sound like things that happen, which is the same
+ * reason the panel nearly grew a button that could not work.
  */
 export type UnreachableReason =
-  /** Chrome refuses injection: `chrome://`, the Web Store, the PDF viewer. */
-  | 'restricted-page'
-  /** Injected, but nothing came back before the panel stopped waiting. */
-  | 'no-response'
+  /**
+   * Nothing has read this page: not a board the manifest matches, and nobody
+   * has right-clicked it. The ordinary state of most tabs, and not a fault.
+   */
+  'not-read'
+
+/**
+ * The part of a parse a report is allowed to see.
+ *
+ * Narrower than `Extraction` on purpose, and the narrowing is the point: there
+ * is no `fields` on it, so the builder is never handed a company name or a
+ * salary in the first place. An allowlist applied *after* the values arrive can
+ * be got wrong; a parameter that cannot carry them cannot.
+ *
+ * `Extraction`, `DetectionSummary` and `CachedFailedParse` all satisfy it
+ * structurally, which is what lets one builder serve a page that parsed and a
+ * page that did not.
+ */
+export interface ParsedPage {
+  source: string
+  adapterVersion: string
+  confidence: number
+  provenance: Record<FieldName, Tier | null>
+}
 
 /** What the adapters made of the page, or why nothing did. */
 export type PageParse =
-  { read: true; extraction: Extraction } | { read: false; reason: UnreachableReason }
+  { read: true; parse: ParsedPage } | { read: false; reason: UnreachableReason }
 
 export interface DiagnosticsInput {
   /** Supplied rather than read from the clock, so the output is a pure function. */
   at: number
   /** `chrome.runtime.getManifest().version`, read by the caller. */
   extensionVersion: string
-  /** The full URL. Reduced to a hostname *here* — see the note above. */
-  url: string
+  /**
+   * The full URL, reduced to a hostname *here* — see the note above.
+   *
+   * `null` when the extension has no URL for this tab, which is the ordinary
+   * case rather than a failure: without the `tabs` permission the only URLs it
+   * ever learns are the ones a content script reported about itself.
+   */
+  url: string | null
   status: StatusReport
   parse: PageParse
 }
@@ -128,7 +163,9 @@ export interface DiagnosticsReport {
  * that fails on a strange page is a diagnostic missing at exactly the moment it
  * was wanted.
  */
-function redactUrl(url: string): PageFacts {
+function redactUrl(url: string | null): PageFacts {
+  if (url === null) return { host: null, scheme: null }
+
   try {
     const parsed = new URL(url)
     return { host: parsed.hostname, scheme: parsed.protocol }
@@ -162,10 +199,10 @@ export function buildReport(input: DiagnosticsInput): DiagnosticsReport {
     page: redactUrl(input.url),
     parse: input.parse.read
       ? {
-          source: input.parse.extraction.source,
-          adapterVersion: input.parse.extraction.adapterVersion,
-          confidence: input.parse.extraction.confidence,
-          provenance: redactProvenance(input.parse.extraction.provenance),
+          source: input.parse.parse.source,
+          adapterVersion: input.parse.parse.adapterVersion,
+          confidence: input.parse.parse.confidence,
+          provenance: redactProvenance(input.parse.parse.provenance),
         }
       : null,
     unreachable: input.parse.read ? null : input.parse.reason,
@@ -217,7 +254,12 @@ export function formatReport(report: DiagnosticsReport): string {
   const rows: string[] = [
     `JourneyTracker diagnostics · ${new Date(report.at).toISOString()}`,
     '',
-    line('page', `${report.page.host ?? 'unreadable URL'} (${report.page.scheme ?? '?'})`),
+    line(
+      'page',
+      report.page.host === null
+        ? 'not reported'
+        : `${report.page.host} (${report.page.scheme ?? '?'})`,
+    ),
     line('extension', report.extensionVersion),
     line(
       'schema',

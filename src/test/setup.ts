@@ -5,9 +5,8 @@ import { beforeEach, vi } from 'vitest'
  * A minimal in-memory `chrome.storage`.
  *
  * Hand-written rather than pulled from a mocking library because the surface
- * actually used is tiny, and `onChanged` needs to fire for real — the migration
- * guard in `waitForMigration` is built on it, so a stub that skipped it would
- * quietly make those tests vacuous.
+ * actually used is tiny, and `onChanged` fires for real — several modules watch
+ * it, and a stub that skipped it would quietly make their tests vacuous.
  *
  * Two areas, because they hold different things for different reasons. `local`
  * is settings and the migration flag: durable, and the one store a migration is

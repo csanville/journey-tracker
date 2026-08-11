@@ -41,7 +41,6 @@ export interface RequestMap {
     result: DuplicateMatch | null
   }
   'snapshot/put': { payload: { snapshot: Snapshot }; result: { postingId: string } }
-  'snapshot/get': { payload: { postingId: string }; result: Snapshot | null }
   /**
    * Which postings have a snapshot at all, so a `full` export can fetch them in
    * batches instead of asking about every record and getting mostly nothing.

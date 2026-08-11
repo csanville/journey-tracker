@@ -5,6 +5,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { JourneyTrackerDb } from '../lib/db'
 import type { DetectionReport } from '../lib/detection'
 import { handleRequest } from '../lib/handler'
+import { recordFailedParse } from '../lib/detection'
 import { recordPending } from '../lib/pending'
 import { upsertPosting } from '../lib/repository'
 import { aPosting } from '../test/factories'
@@ -370,5 +371,134 @@ describe('the revisit banner and a deleted record', () => {
 
     expect(await db.postings.count()).toBe(0)
     expect(el.textContent).not.toContain('You looked at this on')
+  })
+})
+
+describe('the report you can send', () => {
+  /**
+   * jsdom has no clipboard. Defined per test rather than in `setup.ts` because
+   * this is the only surface that writes to one, and the refusal case below
+   * needs to swap the implementation.
+   */
+  function stubClipboard(writeText = vi.fn(async () => undefined)) {
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText },
+      configurable: true,
+    })
+
+    return writeText
+  }
+
+  function reportText(el: HTMLElement): string {
+    const pre = el.querySelector('.report__text')
+    if (!pre) throw new Error('no report rendered')
+
+    return pre.textContent ?? ''
+  }
+
+  /**
+   * The whole of decision 1's amendment. The user is being asked to judge what
+   * they are about to paste into a public issue, and they can only do that if
+   * the text on screen *is* the text on the clipboard — not a summary of it and
+   * not a sample. One string, used twice.
+   */
+  it('copies exactly the text it showed', async () => {
+    const writeText = stubClipboard()
+    const el = await render()
+
+    const shown = reportText(el)
+    expect(shown).toContain('JourneyTracker diagnostics')
+
+    await click(button(el, 'Copy report'))
+
+    expect(writeText).toHaveBeenCalledWith(shown)
+    expect(el.textContent).toContain('Copied')
+  })
+
+  it('says nothing has read the page when the tab never reported', async () => {
+    stubClipboard()
+    const el = await render()
+
+    expect(reportText(el)).toContain('parse      none — not-read')
+    expect(reportText(el)).toContain('page       not reported')
+  })
+
+  it('describes a blank read when the tab reported one', async () => {
+    stubClipboard()
+    await recordFailedParse(7, {
+      url: 'https://careers.acme.com/openings/42',
+      source: 'generic',
+      adapterVersion: 'generic@1',
+      confidence: 0,
+      provenance: {
+        company: null,
+        jobTitle: null,
+        location: null,
+        workMode: null,
+        atsReqId: null,
+        salary: null,
+      },
+    })
+
+    const el = await render()
+
+    expect(reportText(el)).toContain('generic@1')
+    expect(reportText(el)).toContain('careers.acme.com')
+    expect(reportText(el)).toContain('offered    no — needs a company or a job title')
+  })
+
+  it('carries no field value out of a page that parsed', async () => {
+    stubClipboard()
+    const report: DetectionReport = {
+      detectionId: 'det-lever',
+      url: 'https://jobs.lever.co/acme/00000000-0000-4000-8000-000000000000',
+      source: 'lever',
+      adapterVersion: 'lever@1',
+      confidence: 0.7,
+      fields: {
+        company: 'Acme',
+        jobTitle: 'Staff Engineer',
+        location: 'Berlin',
+        workMode: 'hybrid',
+        atsReqId: null,
+        salary: null,
+      },
+      provenance: {
+        company: 'jsonld',
+        jobTitle: 'jsonld',
+        location: 'jsonld',
+        workMode: 'dom',
+        atsReqId: null,
+        salary: null,
+      },
+      snapshot: { trimmedSource: '<html>the posting</html>', truncated: false },
+    }
+    await handleRequest(db, { kind: 'detection/report', report }, { tabId: 7 })
+
+    const el = await render()
+    const shown = reportText(el)
+
+    // The panel holds the whole summary, fields included, and this is the one
+    // place a real render could put them on a clipboard.
+    expect(shown).toContain('lever@1')
+    expect(shown).not.toContain('Acme')
+    expect(shown).not.toContain('Staff Engineer')
+    expect(shown).not.toContain('00000000-0000-4000-8000-000000000000')
+  })
+
+  /**
+   * Chrome refuses the clipboard when the document is not focused, which a side
+   * panel loses easily. A button that looked like it worked would be the worse
+   * failure: the text is on screen and can be selected by hand, so saying so is
+   * an instruction rather than an apology.
+   */
+  it('says so when the clipboard refuses, rather than claiming it copied', async () => {
+    stubClipboard(vi.fn(async () => Promise.reject(new Error('Document is not focused'))))
+    const el = await render()
+
+    await click(button(el, 'Copy report'))
+
+    expect(el.textContent).toContain('Could not reach the clipboard')
+    expect(el.textContent).not.toContain('Copied')
   })
 })

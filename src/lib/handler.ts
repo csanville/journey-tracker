@@ -97,8 +97,6 @@ async function dispatch(
     case 'snapshot/put':
       await repo.putSnapshot(db, request.snapshot)
       return { postingId: request.snapshot.postingId }
-    case 'snapshot/get':
-      return repo.getSnapshot(db, request.postingId)
     case 'snapshot/ids':
       return repo.listSnapshotIds(db)
     case 'snapshot/list':

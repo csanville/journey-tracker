@@ -1,5 +1,5 @@
 import { send } from '../lib/client'
-import type { DetectionSummary } from '../lib/detection'
+import type { CachedFailedParse, DetectionSummary } from '../lib/detection'
 
 /**
  * Asking the worker what is on the tab this panel is sitting next to.
@@ -19,4 +19,21 @@ export async function activeTabDetection(): Promise<DetectionSummary | null> {
   if (tab?.id === undefined) return null
 
   return send('detection/get', { tabId: tab.id })
+}
+
+/**
+ * Why the tab this panel sits beside gave up nothing, or `null` if it never
+ * said.
+ *
+ * Asked only when `activeTabDetection` came back empty, which is not merely an
+ * optimisation: a failed parse and a detection can both be held for one tab —
+ * a board that renders late fails one read and succeeds the next — and the
+ * detection is the better answer whenever there is one. Not asking is how that
+ * preference is expressed, rather than asking and then discarding.
+ */
+export async function activeTabDiagnostic(): Promise<CachedFailedParse | null> {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
+  if (tab?.id === undefined) return null
+
+  return send('diagnostic/get', { tabId: tab.id })
 }

@@ -4,6 +4,7 @@ import type { DetectionReport, FailedParseReport } from './detection'
 import { handleRequest } from './handler'
 import { allowedFromContentScript, type Request } from './messages'
 import { readPending, recordPending } from './pending'
+import * as repo from './repository'
 import { SNAPSHOT_RETENTION } from './repository'
 import { patchSettings, readSettings } from './settings'
 import { SCHEMA_VERSION } from './types'
@@ -172,12 +173,11 @@ describe('detection', () => {
     const posting = aPosting()
     await handleRequest(db, { kind: 'posting/upsert', posting, detectionId: 'det-1' })
 
-    const snapshot = await handleRequest(db, {
-      kind: 'snapshot/get',
-      postingId: posting.id,
-    })
-
-    expect(snapshot.ok && snapshot.data).toMatchObject({
+    // Read through the repository rather than a message. `snapshot/get` was a
+    // request kind nothing ever sent, and phase 11 deleted it with the re-parse
+    // it existed for; what is being asserted here is that the worker *wrote* the
+    // snapshot, which the store answers directly.
+    expect(await repo.getSnapshot(db, posting.id)).toMatchObject({
       postingId: posting.id,
       adapterVersion: 'lever@1',
       trimmedSource: '<html>the posting</html>',
@@ -199,11 +199,7 @@ describe('detection', () => {
     })
 
     expect(response.ok).toBe(true)
-    const snapshot = await handleRequest(db, {
-      kind: 'snapshot/get',
-      postingId: posting.id,
-    })
-    expect(snapshot.ok && snapshot.data).toBeNull()
+    expect(await repo.getSnapshot(db, posting.id)).toBeNull()
   })
 
   it('leaves a hand-typed record without a snapshot', async () => {
@@ -212,11 +208,7 @@ describe('detection', () => {
 
     await handleRequest(db, { kind: 'posting/upsert', posting })
 
-    const snapshot = await handleRequest(db, {
-      kind: 'snapshot/get',
-      postingId: posting.id,
-    })
-    expect(snapshot.ok && snapshot.data).toBeNull()
+    expect(await repo.getSnapshot(db, posting.id)).toBeNull()
   })
 })
 

@@ -80,7 +80,7 @@ function anInput(overrides: Partial<DiagnosticsInput> = {}): DiagnosticsInput {
     extensionVersion: '0.0.1',
     url: SECRET_URL,
     status: aStatus(),
-    parse: { read: true, extraction: anExtraction() },
+    parse: { read: true, parse: anExtraction() },
     ...overrides,
   }
 }
@@ -122,9 +122,7 @@ describe('redaction', () => {
     } as Record<FieldName, Tier | null>
 
     const text = formatReport(
-      buildReport(
-        anInput({ parse: { read: true, extraction: anExtraction({ provenance }) } }),
-      ),
+      buildReport(anInput({ parse: { read: true, parse: anExtraction({ provenance }) } })),
     )
 
     for (const secret of ALL_SECRETS) {
@@ -147,7 +145,19 @@ describe('redaction', () => {
     const report = buildReport(anInput({ url: 'not a url at all' }))
 
     expect(report.page).toEqual({ host: null, scheme: null })
-    expect(formatReport(report)).toContain('unreadable URL')
+    expect(formatReport(report)).toContain('page       not reported')
+  })
+
+  it('says nothing about the page when no URL was ever reported', () => {
+    // The ordinary state of a tab: not a matched board, never right-clicked.
+    // Without the `tabs` permission the extension has no URL to redact, and
+    // claiming one would be worse than saying so.
+    const report = buildReport(
+      anInput({ url: null, parse: { read: false, reason: 'not-read' } }),
+    )
+
+    expect(report.page).toEqual({ host: null, scheme: null })
+    expect(formatReport(report)).toContain('page       not reported')
   })
 
   it('keeps the scheme, which is what explains a restricted page', () => {
@@ -163,7 +173,7 @@ describe('redaction', () => {
     ;(rogue.provenance as Record<string, unknown>).recruiterEmail = SECRET.company
 
     const serialized = JSON.stringify(
-      buildReport(anInput({ parse: { read: true, extraction: rogue } })),
+      buildReport(anInput({ parse: { read: true, parse: rogue } })),
     )
 
     expect(serialized).not.toContain('recruiterEmail')
@@ -197,9 +207,7 @@ describe('what the report says', () => {
     } as Record<FieldName, Tier | null>
 
     const text = formatReport(
-      buildReport(
-        anInput({ parse: { read: true, extraction: anExtraction({ provenance }) } }),
-      ),
+      buildReport(anInput({ parse: { read: true, parse: anExtraction({ provenance }) } })),
     )
 
     expect(text).toContain('offered    yes')
@@ -221,9 +229,7 @@ describe('what the report says', () => {
     } as Record<FieldName, Tier | null>
 
     const text = formatReport(
-      buildReport(
-        anInput({ parse: { read: true, extraction: anExtraction({ provenance }) } }),
-      ),
+      buildReport(anInput({ parse: { read: true, parse: anExtraction({ provenance }) } })),
     )
 
     expect(text).toContain('offered    no — needs a company or a job title')
@@ -231,14 +237,14 @@ describe('what the report says', () => {
   })
 
   it('reports an unreachable page with a reason and no parse block', () => {
-    const parse: PageParse = { read: false, reason: 'restricted-page' }
+    const parse: PageParse = { read: false, reason: 'not-read' }
     const report = buildReport(anInput({ parse }))
 
     expect(report.parse).toBeNull()
-    expect(report.unreachable).toBe('restricted-page')
+    expect(report.unreachable).toBe('not-read')
 
     const text = formatReport(report)
-    expect(text).toContain('parse      none — restricted-page')
+    expect(text).toContain('parse      none — not-read')
     // The install half still has to be there: "is this even a healthy install"
     // is the first thing to rule out, and it is the half that survives a page
     // that could not be touched.

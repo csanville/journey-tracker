@@ -611,6 +611,61 @@ body {
   margin-top: calc(var(--step) * 0.4);
 }
 
+/*
+ * The report, and the note above it.
+ *
+ * The `<pre>` holds the exact string the Copy button writes, so it is styled to
+ * be read rather than skimmed: monospace, aligned, and scrollable on its own
+ * axis. `white-space: pre` rather than `pre-wrap` is deliberate — the label
+ * column is what makes the report legible when pasted, and wrapping it in a
+ * panel four hundred pixels wide would break the alignment the format depends
+ * on. It scrolls sideways instead, which is honest about the shape of the text.
+ */
+.report {
+  margin-top: var(--step);
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--step) * 0.5);
+}
+
+.report__note {
+  margin: 0;
+  color: var(--ink-faint);
+  line-height: 1.45;
+}
+
+.report__text {
+  margin: 0;
+  padding: calc(var(--step) * 0.6);
+  background: var(--ground);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  line-height: 1.5;
+  white-space: pre;
+  overflow-x: auto;
+  /* Tall enough to show the install half without the page half scrolling out
+     of view, and capped so the drawer does not become the panel. */
+  max-height: 18rem;
+  overflow-y: auto;
+}
+
+.report__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: calc(var(--step) * 0.5);
+}
+
+.report__said {
+  color: var(--positive);
+}
+
+.report__said--bad {
+  color: var(--caution);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .form--wiping {
     animation: none;
