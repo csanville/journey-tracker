@@ -8,6 +8,24 @@ There is no server and no account. Nothing is transmitted anywhere.
 
 ## Status
 
+**When it gets a page wrong, you can say so.** Right-clicking a page and
+choosing *Read this page into JourneyTracker* has always filled the form when it
+worked. When it does not — a board nobody has written an adapter for, a careers
+page that keeps its posting behind JavaScript — it now says why instead of doing
+nothing, and the Diagnostics drawer at the bottom of the panel holds a short
+report you can copy into a bug report.
+
+The report says which site it was, which adapter ran, and which part of the page
+answered each field. **It does not contain the job.** No company, no title, no
+salary, no notes, and nothing of the address beyond the site name — because there
+is no crash reporting in this extension and this clipboard is the only thing that
+ever leaves your machine. The whole of what will be copied is shown on screen
+first, so you can read it before you decide.
+
+The same drawer now reports how much disk the saved pages are using, which is
+there to answer a question the project is asking itself rather than one you
+should have to think about.
+
 **What happened after you applied.** An applied posting records how far it got
 and how it ended, on two separate controls: a **stage** (screening, interviewing,
 offer) and an **outcome** (rejected, withdrawn, accepted). They are separate

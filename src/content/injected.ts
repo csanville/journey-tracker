@@ -21,6 +21,11 @@ import { capture } from './capture'
  *
  * No `watchUrl` here. The grant covers this page, now; following the tab as it
  * navigates is neither permitted nor wanted from a guest.
+ *
+ * `reportEmpty` is what makes this the diagnostic path and the declared script
+ * not. The user asked for *this page* by name, so a read that comes back with
+ * nothing owes them a reason rather than silence — and the same gesture that
+ * makes the read permitted makes the reason consented to. See `capture.ts`.
  */
 
-capture(location.href)
+capture(location.href, { reportEmpty: true })

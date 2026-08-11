@@ -139,10 +139,10 @@ export async function runPendingMigrations(
   // single killed migration would otherwise leave every future reader that
   // waits on the flag blocking until it times out — permanently.
   //
-  // Clearing it *here* would be worse than leaving it. `waitForMigration`
-  // resolves on the change event, so a reader parked on a stale flag would be
-  // released moments before the migration below raises it again and starts
-  // rewriting records — which is the half-migrated read the flag exists to
+  // Clearing it *here* would be worse than leaving it: the flag would drop for
+  // the moment between that clear and the migration below raising it again to
+  // start rewriting records, and a reader that looked in that window would see
+  // `false` over half-migrated data — the exact read the flag exists to
   // prevent. So the recovery happens only on the paths that do no work; the
   // paths that do work re-raise the flag and clear it honestly in `finally`.
   const staleFlag = migrationInProgress

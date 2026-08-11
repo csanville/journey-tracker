@@ -8,7 +8,7 @@ import {
   type Migration,
 } from './migrations'
 import { upsertPosting } from './repository'
-import { patchSettings, readSettings, waitForMigration } from './settings'
+import { patchSettings, readSettings } from './settings'
 import { SCHEMA_VERSION } from './types'
 import type { Posting } from './types'
 
@@ -188,43 +188,35 @@ describe('runPendingMigrations', () => {
     await runPendingMigrations(db)
 
     expect((await readSettings()).migrationInProgress).toBe(false)
-    await expect(waitForMigration(50)).resolves.toBeUndefined()
   })
 
-  it('does not release a waiting reader before the real migration finishes', async () => {
+  it('keeps the flag raised across a stale flag and real work', async () => {
     const db = await freshDb()
     await upsertPosting(db, aPosting())
     // A stale flag *and* work to do: the interrupted run left the flag up, and
     // this run is about to redo it.
     await patchSettings({ dataVersion: 1, migrationInProgress: true })
 
-    let released = false
-    let releasedDuringRun: boolean | undefined
-    const waiting = waitForMigration(1_000).then(() => {
-      released = true
-    })
+    let flagDuringRun: boolean | undefined
 
     await runPendingMigrations(db, {
       targetVersion: 2,
       migrations: [
         {
           to: 2,
-          description: 'observes whether readers were let go early',
+          description: 'observes the flag while records are being rewritten',
           async run() {
-            // Let any pending change notifications settle first.
-            await Promise.resolve()
-            releasedDuringRun = released
+            flagDuringRun = (await readSettings()).migrationInProgress
           },
         },
       ],
     })
-    await waiting
 
-    // Clearing the stale flag on entry would resolve the waiter here, moments
-    // before this same call raises the flag again and starts rewriting records
-    // — the half-migrated read the flag exists to prevent.
-    expect(releasedDuringRun).toBe(false)
-    expect(released).toBe(true)
+    // Clearing the stale flag on entry would drop it for the moment between
+    // that clear and this same call raising it again — the window in which a
+    // reader would see `false` and read half-migrated records.
+    expect(flagDuringRun).toBe(true)
+    expect((await readSettings()).migrationInProgress).toBe(false)
   })
 
   it('refuses to open data written by a newer build', async () => {
@@ -336,33 +328,6 @@ describe('runPendingMigrations', () => {
 
     expect(seenDuringRun).toBe(true)
     expect((await readSettings()).migrationInProgress).toBe(false)
-  })
-})
-
-describe('waitForMigration', () => {
-  it('returns immediately when nothing is running', async () => {
-    await expect(waitForMigration(50)).resolves.toBeUndefined()
-  })
-
-  it('blocks a reader until the migration clears the flag', async () => {
-    await patchSettings({ migrationInProgress: true })
-    let resolved = false
-
-    const waiting = waitForMigration(1_000).then(() => {
-      resolved = true
-    })
-
-    await Promise.resolve()
-    expect(resolved).toBe(false)
-
-    await patchSettings({ migrationInProgress: false })
-    await waiting
-    expect(resolved).toBe(true)
-  })
-
-  it('gives up rather than hanging forever on a stuck flag', async () => {
-    await patchSettings({ migrationInProgress: true })
-    await expect(waitForMigration(20)).rejects.toThrow(/timed out/)
   })
 })
 

@@ -91,6 +91,48 @@ export async function readStorageProtection(): Promise<StorageProtection> {
 }
 
 /**
+ * What this origin is using on disk, and what it is allowed.
+ *
+ * `estimate()` is exposed to workers as well as windows — unlike `persist()`
+ * above — so the worker can answer this for itself.
+ *
+ * **It measures the origin, not the snapshot store**, and that limit is the
+ * whole reason to say it out loud. There is no API that reports the size of one
+ * object store, and the only way to compute it exactly is to read every snapshot
+ * back: up to 500 records of up to 256KB, which is a hundred megabytes of reads
+ * to answer a question asked from a diagnostics drawer. So this is the origin's
+ * total, and it is a fair proxy for the snapshots because they are by an order
+ * of magnitude the largest thing stored — a record is a few hundred bytes and a
+ * trimmed page is up to 256KB. Read next to `snapshotCount`, it is enough to
+ * decide whether decision 6's store is earning its keep, which is the question
+ * phase 11 was asked to make measurable rather than to settle.
+ *
+ * Both numbers are `null` where the API is missing or refuses. Chrome also
+ * rounds and pads what it reports, deliberately, to make cross-origin storage
+ * fingerprinting harder — so this is an order of magnitude, not an audit.
+ */
+export interface StorageUsage {
+  usageBytes: number | null
+  quotaBytes: number | null
+}
+
+export async function readStorageUsage(): Promise<StorageUsage> {
+  const storage = storageManager()
+  if (!storage?.estimate) return { usageBytes: null, quotaBytes: null }
+
+  try {
+    const estimate = await storage.estimate()
+
+    return {
+      usageBytes: estimate.usage ?? null,
+      quotaBytes: estimate.quota ?? null,
+    }
+  } catch {
+    return { usageBytes: null, quotaBytes: null }
+  }
+}
+
+/**
  * Asks Chrome to mark this origin's storage persistent, and reports the result.
  *
  * Window contexts only — `persist()` does not exist on a worker's

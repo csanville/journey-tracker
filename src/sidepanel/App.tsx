@@ -1,15 +1,17 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { send } from '../lib/client'
 import { openDashboard } from '../lib/dashboard-tab'
-import type { DetectionSummary } from '../lib/detection'
+import type { CachedFailedParse, DetectionSummary } from '../lib/detection'
+import { formatBytes, formatReport } from '../lib/diagnostics'
 import { isEvent } from '../lib/events'
 import type { StatusReport } from '../lib/messages'
 import { requestPersistence } from '../lib/persistence'
 import type { Posting } from '../lib/types'
 import { BackupSection } from './BackupSection'
-import { activeTabDetection } from './detection-client'
+import { activeTabDetection, activeTabDiagnostic } from './detection-client'
 import { PostingForm } from './PostingForm'
 import { RecentPostings } from './RecentPostings'
+import { panelReport } from './report'
 import { markApplied } from './submission'
 
 /**
@@ -27,6 +29,14 @@ export function App() {
   const [postings, setPostings] = useState<Posting[] | null>(null)
   const [failure, setFailure] = useState<string | null>(null)
   const [detection, setDetection] = useState<DetectionSummary | null>(null)
+  /**
+   * Why the active tab gave up nothing, when it said so.
+   *
+   * Only ever set when `detection` is null — see `refreshDetection`. It is the
+   * other half of the same question, which is why it is refreshed on the same
+   * triggers rather than fetched where it is rendered.
+   */
+  const [diagnostic, setDiagnostic] = useState<CachedFailedParse | null>(null)
   /**
    * The question currently on screen: a posting, and when its confirmation page
    * was seen.
@@ -99,7 +109,19 @@ export function App() {
 
     try {
       const next = await activeTabDetection()
-      if (mine === latestDetection.current) setDetection(next)
+      // Only asked when there is no detection: a tab can hold both, and the
+      // detection is the better answer whenever there is one. Sequential rather
+      // than in parallel for the same reason — the second call is not wanted at
+      // all in the common case.
+      const failed = next ? null : await activeTabDiagnostic()
+
+      // Set together, and guarded together. Two separate guards would let a
+      // stale diagnostic land beside a fresh detection on interleaved refreshes,
+      // which is the one combination `panelReport` reads as "this page failed".
+      if (mine === latestDetection.current) {
+        setDetection(next)
+        setDiagnostic(failed)
+      }
     } catch (error) {
       // Not reaching the worker is already reported by `refresh`, and a missing
       // detection is an ordinary state — most pages are not job postings — so
@@ -449,17 +471,37 @@ export function App() {
                 : 'evictable'}
           </Row>
           <Row label="Postings">{status ? String(status.postingCount) : '—'}</Row>
+          {/* Pages kept against disk used, which is the pair decision 6's open
+              question turns on: whether keeping the snapshots is worth it. The
+              figure is the whole origin's, since no API reports one store. */}
+          <Row label="Pages kept">
+            {status
+              ? `${status.snapshotCount} · ${formatBytes(status.usageBytes)} on disk`
+              : '—'}
+          </Row>
           {/* The one probe that answers "is the content script running?", which
               is otherwise invisible from inside the panel. */}
           <Row label="This page">
             {detection
               ? `${detection.source} · ${Math.round(detection.confidence * 100)}% coverage`
-              : 'no posting detected'}
+              : diagnostic
+                ? `${diagnostic.source} read it and found nothing`
+                : 'no posting detected'}
           </Row>
         </dl>
+
+        {/* Not gated on `status`. A worker that does not answer is the single
+            most report-worthy state there is, and gating this on a successful
+            round trip made it the one state that could produce no report. */}
+        <ReportToSend
+          status={status}
+          detection={detection}
+          diagnostic={diagnostic}
+          extensionVersion={version}
+        />
       </details>
 
-      <footer className="panel__foot">Phase 10 · pending submissions</footer>
+      <footer className="panel__foot">JourneyTracker {version}</footer>
     </div>
   )
 }
@@ -525,6 +567,97 @@ function SubmissionPrompt({
         <button type="button" className="button" disabled={saving} onClick={onDismiss}>
           Not this one
         </button>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * The report, shown before it is copied.
+ *
+ * **The preview is the payload.** What is rendered is `formatReport` of the same
+ * object the button puts on the clipboard — not a summary of it, not a sample.
+ * Decision 1's amendment turns on the user being able to judge what they are
+ * about to paste into a public issue, and a preview that merely resembled the
+ * payload would make that judgement about the wrong text. It is one string, used
+ * twice.
+ *
+ * Rendered whether or not anything is wrong, because "is this even a healthy
+ * install" is the first thing to rule out and the answer is worth having before
+ * a problem rather than after one.
+ */
+function ReportToSend({
+  status,
+  detection,
+  diagnostic,
+  extensionVersion,
+}: {
+  status: StatusReport | null
+  detection: DetectionSummary | null
+  diagnostic: CachedFailedParse | null
+  extensionVersion: string
+}) {
+  const [copied, setCopied] = useState<'no' | 'yes' | 'failed'>('no')
+
+  /**
+   * Stamped when the facts change, not on every render.
+   *
+   * `Date.now()` in the render body would move the timestamp on every repaint —
+   * a preview that never sits still, and a `<pre>` whose content differs from
+   * the string copied a moment later.
+   *
+   * Keyed on the report's own *content* rather than on the objects it was built
+   * from, which review found to be the same bug wearing a memo. `refreshDetection`
+   * runs on every window focus and always sets a freshly deserialized
+   * `detection`, so identity deps changed when nothing had: clicking into the
+   * panel to select the text — which is exactly what the clipboard-refused
+   * message tells you to do — re-stamped the timestamp and dropped the
+   * selection mid-drag. Building the report twice is cheap; it is a dozen field
+   * copies.
+   */
+  const facts = panelReport({ status, detection, diagnostic, extensionVersion, at: 0 })
+  const signature = JSON.stringify(facts)
+
+  const text = useMemo(
+    () => formatReport({ ...facts, at: Date.now() }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [signature],
+  )
+
+  // A new report is a different thing to have copied, so the acknowledgement
+  // does not carry over to it.
+  useEffect(() => setCopied('no'), [text])
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopied('yes')
+    } catch (error) {
+      // Chrome refuses the clipboard when the document is not focused, which a
+      // side panel loses easily. Saying so is better than a button that looks
+      // like it worked — the text is on screen and can be selected by hand.
+      console.debug('[JourneyTracker] could not write to the clipboard', error)
+      setCopied('failed')
+    }
+  }
+
+  return (
+    <div className="report">
+      <p className="report__note">
+        Everything below, and nothing else, is what Copy puts on your clipboard. No company,
+        job title, or page address beyond the site name.
+      </p>
+      <pre className="report__text">{text}</pre>
+      <div className="report__actions">
+        <button type="button" onClick={() => void copy()}>
+          Copy report
+        </button>
+        {copied === 'yes' && <span className="report__said">Copied</span>}
+        {copied === 'failed' && (
+          <span className="report__said report__said--bad">
+            Could not reach the clipboard — select the text above instead
+          </span>
+        )}
       </div>
     </div>
   )

@@ -46,7 +46,9 @@ import { send } from '../lib/client'
  * A record written at version 2 arrives with `outcome` *absent*, `undefined` is
  * not `null`, and the outcomes card rendered "Of 2 applications: 0 still open"
  * over two open applications. Decision 9 says the dashboard waits on the
- * migration flag; it never did, and `waitForMigration` had no caller anywhere.
+ * migration flag; it never did, and the helper written to do the waiting never
+ * had a caller. Phase 11 deleted that helper on the strength of the paragraph
+ * below.
  *
  * Gating the open is stronger than waiting on the flag, which is why it is done
  * this way round: the flag can only be *observed*, so a reader watching it

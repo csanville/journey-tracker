@@ -195,11 +195,20 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
 
   void (async () => {
     try {
-      if (!(await forgetTab(tabId))) return
+      const forgotten = await forgetTab(tabId)
+      // Nothing was being held, so nothing is now false. This is the gate that
+      // keeps an uninteresting navigation to one session-storage read.
+      if (!forgotten.detection && !forgotten.diagnostic) return
 
-      // The page that earned the mark is gone. A content script on whatever
-      // loads next will re-earn it.
-      await setTrackedBadge(tabId, false)
+      // Only a detection ever painted a badge, so only a detection calls for it
+      // to be repainted. A dropped diagnostic still owes the panel the broadcast
+      // below — it renders from either, and a report naming a page the tab has
+      // left is the stale claim this listener exists to prevent.
+      if (forgotten.detection) {
+        // The page that earned the mark is gone. A content script on whatever
+        // loads next will re-earn it.
+        await setTrackedBadge(tabId, false)
+      }
     } catch (error) {
       console.error('[JourneyTracker] could not clear tab', tabId, error)
       return

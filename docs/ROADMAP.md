@@ -20,8 +20,67 @@ then merged.
 | 9 ✅ | `feat/edit-record` | Editing a saved posting from the panel — the capability phase 7's docs assumed already existed, and which phase 8's fields need to be worth anything; a filter to find the record, and delete | Change a record's stage and outcome weeks after saving it, without writing a second record |
 | 10 ✅ | `feat/pending-submissions` | A confirmed submission survives a closed panel: a durable pending queue, an event demoted to a signal, and the confirmation's own timestamp on the record | Apply with the panel shut, open it later, and the question is waiting with the right date on it |
 | — ✅ | `feat/ashby-adapter` | An Ashby adapter, on its own branch rather than as a phase — reading a fourth board is additive and needed no new mechanism | A posting on `jobs.ashbyhq.com` fills the form |
-| 11 🚧 | `feat/diagnostics` | A diagnostics report the user can send: a pulled parse of the current page, an allowlisted payload shown before it is copied, and the retirement of re-parse | On a page the extension cannot read, one gesture produces a report that names the board and what each tier returned, and carries no company, title or URL path |
+| 11 ✅ | `feat/diagnostics` | A diagnostics report the user can send: a pulled parse of the current page, an allowlisted payload shown before it is copied, and the retirement of re-parse | On a page the extension cannot read, one gesture produces a report that names the board and what each tier returned, and carries no company, title or URL path |
 | later | — | Workday, iCIMS, SmartRecruiters adapters | — |
+
+## Known bugs
+
+Open defects found by use and not yet fixed. Entries leave here by being fixed,
+never by being explained.
+
+### Filling from a page while editing a record overwrites that record
+
+**Data loss. Found in the phase 11 walkthrough; present since phase 9, not
+introduced by it — `PostingForm.tsx` is untouched on `feat/diagnostics`.**
+
+Open a saved record for editing, then navigate to a Greenhouse or Ashby posting.
+The panel offers "Fill from this page". Accept it: the form fills with the new
+posting, and still holds the record being edited. Save, and the **new job's
+details are written over the old record**, which is now a record of a job the
+user never applied to, under an id they cannot reach any other way. The original
+is gone.
+
+The mechanism is three lines apart in one file. `openForEdit` sets `draftId` to
+the stored record's id. `reset` is the only place that ever puts it back —
+`setDraftId(newId())` and `setEdited(null)`, and its comment says so: "Every exit
+from editing runs through here … so there is one place where the id stops being
+the stored record's." `applyFill` is a fourth exit and does not run through it:
+it replaces `draft` and sets `filled`, and touches neither `draftId` nor
+`edited`. `save` then writes to `draftId`.
+
+Two things make it worse than a wrong id:
+
+- **The record is stamped as if it were captured.** `save` prefers `filled` over
+  `edited` for provenance, so the overwritten record carries the new page's
+  `source` and `adapterVersion`. It does not look like a mistake afterwards; it
+  looks like a posting that was read off a board.
+- **The duplicate check is skipped.** `if (!force && !edited)` — `edited` is
+  still set, so the one thing that might have raised "you already saved this
+  one" is disabled by the same stale state that causes the bug.
+
+**What makes this worth writing down at length is that the guard exists, and is
+correct, and is bypassed.** `swapAction` in `fill.ts` already refuses the
+*automatic* swap while a record is held, and its comment describes this exact
+outcome: "The form would silently repopulate … *while still holding the stored
+record's id*, and the next save would write that other job over the record being
+edited. Not a lost draft: a destroyed record." Having named it, it returns
+`announce` rather than `nothing` so the banner survives — "Offer, never take."
+
+The offer, when taken, takes. Phase 9 closed the automatic door, documented
+precisely why the door was dangerous, and left the manual one open beside it.
+That is a fifth shape for the list below, and the sharpest instance of any of
+them: **a guard placed on one path to a hazard, where the other path is the one
+the design deliberately kept open.** The check is to ask, for every guard, which
+callers reach the guarded state *without* passing through it — and phase 9's own
+comment is what makes the answer obvious in hindsight, because it named the
+hazard and then described the surviving route to it in the next sentence.
+
+Not fixed here because phase 11 is about to be reviewed and this is not its code.
+The fix is small — `applyFill` has to let go of the record, which is `reset`'s
+job — but the *behaviour* it should choose is not obvious and needs deciding:
+filling from a page while editing might reasonably mean "update this record from
+this page" rather than "start a new one", and those want different ids. That is a
+phase-sized question, not a patch.
 
 ## Phase 1 — schema and storage
 
@@ -682,6 +741,13 @@ Two smaller gaps, recorded rather than fixed:
   > observation cannot cause the work** — a reader watching the flag on a
   > torn-down worker sees `false` and reads stale records with confidence. See
   > decision 9's final amendment.
+  >
+  > **And deleted in phase 11.** The function survived that fix, kept because
+  > "a diagnostics surface is the obvious future caller". Phase 11 is that
+  > surface, and it declined for the reason the paragraph above gives. The flag
+  > stays — `migrations.ts` recognises its own interrupted run by it, and the
+  > diagnostics report prints it, because a migration in progress explains a
+  > record count that looks wrong. Only the helper that waited on it is gone.
 - **The submission prompt needs the panel already open.** The worker broadcasts
   and `broadcast` swallows the rejection when nothing is listening, which is the
   ordinary case; nothing is persisted and the content script never retries. With
@@ -1132,6 +1198,34 @@ test of the detection path asserts a successful parse.
   values, no URL path or query, no snapshot source, and none of the user's own
   writing.
 
+### The trigger cannot live in the panel, and the plan nearly put it there
+
+Building it turned up a constraint this file had already written down twice.
+`activeTab` is granted by four gestures — an action, a context menu item, a
+`commands` shortcut, an omnibox suggestion — and **a button in the side panel is
+not one of them**. `capture.ts` calls that "the single most important fact about
+this feature". The extension holds no `host_permissions` at all (decision 2's
+amendment: the allowlist is `content_scripts.matches`), so *every* page needs the
+grant, including the three boards the manifest matches.
+
+A "Diagnose this page" button in the panel therefore cannot read the page. The
+working notes for this phase had one, and it was the same claim-that-outruns-the
+-code shape as everything else in this list — written because it is the obvious
+affordance, not because anything checked whether it could work.
+
+What survives is better than what was planned, because the trigger already
+exists. The user right-clicks **Read this page into JourneyTracker**, which is
+already the gesture, already the grant, and already the moment they are asking a
+question about this page. When the read succeeds the form fills, as now. When it
+comes back with nothing, that is when a diagnostic is worth having, and it is
+exactly the case the old code dropped on the floor. No second menu item, no
+second gesture to teach, no new bundle.
+
+The panel keeps the half it can do: rendering the report and copying it. Copying
+needs no grant. So the split is that **reading the page is a gesture and reading
+the report is a button**, which is the same boundary decision 2 has drawn since
+phase 5.
+
 ### What comes out, and what a version of it is for
 
 `source` and `adapterVersion` name the parser that ran. `provenance` and the
@@ -1196,6 +1290,105 @@ the adapter that ran and what each tier returned; the report is visible in the
 panel before it is copied; and the pasted text contains no company, no job
 title, and no URL path. The same gesture on a working Greenhouse posting reports
 which tier answered which field.
+
+### What building it changed
+
+Two things the plan asserted turned out to be impossible, and both were written
+because they sound like things that are true.
+
+**The trigger could not live in the panel** — recorded above, where it belongs
+with the design it changed. It is the larger of the two and it made the phase
+smaller.
+
+**`UnreachableReason` lost two of its three values.** The first draft had
+`restricted-page` and `no-response`, for a `chrome://` tab that refuses
+injection and an injection that never answered. Neither is reachable: the panel
+does not trigger reads, so it never learns one was refused, and the worker
+cannot supply the URL and adapter a report needs because it has no `tabs`
+permission. What survived is `not-read`, which is the ordinary state of most
+tabs. Writing an enum by imagining the failures rather than tracing them is the
+same habit as the panel button, at a smaller scale.
+
+The panel also forced a change back into the payload builder. `PageParse` took
+an `Extraction`, and the panel holds whole `DetectionSummary` objects — so the
+builder was being handed the very field values it exists to withhold, and the
+allowlist was the only thing between them and the clipboard. It takes a
+`ParsedPage` now, which has no `fields` at all. **An allowlist applied after the
+values arrive can be got wrong; a parameter that cannot carry them cannot.**
+
+### What using it changed
+
+The walkthrough found no defect in the phase, and one elsewhere that matters
+more than anything the phase shipped: the `applyFill` data-loss bug under
+**Known bugs** at the top of this file. It is phase 9's, not this phase's, and it
+was reachable the whole time — tabbing to a board while editing a record is not
+an exotic sequence.
+
+The observation worth keeping is *why* it surfaced now. Phase 11's walkthrough
+instructions said to go and stand on pages the extension handles badly, which is
+not what any previous walkthrough asked for. Every earlier one exercised the
+feature just built, along its intended path. This one sent someone looking for
+the seams, and the first thing it turned up was in code three phases old.
+
+The other note from use: **it was hard to find a posting that yielded nothing at
+all.** The tiered design does more work than expected on sites nobody wrote an
+adapter for — JSON-LD and OpenGraph are close to universal on job pages, because
+boards want to appear in Google Jobs and in link previews. That is decision 5's
+payoff arriving as a mild inconvenience to testing, which is the right direction
+for it to arrive from, and it means the `not-read` and partial-coverage rows are
+the ones users will actually see.
+
+### What review changed
+
+Seven findings, all confirmed. Three were real bugs, and **two of the three had a
+passing test sitting beside them** — which is the part worth recording.
+
+- **A page that could not be *delivered* was reported as a page that gave up
+  nothing.** `runLadder` resolves false both when no rung found anything and
+  when every rung threw, and a torn-down MV3 worker makes the second ordinary.
+  The diagnostic would have carried a full provenance set and printed `offered
+  yes` in the same breath as the panel saying the page was unreadable. The test
+  next to it asserted that a failed send does not break the page — true, and
+  silent about what was then claimed.
+- **A tab holding only a diagnostic navigated away without telling the panel.**
+  `forgetTab` cleared it but returned whether a *detection* had been dropped, and
+  the broadcast is gated on that answer. The panel went on offering to copy a
+  report naming a site the user had left. The comment added with the fix — "it
+  does not affect the answer below" — was true of the badge and false of the
+  broadcast, in a sentence written while looking at both.
+- **The report could describe a page the user was not on.** `panelReport`
+  preferred the detection unconditionally, which is right only while both entries
+  describe the same page. Ashby navigates without a page load, so `forgetTab`
+  never runs and a detection for posting A survives a right-click on posting B.
+  The URLs decide it now; when they disagree the newer wins, because the panel
+  cannot ask which page it is on.
+
+And four smaller ones, three of which are the same shape as each other: a
+docblock asserting more than the code did. `ParseFacts` claimed a non-null field
+and a non-null tier are the same condition — true inside `mergeTiers`, and
+`sanitizeReport` was quietly breaking it by nulling over-length values while
+leaving the tier alone. `ReportToSend` claimed to render "whether or not
+anything is wrong" while being gated on a successful `status` round trip, making
+the most report-worthy state the only one that could produce no report. And
+`setup.ts` claimed several modules watch `chrome.storage.onChanged` when nothing
+had since `waitForMigration` was deleted — a comment rewritten *during this
+phase* to replace one false claim with another.
+
+The fourth was the report text churning on every window focus, because the memo
+was keyed on object identity and `refreshDetection` always sets a fresh
+`detection`. It bites in the one flow that asks the user to touch the text:
+clicking into the panel to select it, as the clipboard-refused message
+instructs, wiped the selection and the message together.
+
+**The regression tests for that last one were vacuous when first written**, and
+were only caught because they were run against the unfixed code before being
+trusted. With no detection seeded, every focus refresh resolves `null`,
+`setDetection(null)` is a no-op React bails out of, and no identity ever changes
+— so the tests passed on the broken version. The same check had been run
+deliberately on the redaction tests in the first commit of this phase and skipped
+here. It found a hole both times it was run, which is the whole argument for
+making it a habit rather than a flourish: **a test written for a defect is not a
+regression test until it has failed against that defect.**
 
 ### Deliberately not in phase 11
 
@@ -1291,6 +1484,28 @@ never the problem — but "is the covered case the common one". Where a feature
 exists to catch someone at a moment they are doing something else, the answer is
 usually no, and the test that would have caught it is the one that sets up the
 inconvenient state first.
+
+**A fifth, found by phase 11's walkthrough in phase 9's code: a guard placed on
+one path to a hazard, where another path to the same hazard is one the design
+deliberately kept open.** `swapAction` refuses to let a detection auto-fill a
+form that is holding a stored record, and its comment states the consequence
+exactly — "the next save would write that other job over the record being
+edited. Not a lost draft: a destroyed record." Having named it, the same function
+returns `announce` rather than `nothing` so the banner survives, under "Offer,
+never take." The offer, when taken, takes: the manual fill runs `applyFill`,
+which never clears the record's id. See **Known bugs**.
+
+This is the hardest of the five to see, because everything about it looks
+right. The hazard is identified, the reasoning is written down, the guard is
+correct, and a test covers it. What is missing is a second guard on a route the
+same paragraph goes on to describe.
+
+The check: **for every guard, ask which callers reach the guarded state without
+passing through it.** Where the guard's own comment explains why a hazard is
+dangerous, read the next sentence — if it describes a way the user can still get
+there, that is the missing case. And prefer guarding the *destination* over the
+routes: `applyFill` is where the id should have been let go, because it is the
+one place all the fills meet.
 
 ## Changes from the original plan
 

@@ -6,7 +6,10 @@ import {
   findSnapshot,
   findTabForDetection,
   getDetectionSummary,
+  getFailedParse,
   recordDetection,
+  recordFailedParse,
+  sanitizeFailedParse,
   sanitizeReport,
 } from './detection'
 import { broadcast } from './events'
@@ -21,7 +24,7 @@ import type {
   StatusReport,
 } from './messages'
 import { noteImportedVersion, resumeImportMigration } from './migrations'
-import { recordStorageProtection } from './persistence'
+import { recordStorageProtection, readStorageUsage } from './persistence'
 import * as repo from './repository'
 import { patchSettings, readSettings } from './settings'
 import { postingInputFromDetection, setTrackedBadge } from './tracked'
@@ -94,8 +97,6 @@ async function dispatch(
     case 'snapshot/put':
       await repo.putSnapshot(db, request.snapshot)
       return { postingId: request.snapshot.postingId }
-    case 'snapshot/get':
-      return repo.getSnapshot(db, request.postingId)
     case 'snapshot/ids':
       return repo.listSnapshotIds(db)
     case 'snapshot/list':
@@ -141,8 +142,28 @@ async function dispatch(
       return readPending()
     case 'submission/retire':
       return { retired: await retirePending(request.postingId) }
+    case 'diagnostic/report': {
+      // Same rule as `detection/report`: no tab, no owner, nothing the panel
+      // could ever ask for.
+      if (context.tabId === undefined) return { recorded: false }
+
+      const failed = sanitizeFailedParse(request.report)
+      if (!failed) return { recorded: false }
+
+      await recordFailedParse(context.tabId, failed)
+
+      // Announced on the same channel a detection uses. The panel's question is
+      // "what happened on this tab", and a blank read is an answer to it — a
+      // second event type would be a second thing to subscribe to for one more
+      // way of saying the same tab moved.
+      await broadcast({ type: 'detection/changed', tabId: context.tabId })
+
+      return { recorded: true }
+    }
     case 'detection/get':
       return getDetectionSummary(request.tabId)
+    case 'diagnostic/get':
+      return getFailedParse(request.tabId)
     case 'status':
       return status(db)
     case 'storage/reassess':
@@ -437,7 +458,11 @@ async function importSnapshots(
 }
 
 async function status(db: JourneyTrackerDb): Promise<StatusReport> {
-  const settings = await readSettings()
+  // Read live rather than from settings, unlike the protection flags beside it:
+  // this changes with every capture, and a stored copy would be a number that
+  // was true once. `estimate()` is exposed to workers, so the worker can ask.
+  const [settings, usage] = await Promise.all([readSettings(), readStorageUsage()])
+
   return {
     schemaVersion: SCHEMA_VERSION,
     dataVersion: settings.dataVersion,
@@ -447,6 +472,8 @@ async function status(db: JourneyTrackerDb): Promise<StatusReport> {
     evictionSafe: Boolean(settings.storageUnlimited || settings.storagePersisted),
     postingCount: await repo.countPostings(db),
     snapshotCount: await repo.countSnapshots(db),
+    usageBytes: usage.usageBytes,
+    quotaBytes: usage.quotaBytes,
     lastBackupAt: settings.lastBackupAt,
   }
 }

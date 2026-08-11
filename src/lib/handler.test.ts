@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
 import { aPosting, freshDb } from '../test/factories'
-import type { DetectionReport } from './detection'
+import type { DetectionReport, FailedParseReport } from './detection'
 import { handleRequest } from './handler'
 import { allowedFromContentScript, type Request } from './messages'
 import { readPending, recordPending } from './pending'
+import * as repo from './repository'
 import { SNAPSHOT_RETENTION } from './repository'
 import { patchSettings, readSettings } from './settings'
 import { SCHEMA_VERSION } from './types'
@@ -172,12 +173,11 @@ describe('detection', () => {
     const posting = aPosting()
     await handleRequest(db, { kind: 'posting/upsert', posting, detectionId: 'det-1' })
 
-    const snapshot = await handleRequest(db, {
-      kind: 'snapshot/get',
-      postingId: posting.id,
-    })
-
-    expect(snapshot.ok && snapshot.data).toMatchObject({
+    // Read through the repository rather than a message. `snapshot/get` was a
+    // request kind nothing ever sent, and phase 11 deleted it with the re-parse
+    // it existed for; what is being asserted here is that the worker *wrote* the
+    // snapshot, which the store answers directly.
+    expect(await repo.getSnapshot(db, posting.id)).toMatchObject({
       postingId: posting.id,
       adapterVersion: 'lever@1',
       trimmedSource: '<html>the posting</html>',
@@ -199,11 +199,7 @@ describe('detection', () => {
     })
 
     expect(response.ok).toBe(true)
-    const snapshot = await handleRequest(db, {
-      kind: 'snapshot/get',
-      postingId: posting.id,
-    })
-    expect(snapshot.ok && snapshot.data).toBeNull()
+    expect(await repo.getSnapshot(db, posting.id)).toBeNull()
   })
 
   it('leaves a hand-typed record without a snapshot', async () => {
@@ -212,11 +208,7 @@ describe('detection', () => {
 
     await handleRequest(db, { kind: 'posting/upsert', posting })
 
-    const snapshot = await handleRequest(db, {
-      kind: 'snapshot/get',
-      postingId: posting.id,
-    })
-    expect(snapshot.ok && snapshot.data).toBeNull()
+    expect(await repo.getSnapshot(db, posting.id)).toBeNull()
   })
 })
 
@@ -778,5 +770,110 @@ describe('importing a backup', () => {
 
     expect(response.ok && response.data).toEqual({ postings: 1, snapshots: 1 })
     expect(await db.postings.count()).toBe(0)
+  })
+})
+
+describe('diagnostic', () => {
+  function aFailedParse(): FailedParseReport {
+    return {
+      url: 'https://careers.acme.com/openings/42',
+      source: 'generic',
+      adapterVersion: 'generic@1',
+      confidence: 0,
+      provenance: {
+        company: null,
+        jobTitle: null,
+        location: null,
+        workMode: null,
+        atsReqId: null,
+        salary: null,
+      },
+    }
+  }
+
+  it('carries a blank read from the content script to the panel', async () => {
+    const db = await freshDb()
+
+    const stored = await handleRequest(
+      db,
+      { kind: 'diagnostic/report', report: aFailedParse() },
+      { tabId: 12 },
+    )
+    expect(stored.ok && stored.data).toEqual({ recorded: true })
+
+    const read = await handleRequest(db, { kind: 'diagnostic/get', tabId: 12 })
+    expect(read.ok && read.data).toMatchObject({
+      source: 'generic',
+      adapterVersion: 'generic@1',
+    })
+  })
+
+  it('ignores a blank read that arrived without a tab', async () => {
+    const db = await freshDb()
+
+    const response = await handleRequest(db, {
+      kind: 'diagnostic/report',
+      report: aFailedParse(),
+    })
+
+    expect(response.ok && response.data).toEqual({ recorded: false })
+  })
+
+  it('ignores a blank read that does not survive validation', async () => {
+    const db = await freshDb()
+
+    const response = await handleRequest(
+      db,
+      { kind: 'diagnostic/report', report: { ...aFailedParse(), adapterVersion: '' } },
+      { tabId: 12 },
+    )
+
+    expect(response.ok && response.data).toEqual({ recorded: false })
+    const read = await handleRequest(db, { kind: 'diagnostic/get', tabId: 12 })
+    expect(read.ok && read.data).toBeNull()
+  })
+
+  /**
+   * The panel's question is "what happened on this tab", and a blank read
+   * answers it. Announcing on `detection/changed` rather than inventing a second
+   * event means one subscription covers both answers.
+   */
+  it('tells the panel the tab has something to say', async () => {
+    const db = await freshDb()
+    const sendMessage = vi.mocked(chrome.runtime.sendMessage)
+    sendMessage.mockClear()
+
+    await handleRequest(
+      db,
+      { kind: 'diagnostic/report', report: aFailedParse() },
+      { tabId: 12 },
+    )
+
+    expect(sendMessage).toHaveBeenCalledWith({ type: 'detection/changed', tabId: 12 })
+  })
+
+  it('does not let a blank read masquerade as a detection', async () => {
+    const db = await freshDb()
+
+    await handleRequest(
+      db,
+      { kind: 'diagnostic/report', report: aFailedParse() },
+      { tabId: 12 },
+    )
+
+    // Filling the form from this, or lighting the badge for it, would be
+    // offering the user a page that gave up nothing.
+    const read = await handleRequest(db, { kind: 'detection/get', tabId: 12 })
+    expect(read.ok && read.data).toBeNull()
+  })
+
+  /**
+   * Reporting a blank read is allowed from a page; reading one back is not. A
+   * content script has no business asking what the extension knows about any
+   * tab, including the one it is running in.
+   */
+  it('lets a content script report one but never read one', () => {
+    expect(allowedFromContentScript('diagnostic/report')).toBe(true)
+    expect(allowedFromContentScript('diagnostic/get')).toBe(false)
   })
 })

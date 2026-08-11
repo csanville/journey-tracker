@@ -1,12 +1,17 @@
 import { describe, expect, it } from 'vitest'
+import { FIELD_NAMES } from './extract/types'
 import {
   MAX_CACHED_TABS,
   findSnapshot,
   forgetTab,
   getDetectionSummary,
+  getFailedParse,
   recordDetection,
+  recordFailedParse,
+  sanitizeFailedParse,
   sanitizeReport,
   type DetectionReport,
+  type FailedParseReport,
 } from './detection'
 
 function aReport(overrides: Partial<DetectionReport> = {}): DetectionReport {
@@ -184,9 +189,9 @@ describe('the detection cache', () => {
     // the user loads a news article.
     await recordDetection(1, aReport(), 1000)
 
-    expect(await forgetTab(1)).toBe(true)
-    expect(await forgetTab(1)).toBe(false)
-    expect(await forgetTab(999)).toBe(false)
+    expect(await forgetTab(1)).toEqual({ detection: true, diagnostic: false })
+    expect(await forgetTab(1)).toEqual({ detection: false, diagnostic: false })
+    expect(await forgetTab(999)).toEqual({ detection: false, diagnostic: false })
   })
 
   it('keeps every tab when a full cache is written concurrently', async () => {
@@ -221,11 +226,177 @@ describe('the detection cache', () => {
 
   it('forgets a tab that closed', async () => {
     await recordDetection(7, aReport(), 1000)
-    await forgetTab(7)
+    await expect(forgetTab(7)).resolves.toMatchObject({ detection: true })
 
     expect(await getDetectionSummary(7)).toBeNull()
     // And forgetting a tab that was never there is not an error — it is just a
-    // "no".
-    await expect(forgetTab(99)).resolves.toBe(false)
+    // "no" to both halves.
+    await expect(forgetTab(99)).resolves.toEqual({ detection: false, diagnostic: false })
+  })
+})
+
+describe('provenance and fields staying in step', () => {
+  /**
+   * The report reads provenance as a proxy for which fields came back, on the
+   * grounds that `mergeTiers` sets a field and its tier in the same step. True
+   * there — and this validator was where it stopped being true, because `text()`
+   * nulls anything over `MAX_TEXT` while the tier survived untouched.
+   */
+  it('drops the tier for a field it rejected as too long', () => {
+    const report = sanitizeReport({
+      ...aReport(),
+      fields: { ...aReport().fields, location: 'x'.repeat(400) },
+    })
+
+    // A DOM selector that grabbed a container instead of a label. The record has
+    // no location, so nothing may claim a tier answered one.
+    expect(report?.fields.location).toBeNull()
+    expect(report?.provenance.location).toBeNull()
+  })
+
+  it('keeps the tier for every field it accepted', () => {
+    const report = sanitizeReport(aReport())
+
+    expect(report?.provenance.company).toBe('jsonld')
+    expect(report?.provenance.jobTitle).toBe('jsonld')
+  })
+
+  /**
+   * The invariant stated as itself, over every field at once: after this
+   * validator, a field is non-null exactly when its tier is.
+   */
+  it('leaves no field non-null without a tier, or a tier without a field', () => {
+    const report = sanitizeReport({
+      ...aReport(),
+      fields: {
+        ...aReport().fields,
+        location: 'y'.repeat(400),
+        atsReqId: null,
+      },
+    })
+
+    for (const name of FIELD_NAMES) {
+      expect(report!.fields[name] === null).toBe(report!.provenance[name] === null)
+    }
+  })
+})
+
+describe('a read that found nothing', () => {
+  function aFailedParse(overrides: Partial<FailedParseReport> = {}): FailedParseReport {
+    return {
+      url: 'https://careers.acme.com/openings/staff-engineer',
+      source: 'generic',
+      adapterVersion: 'generic@2',
+      confidence: 0,
+      provenance: {
+        company: null,
+        jobTitle: null,
+        location: null,
+        workMode: null,
+        atsReqId: null,
+        salary: null,
+      },
+      ...overrides,
+    }
+  }
+
+  /**
+   * The whole reason this is a separate sanitizer. `sanitizeReport` rejects a
+   * report with neither a company nor a title, which is right for a detection
+   * and would reject every failed parse there is — the condition it screens out
+   * is the condition being reported.
+   */
+  it('accepts a report with no fields at all, which sanitizeReport rejects', async () => {
+    const empty = aFailedParse()
+
+    expect(sanitizeFailedParse(empty)).not.toBeNull()
+    expect(sanitizeReport({ ...empty, detectionId: 'det-1', fields: {} })).toBeNull()
+  })
+
+  it('drops a tier name the page invented rather than passing it on', () => {
+    const failed = sanitizeFailedParse(
+      aFailedParse({
+        provenance: { company: 'trust-me' } as unknown as FailedParseReport['provenance'],
+      }),
+    )
+
+    // It reaches a report the user may paste into a public issue, so a page
+    // choosing its own strings is not a cosmetic problem.
+    expect(failed?.provenance.company).toBeNull()
+  })
+
+  it('rejects a report missing the fields a diagnostic is made of', () => {
+    expect(sanitizeFailedParse({ ...aFailedParse(), url: '' })).toBeNull()
+    expect(sanitizeFailedParse({ ...aFailedParse(), adapterVersion: '' })).toBeNull()
+    expect(sanitizeFailedParse({ ...aFailedParse(), confidence: 4 })).toBeNull()
+    expect(sanitizeFailedParse(null)).toBeNull()
+  })
+
+  it('round-trips against the tab that reported it', async () => {
+    await recordFailedParse(7, aFailedParse(), 1000)
+
+    const failed = await getFailedParse(7)
+    expect(failed?.source).toBe('generic')
+    expect(failed?.capturedAt).toBe(1000)
+    expect(await getFailedParse(9)).toBeNull()
+  })
+
+  /**
+   * Two caches, because they answer different questions. A failed parse
+   * surfacing as a detection would fill the form from a page that gave up
+   * nothing and light the badge for a record that does not exist.
+   */
+  it('never surfaces as a detection', async () => {
+    await recordFailedParse(7, aFailedParse(), 1000)
+
+    expect(await getDetectionSummary(7)).toBeNull()
+  })
+
+  it('does not displace the detection on the same tab', async () => {
+    await recordDetection(7, aReport(), 1000)
+    await recordFailedParse(7, aFailedParse(), 2000)
+
+    expect(await getDetectionSummary(7)).not.toBeNull()
+    expect(await getFailedParse(7)).not.toBeNull()
+  })
+
+  it('is cleared when the tab navigates away', async () => {
+    await recordFailedParse(7, aFailedParse(), 1000)
+    await forgetTab(7)
+
+    expect(await getFailedParse(7)).toBeNull()
+  })
+
+  /**
+   * The two halves are reported separately because the callers act on them
+   * differently: a badge is painted from a detection, so only that half calls
+   * for a repaint — but the panel renders from either, so a broadcast is owed
+   * whenever either was dropped.
+   *
+   * A single boolean served only the badge, and review found what it cost: a tab
+   * holding a diagnostic and no detection navigated away in silence, and the
+   * panel went on offering a report about the page it had left.
+   */
+  it('reports dropping a blank read even when there was no detection', async () => {
+    await recordFailedParse(7, aFailedParse(), 1000)
+
+    await expect(forgetTab(7)).resolves.toEqual({ detection: false, diagnostic: true })
+    expect(await getFailedParse(7)).toBeNull()
+  })
+
+  it('reports both halves when the tab held both', async () => {
+    await recordDetection(7, aReport(), 1000)
+    await recordFailedParse(7, aFailedParse(), 1000)
+
+    await expect(forgetTab(7)).resolves.toEqual({ detection: true, diagnostic: true })
+  })
+
+  it('evicts the oldest once more tabs than the bound have reported', async () => {
+    for (let tab = 0; tab <= MAX_CACHED_TABS; tab++) {
+      await recordFailedParse(tab, aFailedParse(), 1000 + tab)
+    }
+
+    expect(await getFailedParse(0)).toBeNull()
+    expect(await getFailedParse(MAX_CACHED_TABS)).not.toBeNull()
   })
 })
