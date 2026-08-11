@@ -23,6 +23,65 @@ then merged.
 | 11 🚧 | `feat/diagnostics` | A diagnostics report the user can send: a pulled parse of the current page, an allowlisted payload shown before it is copied, and the retirement of re-parse | On a page the extension cannot read, one gesture produces a report that names the board and what each tier returned, and carries no company, title or URL path |
 | later | — | Workday, iCIMS, SmartRecruiters adapters | — |
 
+## Known bugs
+
+Open defects found by use and not yet fixed. Entries leave here by being fixed,
+never by being explained.
+
+### Filling from a page while editing a record overwrites that record
+
+**Data loss. Found in the phase 11 walkthrough; present since phase 9, not
+introduced by it — `PostingForm.tsx` is untouched on `feat/diagnostics`.**
+
+Open a saved record for editing, then navigate to a Greenhouse or Ashby posting.
+The panel offers "Fill from this page". Accept it: the form fills with the new
+posting, and still holds the record being edited. Save, and the **new job's
+details are written over the old record**, which is now a record of a job the
+user never applied to, under an id they cannot reach any other way. The original
+is gone.
+
+The mechanism is three lines apart in one file. `openForEdit` sets `draftId` to
+the stored record's id. `reset` is the only place that ever puts it back —
+`setDraftId(newId())` and `setEdited(null)`, and its comment says so: "Every exit
+from editing runs through here … so there is one place where the id stops being
+the stored record's." `applyFill` is a fourth exit and does not run through it:
+it replaces `draft` and sets `filled`, and touches neither `draftId` nor
+`edited`. `save` then writes to `draftId`.
+
+Two things make it worse than a wrong id:
+
+- **The record is stamped as if it were captured.** `save` prefers `filled` over
+  `edited` for provenance, so the overwritten record carries the new page's
+  `source` and `adapterVersion`. It does not look like a mistake afterwards; it
+  looks like a posting that was read off a board.
+- **The duplicate check is skipped.** `if (!force && !edited)` — `edited` is
+  still set, so the one thing that might have raised "you already saved this
+  one" is disabled by the same stale state that causes the bug.
+
+**What makes this worth writing down at length is that the guard exists, and is
+correct, and is bypassed.** `swapAction` in `fill.ts` already refuses the
+*automatic* swap while a record is held, and its comment describes this exact
+outcome: "The form would silently repopulate … *while still holding the stored
+record's id*, and the next save would write that other job over the record being
+edited. Not a lost draft: a destroyed record." Having named it, it returns
+`announce` rather than `nothing` so the banner survives — "Offer, never take."
+
+The offer, when taken, takes. Phase 9 closed the automatic door, documented
+precisely why the door was dangerous, and left the manual one open beside it.
+That is a fifth shape for the list below, and the sharpest instance of any of
+them: **a guard placed on one path to a hazard, where the other path is the one
+the design deliberately kept open.** The check is to ask, for every guard, which
+callers reach the guarded state *without* passing through it — and phase 9's own
+comment is what makes the answer obvious in hindsight, because it named the
+hazard and then described the surviving route to it in the next sentence.
+
+Not fixed here because phase 11 is about to be reviewed and this is not its code.
+The fix is small — `applyFill` has to let go of the record, which is `reset`'s
+job — but the *behaviour* it should choose is not obvious and needs deciding:
+filling from a page while editing might reasonably mean "update this record from
+this page" rather than "start a new one", and those want different ids. That is a
+phase-sized question, not a patch.
+
 ## Phase 1 — schema and storage
 
 No UI, no parsing. This phase exists so that everything after it writes through
