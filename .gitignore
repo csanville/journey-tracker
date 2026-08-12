@@ -16,3 +16,11 @@ stats.html
 *.journeytracker.json
 journeytracker-backup-*.json
 fixtures/private/
+
+# Raw page captures dropped here by hand, for an adapter to be written against.
+# Ignored by default rather than reviewed case by case: this is a folder things
+# arrive in straight from a browser, and one of them will eventually be a
+# logged-in page. What belongs in the repo is the *trimmed* fixture under
+# `src/test/fixtures`, whose header records what was cut and what must survive a
+# retrim.
+docs/filesForAgent/

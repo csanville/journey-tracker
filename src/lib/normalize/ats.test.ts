@@ -69,13 +69,25 @@ const CASES: Array<[what: string, url: string, ats: AtsName, reqId: string]> = [
     'REQ12345',
   ],
   // The first real Workday URL this project read, kept verbatim because every
-  // case above it was invented and every one of them missed the repost counter
-  // Workday actually appends. This returned `null` until it was looked at.
+  // case above it was invented and every one of them missed the counter Workday
+  // actually appends to the slug. This returned `null` until it was looked at.
+  //
+  // The expected value is the counter *stripped*, because the same posting's
+  // JSON-LD calls the requisition `R28643` — see `WORKDAY_REQ` and the agreement
+  // test at the bottom of this file.
   [
-    'a real Workday requisition, with the repost counter Workday appends',
+    'a real Workday requisition, with the counter Workday appends to the slug',
     'https://premera.wd5.myworkdayjobs.com/en-US/Premera/job/Mountlake-Terrace-WA/Software-Development-Engineer-III--React-and-React-Native_R28643-1',
     'workday',
-    'R28643-1',
+    'R28643',
+  ],
+  // The other real posting, whose slug carries no counter at all — so the
+  // stripping above cannot be the only reason the pair below agree.
+  [
+    'a real Workday requisition with no counter on it',
+    'https://premera.wd5.myworkdayjobs.com/en-US/Premera/job/Mountlake-Terrace-WA/Software-Development-Engineer-III_R28659',
+    'workday',
+    'R28659',
   ],
 ]
 
@@ -181,5 +193,38 @@ describe('extractAtsReqId', () => {
 
   it('returns null for a URL it does not recognise', () => {
     expect(extractAtsReqId('https://acme.com/careers')).toBeNull()
+  })
+})
+
+/**
+ * The two ways a Workday record can get a requisition, asserted to produce the
+ * same one.
+ *
+ * `deriveJoinKeys` prefers an adapter-supplied `atsReqId` and falls back to this
+ * file, so a posting saved while the Workday adapter is running and the same
+ * posting saved without it must not land on different keys — that is two records
+ * for one job, which is the wrong-merge failure decision 7 is arranged around,
+ * seen from the other side.
+ *
+ * The check is here rather than in the adapter's own tests because this is the
+ * half that would be edited without thinking about the other: the pattern lives
+ * in this file, and the reason it strips a suffix is in that one.
+ */
+describe('the requisition a Workday record ends up with', () => {
+  it('is the same whichever half of the code supplied it', async () => {
+    const { readFileSync } = await import('node:fs')
+    const { JSDOM } = await import('jsdom')
+    const { workday } = await import('../extract/adapters/workday')
+
+    const url =
+      'https://premera.wd5.myworkdayjobs.com/en-US/Premera/job/Mountlake-Terrace-WA/Software-Development-Engineer-III--React-and-React-Native_R28643-1'
+    const html = readFileSync('src/test/fixtures/workday-job.html', 'utf8')
+    const { document } = new JSDOM(html).window
+
+    const fromPage = workday.readers[0]!.read(document).atsReqId
+    const fromUrl = extractAtsReqId(url)
+
+    expect(fromPage).toBe('R28643')
+    expect(fromUrl).toBe(fromPage)
   })
 })

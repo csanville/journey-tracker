@@ -1,4 +1,5 @@
 import { ashby } from './adapters/ashby'
+import { workday } from './adapters/workday'
 import { generic } from './adapters/generic'
 import { greenhouse } from './adapters/greenhouse'
 import { lever } from './adapters/lever'
@@ -47,7 +48,7 @@ export { mergeTiers, scoreConfidence } from './merge'
  * Ordered, most specific first. `generic` matches everything and must stay
  * last; it is the fallback, not a competitor.
  */
-export const ADAPTERS: readonly Adapter[] = [greenhouse, lever, ashby, generic]
+export const ADAPTERS: readonly Adapter[] = [greenhouse, lever, ashby, workday, generic]
 
 export function selectAdapter(rawUrl: string): Adapter {
   let url: URL

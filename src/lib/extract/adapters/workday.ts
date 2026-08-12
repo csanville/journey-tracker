@@ -1,0 +1,102 @@
+import type { Adapter, ExtractedFields } from '../types'
+import { readJsonLd, jobPostingFrom } from '../tiers/jsonld'
+import { readMeta } from '../tiers/meta'
+import { inferWorkMode } from '../workmode'
+import { cleanText } from '../text'
+
+/**
+ * Workday — `<tenant>.wdN.myworkdayjobs.com`.
+ *
+ * The first board whose host is per-tenant, and the reason the manifest carries
+ * its only wildcard (decision 2's amendment). It is also the first adapter
+ * written *after* seeing the page rather than before: a diagnostic pulled from a
+ * live tenant said `generic@1` already read it at 0.79 coverage, which made this
+ * a smaller job than the roadmap had planned for and a better specified one.
+ *
+ * **There is no DOM tier, and here that is not a judgement call.** Workday
+ * serves a shell whose `<body>` is twenty-three characters of whitespace and
+ * renders everything client-side. Ashby's adapter gives the same reason with a
+ * spinner to point at; this one has nothing at all to select. Every field comes
+ * out of the head.
+ *
+ * What this adds over `generic` is two fields, and both are Workday facts that a
+ * general-purpose reader has no business assuming:
+ *
+ * 1. **The requisition, from `identifier`.** `jsonld.ts` deliberately does not
+ *    read that key, and says why — boards put their internal record id there,
+ *    which is a different number from the requisition in the URL, and letting it
+ *    win would hand `deriveJoinKeys` a key matching nothing. It then reserves
+ *    the exception: "the field stays in `ExtractedFields` for an adapter that
+ *    finds a genuinely public requisition number on the page; today none does."
+ *    Workday is that adapter. On both captured postings `identifier.value` is
+ *    the requisition the URL is addressed by.
+ *
+ * 2. **The work mode, from the first line of the description.** `jobLocationType`
+ *    is absent on both postings, so `Workforce Classification: Hybrid` is the
+ *    only statement of it anywhere on the page.
+ *
+ * **Salary is deliberately not read.** Premera's range is real and public —
+ * Washington requires it — and it is prose in the middle of the description:
+ * "National Plus Salary Range: $111,900.00 - $190,200.00". `salary.ts` parses
+ * schema.org `baseSalary` and nothing else, on the argument that a missed salary
+ * costs a copy-paste while a wrong one is an authoritative-looking number that
+ * is off by a factor of twelve. That argument is not weaker here, so this
+ * adapter leaves the field alone rather than quietly making Workday the
+ * exception to it.
+ */
+
+/**
+ * `Workforce Classification: Hybrid`, the first line of every Workday
+ * description these captures contain.
+ *
+ * Anchored to the start of the description rather than searched for anywhere in
+ * it. Eight kilobytes of employer prose follows, and a loose search through it
+ * would eventually find the word "remote" in a sentence about remote *teams* and
+ * relabel an onsite job. The label is a prefix or it is not read.
+ */
+const CLASSIFICATION = /^\s*workforce classification:\s*([^\n.]{1,40})/i
+
+function readWorkdayJsonLd(document: Document): Partial<ExtractedFields> {
+  const posting = jobPostingFrom(document)
+  if (!posting) return {}
+
+  const fields: Partial<ExtractedFields> = {}
+
+  const identifier = posting.identifier
+  const value =
+    identifier && typeof identifier === 'object'
+      ? cleanText((identifier as { value?: unknown }).value as string | null)
+      : cleanText(typeof identifier === 'string' ? identifier : null)
+  if (value) fields.atsReqId = value
+
+  const described = cleanText(
+    typeof posting.description === 'string' ? posting.description : null,
+  )
+  const classified = described ? CLASSIFICATION.exec(described) : null
+  // `inferWorkMode` rather than a lookup table: Workday lets the employer write
+  // this label, so it is prose in a fixed position rather than a closed
+  // vocabulary, and it has the sense to answer `null` for something it does not
+  // recognise instead of guessing.
+  const workMode = classified ? inferWorkMode(classified[1]) : null
+  if (workMode) fields.workMode = workMode
+
+  return fields
+}
+
+export const workday: Adapter = {
+  name: 'workday',
+  version: 1,
+  // Every tenant and every data centre: `premera.wd5`, `acme.wd1`. Anchored on
+  // the domain rather than a suffix match, so a host merely ending in these
+  // letters is not accepted — the trick `ats.ts` guards against too.
+  matches: (url) => /(^|\.)myworkdayjobs\.com$/.test(url.hostname),
+  readers: [
+    // Workday's own reading first, then the general one. `mergeTiers` keeps the
+    // earlier answer for a field, so the two above win where this adapter has an
+    // opinion and everything else — company, title, location — comes from the
+    // ordinary JSON-LD reader exactly as it did under `generic`.
+    { tier: 'jsonld', read: readWorkdayJsonLd },
+    { tier: 'jsonld', read: readJsonLd },
+    { tier: 'meta', read: readMeta },
+  ],
+}

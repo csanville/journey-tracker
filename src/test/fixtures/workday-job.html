@@ -1,0 +1,73 @@
+<!--
+  Captured 2026-08-11 from
+  https://premera.wd5.myworkdayjobs.com/en-US/Premera/job/Mountlake-Terrace-WA/Software-Development-Engineer-III--React-and-React-Native_R28643-1
+  and trimmed: the viewport meta, the stylesheet links, and the middle of the
+  JSON-LD description, which is eight kilobytes of prose about the employer.
+
+  Four things about this capture are load-bearing and must survive any retrim.
+
+  1. **The body is empty.** Twenty-three characters of whitespace, verbatim.
+     Workday serves a shell and renders client-side, so this adapter has no
+     selector-based DOM tier for the reason Ashby has none, only more plainly:
+     on Ashby there was a spinner to look at, and here there is nothing at all.
+     Every field this adapter reads comes out of the head.
+
+  2. **`identifier.value` is `R28643` while the URL says `R28643-1`.** Both
+     verbatim. Workday appends a counter to the URL slug that is not part of the
+     requisition, and this disagreement is why `extractAtsReqId` strips it — so
+     that a record saved through this adapter and one saved from the URL alone
+     land on the same key. `ats.test.ts` asserts the two agree about this URL.
+
+  3. **The work mode is the first line of the description**, not a field.
+     `jobLocationType` is absent — checked on both captured postings — so
+     `Workforce Classification: Hybrid` is the only thing on the page that says
+     it. The prefix is kept intact for that reason.
+
+  4. **The salary is prose and `baseSalary` is null.** Also verbatim, and also
+     checked on both postings. Washington requires a range in the posting and
+     Premera puts it in the description text, where `salary.ts` deliberately
+     does not go. The tail of the description is kept so that a future change of
+     heart about prose salary has the real phrasing to work against, and so that
+     `salary: null` in the tests is visibly a decision rather than an oversight.
+-->
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <title>Software Development Engineer III, React and React Native</title>
+    <meta property="og:title" content="Software Development Engineer III, React and React Native" />
+    <meta property="og:description" content="Workforce Classification: Hybrid [description trimmed] The salary range for this" />
+    <meta property="og:image" content="https://premera.wd5.myworkdayjobs.com/en-US/Premera/assets/logo" />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://premera.wd5.myworkdayjobs.com/en-US/Premera/job/Mountlake-Terrace-WA/Software-Development-Engineer-III--React-and-React-Native_R28643-1" />
+    <script type="application/ld+json">
+{
+      "jobLocation": {
+            "@type": "Place",
+            "address": {
+                  "@type": "PostalAddress",
+                  "addressCountry": "United States of America",
+                  "addressLocality": "WA Mountlake Terrace Orcas"
+            }
+      },
+      "hiringOrganization": {
+            "name": "Premera Blue Cross",
+            "@type": "Organization",
+            "sameAs": ""
+      },
+      "identifier": {
+            "name": "Software Development Engineer III, React and React Native",
+            "@type": "PropertyValue",
+            "value": "R28643"
+      },
+      "datePosted": "2026-02-13",
+      "employmentType": "FULL_TIME",
+      "title": "Software Development Engineer III, React and React Native",
+      "description": "Workforce Classification: Hybrid [description trimmed] The salary range for this role is posted below; we generally target up to and around the midpoint of the range. National Plus Salary Range: $111,900.0",
+      "@context": "http://schema.org",
+      "@type": "JobPosting"
+}
+    </script>
+  </head>
+  <body>
+  </body>
+</html>

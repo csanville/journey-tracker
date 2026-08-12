@@ -38,20 +38,26 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
  * this file is arranged to prevent. A requisition that is genuinely all digits
  * is now missed instead, which is the direction that fails safely.
  *
- * The trailing `-1` group was added after the first real Workday URL was read,
- * and every case above had been written without one: `R28643-1`, from a live
- * Premera posting. Workday appends a repost counter to the requisition, so the
- * shape this file had anticipated — `R-12345`, the hyphen sitting between the
- * letters and the digits — is one of two, and the pattern matched the invented
- * one. Real Workday requisitions were returning `null`, which cost the join key
- * silently: `findDuplicate` falls back to the canonical URL and the requisition
- * column simply stayed empty.
+ * The trailing group was added after the first real Workday URL was read, and
+ * every case above had been written without one: `R28643-1`, from a live Premera
+ * posting. Workday appends a counter to the URL slug, so the shape this file had
+ * anticipated — `R-12345`, the hyphen sitting between the letters and the digits
+ * — is one of two, and the pattern matched the invented one. Real Workday
+ * requisitions were returning `null`, which cost the join key silently:
+ * `findDuplicate` falls back to the canonical URL and the requisition column
+ * simply stayed empty.
  *
- * The counter is **kept, not stripped**. `R28643-1` and `R28643-2` are a posting
- * and its repost, and this file's standing bias is that missing a merge is
- * cheaper than making a wrong one.
+ * **The counter is stripped**, and the first version of this amendment kept it —
+ * on the reasoning that `R28643-1` and `R28643-2` are a posting and its repost,
+ * and that missing a merge is cheaper than making a wrong one. The page then
+ * said otherwise. The same posting's JSON-LD gives `identifier.value` as plain
+ * `R28643`: Workday's own name for the requisition does not include the suffix,
+ * so it belongs to the URL and not to the id. Keeping it would have put the
+ * adapter's key and the URL's key at odds for one posting — `deriveJoinKeys`
+ * prefers the adapter's — and two keys for one job is the wrong-merge failure
+ * arriving as its mirror image. `ats.test.ts` asserts the two agree.
  */
-const WORKDAY_REQ = /^[A-Z]{1,5}-?\d{3,}(-\d+)?$/i
+const WORKDAY_REQ = /^([A-Z]{1,5}-?\d{3,})(?:-\d+)?$/i
 
 function segments(url: URL): string[] {
   return url.pathname.split('/').filter(Boolean)
@@ -125,7 +131,9 @@ function workday(url: URL): string | null {
 
   // Workday writes requisitions in upper case; folding them makes the same
   // posting reached through a differently-cased link compare equal.
-  return WORKDAY_REQ.test(candidate) ? candidate.toUpperCase() : null
+  const matched = WORKDAY_REQ.exec(candidate)
+
+  return matched ? matched[1]!.toUpperCase() : null
 }
 
 type Matcher = { ats: AtsName; extract: (url: URL) => string | null }
