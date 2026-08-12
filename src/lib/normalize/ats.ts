@@ -56,8 +56,21 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
  * adapter's key and the URL's key at odds for one posting — `deriveJoinKeys`
  * prefers the adapter's — and two keys for one job is the wrong-merge failure
  * arriving as its mirror image. `ats.test.ts` asserts the two agree.
+ *
+ * The prefix is **one to three letters**, narrowed from five by the review that
+ * noticed what stripping a counter costs. `Software-Engineer-Intern_Fall-2026-1`
+ * matched at five and reduced to `FALL-2026`, so a posting and the same
+ * internship a season later would have shared a join key — the wrong merge this
+ * pattern's digit rule already refuses `Summer_2026` for, walking back in
+ * through the letter rule. `Fall-2026` matched at five even before the counter
+ * was stripped, so the narrowing fixes more than it protects.
+ *
+ * Three is not a guess at Workday's format: it is every requisition prefix this
+ * file has ever seen, invented or real — `R`, `JR`, `REQ` — and every season
+ * name is four letters or more. A genuine four-letter prefix would now be
+ * missed, which costs a join key and not a record.
  */
-const WORKDAY_REQ = /^([A-Z]{1,5}-?\d{3,})(?:-\d+)?$/i
+const WORKDAY_REQ = /^([A-Z]{1,3}-?\d{3,})(?:-\d+)?$/i
 
 function segments(url: URL): string[] {
   return url.pathname.split('/').filter(Boolean)

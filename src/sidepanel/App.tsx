@@ -71,17 +71,33 @@ export function App() {
   const version = chrome.runtime.getManifest().version
 
   /**
-   * Mirrors `held` for the callback that must not close over a changing value.
+   * Every record the panel has a claim on, for the callback that must not close
+   * over a changing value.
    *
    * `refreshPending` is built once and is reached from a listener that lives for
-   * the life of the panel; reading `held` directly would pin it to whatever was
+   * the life of the panel; reading state directly would pin it to whatever was
    * open when the listener was installed. It also runs across awaits — a
    * `posting/get` per entry — so the ref is read at the moment each decision is
    * made rather than at the moment the pass started, which is the distinction
    * phase 9 spent a defect on.
+   *
+   * **Both halves, and a review found out what it costs to pick one.** This
+   * phase narrowed the pending-queue guard from the request to what the form
+   * holds, which was right for the case it was built for — a record open while
+   * the user clicks a different row — and opened the mirror image of it. Holding
+   * B and clicking A's row leaves A *requested* and refused, so `held` never
+   * mentions A and its prompt stays up; confirming it writes `applied`, and the
+   * stale `Posting` behind "Open it" then saves `viewed` straight back over it.
+   *
+   * So it is not `held` instead of `requested`. It is either: a record the form
+   * has loaded, and a record it has been asked to load and has not yet settled,
+   * are both records the panel must not answer a question about behind.
    */
-  const heldId = useRef<string | null>(null)
-  heldId.current = held
+  const claimed = useRef<{ held: string | null; requested: string | null }>({
+    held: null,
+    requested: null,
+  })
+  claimed.current = { held, requested: editing?.id ?? null }
 
   const refresh = useCallback(async (): Promise<StatusReport | null> => {
     try {
@@ -177,7 +193,11 @@ export function App() {
         // set `applied` and the form's next Save would put its own stale
         // `viewed` and a null `appliedAt` straight back over it. The question
         // returns by itself once editing stops, because this runs again.
-        if (heldId.current === entry.postingId) continue
+        if (
+          entry.postingId === claimed.current.held ||
+          entry.postingId === claimed.current.requested
+        )
+          continue
 
         const posting = await send('posting/get', { id: entry.postingId })
 
@@ -236,14 +256,14 @@ export function App() {
    * back if it is still open. Keyed on the id so it fires on a change of which
    * record is being edited, not on every render of the same one.
    *
-   * On `held` rather than on `editing`: a request the form refused changes the
-   * latter without changing what is loaded, and re-running on it asked the queue
-   * a question whose answer had not moved — then acted on it, because the guard
-   * inside read the request too.
+   * Keyed on both claims for the reason `claimed` sets out: a refused request
+   * moves one without moving the other, and the queue has to be re-asked either
+   * way — standing a prompt down when a record is claimed, and putting it back
+   * when the claim is settled.
    */
   useEffect(() => {
     void refreshPending()
-  }, [held, refreshPending])
+  }, [held, editing?.id, refreshPending])
 
   useEffect(() => {
     void refreshDetection()

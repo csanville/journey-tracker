@@ -53,8 +53,29 @@ import { cleanText } from '../text'
  * it. Eight kilobytes of employer prose follows, and a loose search through it
  * would eventually find the word "remote" in a sentence about remote *teams* and
  * relabel an onsite job. The label is a prefix or it is not read.
+ *
+ * **The capture is one word, and the version before it was 40 characters.** That
+ * looked like the same anchoring argument applied to the value, and it was not:
+ * the window is whitespace-collapsed before this runs, so the `\n` that bounded
+ * the old class could never appear in it, and the capture ran forty characters
+ * into the sentence *after* the label every time. `inferWorkMode` then saw the
+ * label plus the prose, and its hybrid-over-remote-over-onsite precedence
+ * answered about whichever word it liked best — "On-Site Remote work is not
+ * available for this position" read as `remote`, and "Remote This role is not
+ * hybrid" read as `hybrid`. Two fields inverted on postings that stated
+ * themselves plainly.
+ *
+ * A review found it; the fixture could not, because Premera's value is `Hybrid`
+ * and hybrid wins that precedence no matter what bleeds in beside it. That is
+ * this file's own warning about a test passing for a reason unrelated to its
+ * claim, landing on the file that made it.
+ *
+ * The observed vocabulary is a single token, hyphens included: `Hybrid`,
+ * `On-Site`, `Remote`. A two-word value would capture only its first word and
+ * `inferWorkMode` would answer `null` — a missed field rather than an inverted
+ * one, which is the direction this project's parsers are meant to fail in.
  */
-const CLASSIFICATION = /^workforce classification:\s*([^\n.]{1,40})/i
+const CLASSIFICATION = /^workforce classification:\s*([a-z][a-z-]{1,20})/i
 
 /**
  * How much of the description the label is looked for in.

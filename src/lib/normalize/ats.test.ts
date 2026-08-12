@@ -130,6 +130,18 @@ const NO_MATCH: Array<[what: string, url: string]> = [
     'a real Workday posting reached through its apply flow',
     'https://premera.wd5.myworkdayjobs.com/en-US/Premera/job/Mountlake-Terrace-WA/Software-Development-Engineer-III--React-and-React-Native_R28643-1/apply/autofillWithResume',
   ],
+  // A season and a year is the shape the digit rule already refuses through
+  // `_Summer_2026`, arriving through the letter rule instead: `Fall` is four
+  // letters, so a five-letter prefix accepted it, and stripping the counter
+  // would then have merged one internship with the next season's.
+  [
+    'a Workday title ending in a season and a year',
+    'https://acme.wd1.myworkdayjobs.com/en-US/External/job/SF/Engineer-Intern_Fall-2026',
+  ],
+  [
+    'the same, with the counter Workday appends',
+    'https://acme.wd1.myworkdayjobs.com/en-US/External/job/SF/Engineer-Intern_Fall-2026-1',
+  ],
   [
     'a Workday title ending in a bare number',
     'https://acme.wd1.myworkdayjobs.com/en-US/External/job/SF/Engineer_Level_3000',

@@ -698,6 +698,32 @@ describe('workday', () => {
     expect(workday.readers[0]!.read(document).workMode).toBe('hybrid')
   })
 
+  /**
+   * The inversion a review found, and the reason the fixture could not.
+   *
+   * The capture used to run forty characters past the label, so `inferWorkMode`
+   * saw the next sentence too and its hybrid-over-remote-over-onsite precedence
+   * answered about the wrong word. Premera's value is `Hybrid`, which wins that
+   * precedence regardless — so the fixture went on passing while every posting
+   * that stated itself as remote or on-site was being inverted.
+   */
+  it.each([
+    ['Workforce Classification: On-Site Remote work is not available here.', 'onsite'],
+    ['Workforce Classification: Remote This role is not hybrid at all.', 'remote'],
+    ['Workforce Classification: On-Site\nOur hybrid teams collaborate daily.', 'onsite'],
+    ['Workforce Classification: Hybrid Join Our Team: Do Meaningful Work.', 'hybrid'],
+  ])('reads %j as its own label, not the sentence after it', (description, expected) => {
+    const loose = parseHtml(
+      `<script type="application/ld+json">${JSON.stringify({
+        '@type': 'JobPosting',
+        title: 'Engineer',
+        description,
+      })}</script>`,
+    )
+
+    expect(workday.readers[0]!.read(loose).workMode).toBe(expected)
+  })
+
   it('still finds nothing when the label is absent, rather than guessing', () => {
     const loose = parseHtml(
       `<script type="application/ld+json">${JSON.stringify({
