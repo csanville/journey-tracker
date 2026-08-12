@@ -37,8 +37,21 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
  * `findDuplicate` called them the same posting: the exact silent wrong merge
  * this file is arranged to prevent. A requisition that is genuinely all digits
  * is now missed instead, which is the direction that fails safely.
+ *
+ * The trailing `-1` group was added after the first real Workday URL was read,
+ * and every case above had been written without one: `R28643-1`, from a live
+ * Premera posting. Workday appends a repost counter to the requisition, so the
+ * shape this file had anticipated — `R-12345`, the hyphen sitting between the
+ * letters and the digits — is one of two, and the pattern matched the invented
+ * one. Real Workday requisitions were returning `null`, which cost the join key
+ * silently: `findDuplicate` falls back to the canonical URL and the requisition
+ * column simply stayed empty.
+ *
+ * The counter is **kept, not stripped**. `R28643-1` and `R28643-2` are a posting
+ * and its repost, and this file's standing bias is that missing a merge is
+ * cheaper than making a wrong one.
  */
-const WORKDAY_REQ = /^[A-Z]{1,5}-?\d{3,}$/i
+const WORKDAY_REQ = /^[A-Z]{1,5}-?\d{3,}(-\d+)?$/i
 
 function segments(url: URL): string[] {
   return url.pathname.split('/').filter(Boolean)

@@ -68,6 +68,15 @@ const CASES: Array<[what: string, url: string, ats: AtsName, reqId: string]> = [
     'workday',
     'REQ12345',
   ],
+  // The first real Workday URL this project read, kept verbatim because every
+  // case above it was invented and every one of them missed the repost counter
+  // Workday actually appends. This returned `null` until it was looked at.
+  [
+    'a real Workday requisition, with the repost counter Workday appends',
+    'https://premera.wd5.myworkdayjobs.com/en-US/Premera/job/Mountlake-Terrace-WA/Software-Development-Engineer-III--React-and-React-Native_R28643-1',
+    'workday',
+    'R28643-1',
+  ],
 ]
 
 /**
@@ -99,6 +108,15 @@ const NO_MATCH: Array<[what: string, url: string]> = [
   [
     'a Workday title ending in a year',
     'https://acme.wd1.myworkdayjobs.com/en-US/External/job/SF/Software-Engineer-Intern_Summer_2026',
+  ],
+  // The requisition is in the path but not in the *last* segment, and this
+  // reads the last segment only. Deliberately left as a miss: an apply URL is
+  // not a posting, and teaching this to walk back through the path to rescue
+  // one would make every step of an application flow identify as the job it
+  // belongs to — the opposite of what the flow exclusions are for.
+  [
+    'a real Workday posting reached through its apply flow',
+    'https://premera.wd5.myworkdayjobs.com/en-US/Premera/job/Mountlake-Terrace-WA/Software-Development-Engineer-III--React-and-React-Native_R28643-1/apply/autofillWithResume',
   ],
   [
     'a Workday title ending in a bare number',
