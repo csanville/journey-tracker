@@ -1,5 +1,36 @@
 import { describe, expect, it } from 'vitest'
 import manifest from '../manifest.json'
+import { isApplicationFlow } from './lib/flows'
+
+/** A real Workday application URL, and the posting it belongs to. */
+const WORKDAY_POSTING =
+  'https://premera.wd5.myworkdayjobs.com/en-US/Premera/job/Mountlake-Terrace-WA/Software-Development-Engineer-III--React-and-React-Native_R28643-1'
+const WORKDAY_APPLY = `${WORKDAY_POSTING}/apply/autofillWithResume?source=LinkedIn`
+
+/**
+ * Chrome's match-pattern semantics, enough of them to test with: `*` in the host
+ * stands for any leading labels, `*` in the path for any run of characters
+ * including `/`.
+ */
+function matches(pattern: string, rawUrl: string): boolean {
+  const parsed = /^([^:]+):\/\/([^/]+)(\/.*)$/.exec(pattern)
+  if (!parsed) throw new Error(`not a match pattern: ${pattern}`)
+
+  const [, scheme, host, path] = parsed as unknown as [string, string, string, string]
+  const url = new URL(rawUrl)
+
+  if (`${scheme}:` !== url.protocol) return false
+
+  const hostOk = host.startsWith('*.')
+    ? url.hostname === host.slice(2) || url.hostname.endsWith(`.${host.slice(2)}`)
+    : host === url.hostname
+
+  const pathRe = new RegExp(
+    `^${path.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*')}$`,
+  )
+
+  return hostOk && pathRe.test(url.pathname + url.search)
+}
 
 /**
  * Decision 2 as an executable rule.
@@ -11,6 +42,9 @@ import manifest from '../manifest.json'
  */
 describe('the content script allowlist', () => {
   const patterns = manifest.content_scripts.flatMap((script) => script.matches)
+  const excluded = manifest.content_scripts.flatMap(
+    (script) => (script as { exclude_matches?: string[] }).exclude_matches ?? [],
+  )
 
   it('names specific board hosts, never a whole ATS vendor', () => {
     // `https://*.greenhouse.io/*` was the first version, and it covers far more
@@ -27,15 +61,54 @@ describe('the content script allowlist', () => {
       // Ashby's board host, and only it. `app.ashbyhq.com` is the recruiter
       // console — the same reason the Greenhouse wildcard came out above.
       'https://jobs.ashbyhq.com/*',
+      // The one wildcard, and the amendment to decision 2 that allows it: on
+      // Workday the tenant *is* the subdomain, so an allowlist would have to
+      // enumerate employers. What it buys is every tenant; what Greenhouse's
+      // bought was the recruiter console. See the exclusions below, which are
+      // the condition of it.
+      'https://*.myworkdayjobs.com/*',
     ])
   })
 
-  it('has no wildcard subdomain in any pattern', () => {
-    // The property behind the list above, stated so a fourth board added later
-    // cannot quietly reintroduce it.
+  /**
+   * The rule that replaced "no wildcard subdomain, ever".
+   *
+   * The ban was the right shape while every board sat on a fixed host, and it
+   * caught this phase's first attempt at a Workday match. What it could not
+   * express is the thing actually worth defending — not that a wildcard is
+   * forbidden, but that a wildcard must say what it is *not* reaching.
+   */
+  it('lets a wildcard host in only with exclusions naming it', () => {
     for (const pattern of patterns) {
-      expect(pattern).not.toMatch(/:\/\/\*\./)
+      if (!/:\/\/\*\./.test(pattern)) continue
+
+      const host = /:\/\/\*\.([^/]+)/.exec(pattern)?.[1]
+      expect(host).toBeDefined()
+      expect(excluded.some((e) => e.includes(host!))).toBe(true)
     }
+  })
+
+  /**
+   * The two mechanisms, asserted to agree about one real URL.
+   *
+   * They are separately necessary and neither is sufficient, which is exactly
+   * the arrangement that rots: `exclude_matches` stops a cold load into an apply
+   * URL and cannot stop the ordinary route, which is a same-document navigation
+   * from the posting with the script already running. `isApplicationFlow` stops
+   * that one. Two rules about the same pages, in two languages, in two files —
+   * so this asserts they say the same thing rather than trusting that whoever
+   * edits one remembers the other.
+   */
+  it('excludes the application flow in the manifest and at runtime alike', () => {
+    expect(excluded.some((pattern) => matches(pattern, WORKDAY_APPLY))).toBe(true)
+    expect(isApplicationFlow(WORKDAY_APPLY)).toBe(true)
+
+    // And agree about the posting, which is the half that fails silently: an
+    // over-broad exclusion does not break anything visible, it just stops the
+    // extension working on the pages it was widened to reach.
+    expect(excluded.some((pattern) => matches(pattern, WORKDAY_POSTING))).toBe(false)
+    expect(isApplicationFlow(WORKDAY_POSTING)).toBe(false)
+    expect(patterns.some((pattern) => matches(pattern, WORKDAY_POSTING))).toBe(true)
   })
 
   it('asks for no host permissions at all', () => {

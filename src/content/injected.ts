@@ -28,4 +28,4 @@ import { capture } from './capture'
  * makes the read permitted makes the reason consented to. See `capture.ts`.
  */
 
-capture(location.href, { reportEmpty: true })
+capture(location.href, { reportEmpty: true, readApplicationFlows: true })

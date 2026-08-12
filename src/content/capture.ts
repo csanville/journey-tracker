@@ -1,5 +1,6 @@
 import { send } from '../lib/client'
 import { extract, isWorthOffering } from '../lib/extract'
+import { isApplicationFlow } from '../lib/flows'
 import { buildSnapshot } from '../lib/extract/snapshot'
 import { newId } from '../lib/ids'
 import { runLadder } from './ladder'
@@ -97,11 +98,41 @@ export interface CaptureOptions {
    * wants to know why.
    */
   reportEmpty?: boolean
+  /**
+   * Read a page even when it is an application being filled in.
+   *
+   * The same split as `reportEmpty`, for the same reason, and it lands on the
+   * same two callers.
+   *
+   * False for the declared content script. Phase 12's wildcard put it on every
+   * Workday tenant, which means every Workday *application* as well, and
+   * `exclude_matches` cannot keep it out of one: the route into an application
+   * is a same-document navigation from the posting, so the script is already
+   * running and nothing re-evaluates the manifest. `watch-url.ts` then notices
+   * the new URL and this function is called for it. The exclusions close a cold
+   * load into an apply URL; this closes the route the exclusions cannot see.
+   *
+   * True for the injected bundle. The user right-clicked *this page* and asked
+   * for it to be read, which is consent for this page in a way that a manifest
+   * pattern is not — and phase 11 already made this argument for the diagnostic.
+   * Refusing here would be second-guessing an explicit request.
+   */
+  readApplicationFlows?: boolean
 }
 
 export function capture(url: string, options: CaptureOptions = {}): void {
+  // Bumped before the refusal, not after. Arriving at an application flow is a
+  // navigation like any other, and it has to cancel the ladder still running for
+  // the posting behind it — otherwise a rung fires a moment later, `stillWanted`
+  // compares against a URL this call never adopted, and the page being read is
+  // the one this exists to refuse.
   const mine = ++generation
   const stillWanted = () => mine === generation && location.href === url
+
+  // Before the parse, before the snapshot, before anything is sent. The whole
+  // point is that the document is never read, so this cannot be a filter on the
+  // way out.
+  if (!options.readApplicationFlows && isApplicationFlow(url)) return
 
   /**
    * Whether any rung found the page worth offering, delivered or not.

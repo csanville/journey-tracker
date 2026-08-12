@@ -123,6 +123,51 @@ subdomains do not resolve, so the wildcard bought nothing for it. The general
 rule, now enforced by a test: **a match pattern names a host that serves job
 postings, never an apex a vendor also runs its own product on.**
 
+**Amended — one wildcard, and what it had to buy its way in with.** Phase 12
+added `https://*.myworkdayjobs.com/*`, the first wildcard subdomain in the
+manifest, against a test written specifically to prevent one. The rule above
+survives; what changed is the understanding of what it was protecting.
+
+Workday is the case the rule was not written for. Every earlier board serves
+every employer from one host, so an allowlist is possible and a wildcard buys
+nothing — Greenhouse's bought the recruiter console and no postings at all. On
+Workday the **tenant is the subdomain**: `premera.wd5.myworkdayjobs.com`,
+`acme.wd1.myworkdayjobs.com`, one per employer, with the data-centre number
+varying too. An allowlist there would mean enumerating employers, which is not a
+smaller version of the same idea; it is a different product.
+
+So the rule is not "no wildcards". It is that a pattern must not reach pages the
+extension has no business reading, and on `myworkdayjobs.com` those pages exist:
+**the application flow**, seven steps of it, including the address form and the
+voluntary self-identification questionnaire that decision 6's trimming amendment
+was written about. The wildcard is therefore paired with `exclude_matches` for
+the apply paths, and `manifest.test.ts` changed from *banning* a wildcard host to
+*requiring* that one be named in the exclusions.
+
+**The exclusions are not sufficient on their own, and it took a real URL to see
+it.** `exclude_matches` is evaluated when a content script is injected. The
+ordinary way into a Workday application is a same-document navigation from the
+posting — the script is already running, nothing re-evaluates the patterns, and
+`watch-url.ts` exists precisely to notice such navigations and read the new page.
+The exclusions close a cold load into an apply URL, which a link from an
+aggregator produces; they do nothing about the route almost everybody takes.
+
+The runtime half is `lib/flows.ts`, refusing in `capture` before the document is
+parsed or snapshotted. The two are host-scoped identically and a test asserts
+they agree about one real URL, because two rules about the same pages written in
+two languages in two files is exactly the arrangement that drifts.
+
+The gesture path is deliberately exempt: the injected bundle passes
+`readApplicationFlows`, because a right-click on *this page* is consent for this
+page in a way a manifest pattern is not — the same argument phase 11 made for the
+diagnostic.
+
+**Scoped to Workday, not generalised.** Lever's apply form is `/<company>/<id>/apply`
+and a path-only rule would have refused it too. The privacy argument does carry
+across; so does the cost, which is that a refused read means the panel forgets the
+posting while the user is applying to it. That trade is worth making deliberately
+for a board rather than inheriting from a pattern written for a different one.
+
 Related: reading a tab's URL from the extension side is what would need the
 `tabs` permission, and nothing does — the content script reports its own
 `location.href`. The panel calls `chrome.tabs.query` to learn *which* tab it is
