@@ -1522,13 +1522,39 @@ code, seen to fail, and seen to fail alone.
 The first board whose host is **per-tenant**: `acme.wd1.myworkdayjobs.com`,
 `acme.wd5.myworkdayjobs.com`, with the numbered data-center segment varying too.
 Every previous board sat on one fixed host, so the manifest listed it and that
-was the end of it. This one needs `https://*.myworkdayjobs.com/*`, and that is a
-wildcard over a domain the user does not control, which is decision 2's
-territory — worth stating explicitly in the phase rather than discovered in the
-manifest diff. It is still a single registrable domain and still narrower than
-the `<all_urls>` decision 2 refuses; the `activeTab` path stays the fallback for
-tenants on a vanity domain, which the wildcard cannot reach and which no
-allowlist could.
+was the end of it.
+
+This paragraph first said the phase "needs `https://*.myworkdayjobs.com/*`", that
+this was "decision 2's territory", and moved on. **`manifest.test.ts` already
+forbids it**, in a test written so that "a fourth board added later cannot
+quietly reintroduce it" — and the fourth board added later is this one. The rule
+came from `https://*.greenhouse.io/*`, which covered `app.greenhouse.io`, the
+logged-in recruiter console. Naming a rule as territory and then walking across
+it is not stating a constraint; the tripwire is what stated it.
+
+Workday is genuinely unlike the case that motivated the rule: the tenant *is*
+the subdomain, so the wildcard buys every employer where Greenhouse's bought
+nothing but the recruiter console. That earns an amendment to decision 2, not a
+rewrite of the test to let this through — and the amendment has to answer the
+thing the Greenhouse case was about, which is what else lives under the pattern.
+
+Under `myworkdayjobs.com` that is **the application flow**: the seven steps of a
+Workday application, including `My Information` and the voluntary
+self-identification questionnaire — the exact category of data decision 6's
+trimming amendment exists for. `snapshot.ts` already drops `form`, `input`,
+`textarea`, `select` and every inline script that is not JSON-LD, so a snapshot
+of such a page carries far less than it looks. What it does not cover is
+Workday's **Review** step, which renders what the user typed as ordinary text
+outside any form element.
+
+So the match is a wildcard **with `exclude_matches` for the application paths**:
+automatic detection on postings, and a content script that structurally cannot
+run where the user's own data is, rather than one that runs there and is trusted
+to drop the right nodes afterwards. `manifest.test.ts` changes from "no wildcard
+subdomain" to a rule that permits one only alongside exclusions, so the property
+it defends survives in a stronger form than a ban that a fifth board would have
+to argue with again. The `activeTab` path stays the fallback for tenants on a
+vanity domain, which no allowlist could reach.
 
 Two things are already built and tested, which is most of why this is additive:
 
@@ -1546,6 +1572,44 @@ build. **What the tiers actually return is a question for the fixture, not for
 this file**: phase 11's lesson was that an enum written by imagining the failures
 loses two of its three values. Capture a real posting first, then write the
 adapter against it.
+
+### What the first real Workday page changed
+
+A diagnostic pulled from a live tenant — `premera.wd5.myworkdayjobs.com`, phase
+11's gesture doing exactly the job it was built for — answered the question
+above before any adapter was written, and reordered the rest of this section.
+
+```
+adapter    generic@1        company    jsonld
+coverage   0.79             jobTitle   jsonld
+offered    yes              location   jsonld
+                            workMode / atsReqId / salary   not found
+```
+
+**Workday already works, with no adapter at all.** `generic@1` reads company,
+title and location off schema.org JSON-LD and the result clears
+`isWorthOffering`. That is phase 11's observation arriving a second time and
+harder: it is difficult to find a posting that yields nothing, because boards
+want to appear in Google Jobs. Decision 5's tier order is the reason, and this is
+the second phase to be made smaller by it.
+
+**`atsReqId not found` costs nothing.** It describes the extraction tiers, not
+the record. `deriveJoinKeys` falls back to `extractAtsReqId(url)`, whose Workday
+cases were already written and passing, so a saved record carries `R-12345`
+whether or not a tier read it. The diagnostic's row is honest about what it
+measures and easy to misread as a gap — worth knowing before it is treated as
+one.
+
+So the adapter is no longer what makes Workday work; it is what would add
+`workMode` and `salary` to a page that already gives up four fields of six. The
+manifest is what makes any of it automatic — the diagnostic above required a
+deliberate keystroke, because no content script matches the host — and it is
+therefore the high-value half and the one with a permissions question attached.
+
+Salary is the more interesting of the two missing fields: the tenant probed is a
+Washington employer, and Washington requires a pay range in the posting. If the
+range is on the page but not in `baseSalary`, the fixture will say where — and
+that is a question for the fixture, not for this file.
 
 The submission-confirmation path (decision 12) is **not** extended to Workday
 here. Greenhouse's detection works because its confirmation is a URL; whether
