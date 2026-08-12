@@ -21,7 +21,7 @@ then merged.
 | 10 ✅ | `feat/pending-submissions` | A confirmed submission survives a closed panel: a durable pending queue, an event demoted to a signal, and the confirmation's own timestamp on the record | Apply with the panel shut, open it later, and the question is waiting with the right date on it |
 | — ✅ | `feat/ashby-adapter` | An Ashby adapter, on its own branch rather than as a phase — reading a fourth board is additive and needed no new mechanism | A posting on `jobs.ashbyhq.com` fills the form |
 | 11 ✅ | `feat/diagnostics` | A diagnostics report the user can send: a pulled parse of the current page, an allowlisted payload shown before it is copied, and the retirement of re-parse | On a page the extension cannot read, one gesture produces a report that names the board and what each tier returned, and carries no company, title or URL path |
-| 12 | `fix/fill-while-editing`, `feat/workday-adapter` | The fill that overwrites a record, closed by asking which record it means; and a Workday adapter, the first board whose host is per-tenant | Filling from a page while editing asks update-or-new and neither answer destroys a record; and a posting on `*.myworkdayjobs.com` fills the form |
+| 12 ✅ | `fix/fill-while-editing` | The fill that overwrites a record, closed by asking which record it means; a guard sweep; and Workday, behind a wildcard and two exclusions | Filling from a page while editing asks update-or-new and neither answer destroys a record; and a posting on `*.myworkdayjobs.com` fills the form unprompted, while its application flow is never read |
 | later | — | iCIMS, SmartRecruiters adapters | — |
 
 ## Known bugs
@@ -1681,6 +1681,57 @@ anchoring test improved by the same move: the real description says "on-site"
 three times past the four-thousandth character, about the employer's offices
 rather than this job, where the invented one had a trap written to be caught by
 the code that had just been written.
+
+### What review changed
+
+Four findings, all confirmed by running the code. **Two of them were defects
+this phase created**, and both sat under comments asserting they could not
+happen.
+
+- **The work mode was inverted on every Workday posting that was not hybrid.**
+  The label capture ran forty characters past the label, so `inferWorkMode` saw
+  the sentence after it and answered about whichever word its
+  hybrid-over-remote-over-onsite precedence liked best: "On-Site — Remote work is
+  not available for this position" read as `remote`, and "Remote — This role is
+  not hybrid" read as `hybrid`. The comment above the pattern claimed the
+  anchoring prevented exactly this, and the window is whitespace-collapsed before
+  the match runs, so the `\n` bounding the character class could never appear in
+  it.
+- **The pending-queue guard lost the half it used to have.** The guard sweep
+  narrowed it from the request to what the form holds, which was right for the
+  case it was built for and opened the mirror image: holding B and clicking A's
+  row leaves A requested and refused, so `held` never names it, its prompt stays
+  up, and confirming writes `applied` behind a stale `Posting` that "Open it"
+  then saves `viewed` back over. Verified end to end. It was unreachable before
+  this phase — the request-keyed guard stood the prompt down there — so this is
+  a defect introduced by the fix for a defect of the same shape.
+- **A docblock asserting more than the code did**, for the fourth phase running:
+  `extract/index.ts` still said no adapter writes `atsReqId`, and `workday.ts`
+  quotes that very sentence as its licence for writing it.
+- **`WORKDAY_REQ`'s prefix was wide enough to accept a season.** `Fall-2026`
+  matched at five letters, and with the counter stripped one internship and the
+  next season's would have shared a join key.
+
+Two things are worth keeping out of this beyond the fixes.
+
+**Narrowing a guard is a change in both directions, and only one of them gets
+tested.** The sweep found a guard reading a proxy, replaced the proxy with the
+real state, and shipped a test for the case that had been broken. Nothing asked
+what the *old* answer had been covering. The check to add to the fifth shape:
+when a guard's input is replaced rather than extended, enumerate what the
+previous input caught that the new one does not — and if the answer is "a case
+that is now unreachable", say why in a comment, because it will not stay
+unreachable.
+
+**A fixture can pass for a reason unrelated to its claim even when its markup is
+perfect.** The trimming problem above was about markup that had lost a property;
+this one is about a *value* that happens to be forgiving. Premera's work mode is
+`Hybrid`, which wins `inferWorkMode`'s precedence no matter what prose bleeds in
+beside it, so the fixture asserted the right answer for the wrong reason and
+would have gone on doing so forever. Where a parser has precedence rules, a
+single real fixture cannot exercise them: the cases have to be written by hand,
+in the shapes the precedence distinguishes, or the most-preferred value will
+quietly stand in for all of them.
 
 ### Deliberately not in phase 12
 
