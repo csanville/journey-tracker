@@ -59,6 +59,20 @@ interface Props {
   onSaved?: () => void
   onDeleted?: () => void
   onStopEditing?: () => void
+  onHolding?: (postingId: string | null) => void
+}
+
+function element(props: Props) {
+  return (
+    <PostingForm
+      editing={props.editing}
+      detection={props.detection ?? null}
+      onSaved={props.onSaved ?? (() => {})}
+      onDeleted={props.onDeleted ?? (() => {})}
+      onStopEditing={props.onStopEditing ?? (() => {})}
+      onHolding={props.onHolding ?? (() => {})}
+    />
+  )
 }
 
 async function render(props: Props): Promise<HTMLDivElement> {
@@ -67,20 +81,26 @@ async function render(props: Props): Promise<HTMLDivElement> {
 
   await act(async () => {
     root = createRoot(host!)
-    root.render(
-      <PostingForm
-        editing={props.editing}
-        detection={props.detection ?? null}
-        onSaved={props.onSaved ?? (() => {})}
-        onDeleted={props.onDeleted ?? (() => {})}
-        onStopEditing={props.onStopEditing ?? (() => {})}
-      />,
-    )
+    root.render(element(props))
   })
 
   // The seeding effect and the revisit lookup both settle after the first paint.
   await settle()
   return host
+}
+
+/**
+ * Hands the form a different request, which is a thing only the panel can do.
+ *
+ * `editing` is a prop, so the states that depend on it changing under a form
+ * that already holds something — the "Open a different posting?" question, and
+ * everything downstream of refusing it — are unreachable from a single render.
+ */
+async function rerender(props: Props): Promise<void> {
+  await act(async () => {
+    root!.render(element(props))
+  })
+  await settle()
 }
 
 /** Lets pending effects and their round trips through the handler finish. */
@@ -311,6 +331,253 @@ describe('a detection arriving while a record is open', () => {
 
     expect(await db.postings.count()).toBe(1)
     expect(await db.postings.get(posting.id)).toMatchObject({ company: 'Initech' })
+  })
+
+  it('names the record the fill would land on', async () => {
+    const posting = await upsertPosting(db, stored())
+    const el = await render({ editing: posting, detection })
+
+    // Half the reason this was destructive is that it was invisible: one button
+    // reading "Fill form", with nothing on the screen saying what it was aimed
+    // at. A user who can read which record is open before choosing does not
+    // have to find out by losing it.
+    expect(el.textContent).toContain('Initech · Staff Engineer')
+  })
+
+  /**
+   * The data-loss bug, from the phase 11 walkthrough.
+   *
+   * Before the fix this test found one record where it expects two, and the
+   * record it looked up under the stored id held the *page's* company: the fill
+   * kept `draftId` pointing at the record being edited, so the save wrote a job
+   * the user had never applied to over a job they had, under an id nothing else
+   * reaches. `swapAction` had refused the automatic version of this and said
+   * why; the manual button beside it did it anyway.
+   */
+  it('leaves the stored record alone when the fill is a new record', async () => {
+    const posting = await upsertPosting(db, stored())
+    const el = await render({ editing: posting, detection })
+
+    await click(button(el, 'Save as a new record'))
+    await submit(el)
+
+    expect(await db.postings.get(posting.id)).toMatchObject({
+      company: 'Initech',
+      jobTitle: 'Staff Engineer',
+    })
+    expect(await db.postings.count()).toBe(2)
+  })
+
+  it('carries nothing of the old record into the new one', async () => {
+    const posting = await upsertPosting(db, stored({ notes: 'spoke to the recruiter' }))
+    const el = await render({ editing: posting, detection })
+
+    await click(button(el, 'Save as a new record'))
+    await submit(el)
+
+    // A different job, so the record's own half — notes, tags, stage, and the
+    // fields this page happened to be quiet about — must not come with it. The
+    // blend `applyFill` warns about is a record that looks like neither job.
+    const written = (await db.postings.toArray()).find((row) => row.id !== posting.id)!
+    expect(written).toMatchObject({
+      company: 'Some Other Company',
+      location: 'Berlin',
+      notes: null,
+    })
+    expect(written.salary).toBeNull()
+    // The join keys are the new page's too, derived at save from its own URL
+    // rather than inherited: a new record carrying the old one's requisition id
+    // would collide with it in exactly the dedupe check meant to keep them
+    // apart (decision 7).
+    expect(written.atsReqId).not.toBe('REQ-4021')
+    expect(written.canonicalUrl).toBe(detection.url)
+  })
+
+  it('stamps the new record with the page, and leaves the old record its own', async () => {
+    const posting = await upsertPosting(db, stored())
+    const el = await render({ editing: posting, detection })
+
+    await click(button(el, 'Save as a new record'))
+    await submit(el)
+
+    // The second symptom: a record overwritten this way was stamped with the
+    // page's adapter, so afterwards it did not look like a mistake — it looked
+    // like a posting read off a board (decision 6).
+    const written = (await db.postings.toArray()).find((row) => row.id !== posting.id)!
+    expect(written).toMatchObject({ source: 'lever', adapterVersion: 'lever@1' })
+    expect(await db.postings.get(posting.id)).toMatchObject({
+      source: 'manual',
+      adapterVersion: 'manual@1',
+    })
+  })
+
+  it('re-arms the duplicate check the edit path turns off', async () => {
+    const posting = await upsertPosting(db, stored())
+    // Already stored under a different id: the page the user is about to start a
+    // new record from is one they have saved before.
+    await upsertPosting(
+      db,
+      stored({
+        id: 'posting-elsewhere',
+        company: 'Some Other Company',
+        companyNormalized: 'some other company',
+        jobTitle: 'Completely Different Role',
+        url: detection.url,
+        canonicalUrl: detection.url,
+      }),
+    )
+    const el = await render({ editing: posting, detection })
+
+    await click(button(el, 'Save as a new record'))
+    await submit(el)
+
+    // `if (!force && !edited)` skips the check while a record is held, which is
+    // right for an edit and was disabled by the same stale state that caused the
+    // overwrite. Letting go of the record turns it back on.
+    expect(el.textContent).toContain('already saved')
+    expect(await db.postings.count()).toBe(2)
+  })
+
+  it('tells the panel it has let go, so the record is not handed straight back', async () => {
+    const posting = await upsertPosting(db, stored())
+    const onStopEditing = vi.fn()
+    const el = await render({ editing: posting, detection, onStopEditing })
+
+    await click(button(el, 'Save as a new record'))
+
+    expect(onStopEditing).toHaveBeenCalled()
+    expect(el.textContent).not.toContain('Editing a saved posting')
+  })
+
+  it('updates the record in place when that is what was asked for', async () => {
+    const posting = await upsertPosting(db, stored())
+    const onStopEditing = vi.fn()
+    const el = await render({ editing: posting, detection, onStopEditing })
+
+    await click(button(el, 'Update this record'))
+    await submit(el)
+
+    // The reading the roadmap kept: re-reading a posting whose description
+    // changed, which is why `swapAction` returns `announce` rather than
+    // `nothing` and the offer survives at all.
+    expect(await db.postings.count()).toBe(1)
+    expect(await db.postings.get(posting.id)).toMatchObject({
+      company: 'Some Other Company',
+      location: 'Berlin',
+    })
+    expect(onStopEditing).not.toHaveBeenCalled()
+  })
+
+  it('keeps the record’s own half on an update, which the page cannot answer', async () => {
+    const posting = await upsertPosting(
+      db,
+      stored({
+        state: 'applied',
+        appliedAt: Date.parse('2026-03-04T12:00:00Z'),
+        stage: 'screening',
+        notes: 'phone screen booked',
+      }),
+    )
+    const el = await render({ editing: posting, detection })
+
+    await click(button(el, 'Update this record'))
+    await submit(el)
+
+    // A job board has no opinion about whether you applied (see `fill.ts`), so
+    // an update that blanked this would be the same data loss arriving through
+    // the other button.
+    const after = (await db.postings.get(posting.id))!
+    expect(after).toMatchObject({
+      state: 'applied',
+      stage: 'screening',
+      notes: 'phone screen booked',
+    })
+    // The day, not the instant: the form holds a date, so the time of day does
+    // not survive a round trip through it and never has.
+    expect(new Date(after.appliedAt!).toDateString()).toBe(
+      new Date(posting.appliedAt!).toDateString(),
+    )
+  })
+
+  it('asks before either fill throws away typed work, per button', async () => {
+    const posting = await upsertPosting(db, stored())
+    const el = await render({ editing: posting, detection })
+
+    await type(control(el, 'Company') as HTMLInputElement, 'Typed by hand')
+    await click(button(el, 'Save as a new record'))
+
+    // Armed, and nothing has happened yet.
+    expect((control(el, 'Company') as HTMLInputElement).value).toBe('Typed by hand')
+
+    // Changing your mind and pressing the other one must ask about *that* one
+    // rather than inheriting the confirmation given for this.
+    await click(button(el, 'Update this record'))
+    expect((control(el, 'Company') as HTMLInputElement).value).toBe('Typed by hand')
+
+    await click(button(el, 'Overwrite this record'))
+    expect((control(el, 'Company') as HTMLInputElement).value).toBe('Some Other Company')
+    expect(await db.postings.count()).toBe(1)
+  })
+})
+
+describe('a save in flight', () => {
+  /**
+   * Holds `posting/upsert` open so the form can be caught mid-save.
+   *
+   * Everything else still answers immediately: the point is the gap between
+   * `toPostingInput` snapshotting the draft and the write landing, not a panel
+   * where nothing works.
+   */
+  function stallTheSave(): { finish: () => void } {
+    let release = () => {}
+    const held = new Promise<void>((resolve) => {
+      release = resolve
+    })
+
+    vi.mocked(chrome.runtime.sendMessage).mockImplementation((async (request: unknown) => {
+      if ((request as { type?: string }).type === 'posting/upsert') await held
+      return handleRequest(db, request as never)
+    }) as never)
+
+    return { finish: release }
+  }
+
+  /**
+   * The `busy` lock reached the fieldset and the detected notice, and its
+   * comment says why — "every way into the form has to be shut while a save is
+   * in flight, not just the inputs". This question is a way into the form and
+   * was not shut: `Open it` replaces the draft and the id behind a save that has
+   * already snapshotted both, and the reset that follows the save then wipes the
+   * record the user had just opened. The click is swallowed, silently.
+   *
+   * Found by the phase 12 guard sweep.
+   */
+  it('shuts the open-a-different-posting question too', async () => {
+    const first = await upsertPosting(db, stored())
+    const second = await upsertPosting(
+      db,
+      stored({ id: 'posting-second', company: 'Globex', jobTitle: 'Analyst' }),
+    )
+    const el = await render({ editing: first })
+
+    await rerender({ editing: second })
+    expect(el.textContent).toContain('Open a different posting?')
+
+    const stalled = stallTheSave()
+    await act(async () => {
+      el.querySelector('form')!.dispatchEvent(
+        new Event('submit', { bubbles: true, cancelable: true }),
+      )
+      // Long enough for the handler to reach its awaited send and set `saving`,
+      // and no longer: the send itself is held open on purpose.
+      await Promise.resolve()
+    })
+
+    expect(button(el, 'Open it').disabled).toBe(true)
+    expect(button(el, 'Keep what I have').disabled).toBe(true)
+
+    stalled.finish()
+    await settle()
   })
 })
 

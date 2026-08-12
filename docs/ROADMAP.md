@@ -21,7 +21,8 @@ then merged.
 | 10 ✅ | `feat/pending-submissions` | A confirmed submission survives a closed panel: a durable pending queue, an event demoted to a signal, and the confirmation's own timestamp on the record | Apply with the panel shut, open it later, and the question is waiting with the right date on it |
 | — ✅ | `feat/ashby-adapter` | An Ashby adapter, on its own branch rather than as a phase — reading a fourth board is additive and needed no new mechanism | A posting on `jobs.ashbyhq.com` fills the form |
 | 11 ✅ | `feat/diagnostics` | A diagnostics report the user can send: a pulled parse of the current page, an allowlisted payload shown before it is copied, and the retirement of re-parse | On a page the extension cannot read, one gesture produces a report that names the board and what each tier returned, and carries no company, title or URL path |
-| later | — | Workday, iCIMS, SmartRecruiters adapters | — |
+| 12 ✅ | `fix/fill-while-editing` | The fill that overwrites a record, closed by asking which record it means; a guard sweep; and Workday, behind a wildcard and two exclusions | Filling from a page while editing asks update-or-new and neither answer destroys a record; and a posting on `*.myworkdayjobs.com` fills the form unprompted, while its application flow is never read |
+| later | — | iCIMS, SmartRecruiters adapters | — |
 
 ## Known bugs
 
@@ -1405,6 +1406,353 @@ regression test until it has failed against that defect.**
 - **Deleting the snapshot store.** Measured here, decided later. The `full`
   export depends on it and that is a user-facing feature, not an internal one.
 
+## Phase 12 — the fill that means two things, and a fourth board
+
+Two pieces of work that share a branch point and nothing else. The first is the
+data-loss bug under **Known bugs**, which has been reachable since phase 9. The
+second is the next adapter, which is additive and needs no new mechanism — the
+same shape as the Ashby branch, which is why that one was not a phase either.
+
+The bug goes first, and alone if the phase has to be cut. It destroys records.
+
+### What the fill should do, which is the part that needed deciding
+
+The bug entry above stops short of a fix on purpose: `applyFill` has to let go of
+the record, but *letting go* is only one of two defensible answers, and the file
+says so — "filling from a page while editing might reasonably mean 'update this
+record from this page' rather than 'start a new one', and those want different
+ids."
+
+**Both readings are real, so the panel asks rather than picks.** While a record
+is open for editing, `DetectedNotice` offers two actions instead of one:
+
+- **Update this record** — keeps `draftId`, keeps `edited`, layers the page over
+  the current draft. This is the case `fill.ts` already argued for in
+  `swapAction`'s comment: "Re-reading a posting whose description changed is a
+  real thing to want."
+- **Save as a new record** — releases the record before filling, so `draftId` is
+  fresh, `edited` is `null`, the duplicate check is re-armed, and the stored
+  record is untouched.
+
+The rejected alternative worth recording is **inferring it from a match** — run
+the page through `findDuplicate`'s join keys, treat a hit as "update" and a miss
+as "new". It is more elegant and it fails in the direction that costs a record:
+a canonical URL that moved, a req id the adapter missed, and a silent inference
+picks "new" when the user meant "update" — or worse, the reverse. Decision 13's
+rule is that the form never overwrites the user's own work without being told
+to, and an inference is not being told. The two buttons cost one click in a
+sequence that is already deliberate.
+
+That the buttons are *in the notice* also fixes the thing that made the bug
+invisible: today the panel gives no sign, while a record is open, that "Fill from
+this page" is about to write to it. The notice names the record it would
+overwrite.
+
+- **`applyFill` gains the exit `reset` owns.** Not by calling `reset` — that
+  wipes the draft, and the new-record path has to keep the fill it just applied.
+  The id-releasing half (`setDraftId(newId())`, `setEdited(null)`,
+  `onStopEditing()`) becomes its own function that both call, so there is still
+  one place where the id stops being the stored record's, and `reset`'s comment
+  stays true.
+- **`onStopEditing` has to fire on the new-record path**, or the panel hands the
+  same record straight back through the `editing` effect and the form reopens
+  what the user just walked away from. Phase 9's review found this exact
+  interaction once already, in the delete path.
+- **Provenance follows the id.** Update keeps `edited`, so `editContextFor`
+  still answers for a record whose fill was refused, and `saveContextFor` wins
+  when a fill lands — which is right in both branches, since the page was read in
+  both. The bug's second symptom, a record stamped as captured off a board it
+  never came from, goes away with the id.
+- **The duplicate check stops being disabled by accident.** `if (!force &&
+  !edited)` is correct on its own terms: an edit writes to a known id and cannot
+  create a second record. It only misfired because `edited` outlived the edit.
+  No change here — this is what the fix restores rather than what it touches.
+
+### The guard audit this bug is an argument for
+
+This bug is the fifth shape in **Recurring shapes** below, already written up
+there with its check: for each guard, list the callers that reach the guarded
+state *without* passing through it. What that entry adds to the fix above is
+the reason `applyFill` is the right place for the release — "prefer guarding the
+*destination* over the routes … it is the one place all the fills meet." The
+check is cheap enough to run deliberately here rather than waiting for review to
+find the next instance.
+
+Kept to guards that stand between the user and a destroyed or wrong record:
+`swapAction`'s `editing` branch (the one that failed), the duplicate check's
+`!edited`, the `busy` locks on the fieldset and the notice, the pending queue's
+skip-a-record-open-for-editing rule, and `onStopEditing`. Anything found is a
+finding, not automatically a fix — some other path may be legitimately open, and
+saying so in a comment is the outcome for those.
+
+**The sweep found two, and the first is the same defect one layer up.**
+
+- **The pending queue's skip was reading the request, not the record.**
+  `refreshPending` suppresses a submission prompt for a record the form has
+  loaded, because confirming it writes `applied` behind a form whose next Save
+  puts `viewed` and a null `appliedAt` back over it — the comment on the skip
+  says exactly this. It tested `editing`, which is the record the panel *asked*
+  for, and the form is allowed to refuse. Open a record, then click a different
+  row: the request names the second, the form goes on holding the first, and the
+  prompt for the first came back up while it was still open. A guard tested
+  against a proxy for the state it guards, which is the fifth shape again, with
+  the proxy agreeing with the state everywhere except the one route that matters.
+
+  The form now reports what it holds — `onHolding`, called where a record is
+  taken and where it is let go — and the queue reads that. It is deliberately
+  *not* the same signal as `onStopEditing`: "Keep what I have" settles the
+  request while the form goes on holding what it already had, so collapsing the
+  two would have that click report an empty form and rebuild the defect.
+
+- **The `busy` lock missed the question raised between the two places that
+  have it.** The fieldset has it, the detected notice has it and its comment
+  generalises — "every way into the form has to be shut while a save is in
+  flight, not just the inputs" — and "Open a different posting? / Open it" sat
+  between them with neither. It replaces the draft and the id behind a save that
+  has already snapshotted both, and the reset that follows wipes the record just
+  opened. No record is corrupted; the click is swallowed with no sign it was
+  taken. One `disabled={busy}` on each button, which is the rule the two
+  neighbours were already following.
+
+Both were proven the phase's way: written as tests, run against the unfixed
+code, seen to fail, and seen to fail alone.
+
+### Workday, and the permission question it raises
+
+The first board whose host is **per-tenant**: `acme.wd1.myworkdayjobs.com`,
+`acme.wd5.myworkdayjobs.com`, with the numbered data-center segment varying too.
+Every previous board sat on one fixed host, so the manifest listed it and that
+was the end of it.
+
+This paragraph first said the phase "needs `https://*.myworkdayjobs.com/*`", that
+this was "decision 2's territory", and moved on. **`manifest.test.ts` already
+forbids it**, in a test written so that "a fourth board added later cannot
+quietly reintroduce it" — and the fourth board added later is this one. The rule
+came from `https://*.greenhouse.io/*`, which covered `app.greenhouse.io`, the
+logged-in recruiter console. Naming a rule as territory and then walking across
+it is not stating a constraint; the tripwire is what stated it.
+
+Workday is genuinely unlike the case that motivated the rule: the tenant *is*
+the subdomain, so the wildcard buys every employer where Greenhouse's bought
+nothing but the recruiter console. That earns an amendment to decision 2, not a
+rewrite of the test to let this through — and the amendment has to answer the
+thing the Greenhouse case was about, which is what else lives under the pattern.
+
+Under `myworkdayjobs.com` that is **the application flow**: the seven steps of a
+Workday application, including `My Information` and the voluntary
+self-identification questionnaire — the exact category of data decision 6's
+trimming amendment exists for. `snapshot.ts` already drops `form`, `input`,
+`textarea`, `select` and every inline script that is not JSON-LD, so a snapshot
+of such a page carries far less than it looks. What it does not cover is
+Workday's **Review** step, which renders what the user typed as ordinary text
+outside any form element.
+
+So the match is a wildcard **with `exclude_matches` for the application paths**:
+automatic detection on postings, and a content script that structurally cannot
+run where the user's own data is, rather than one that runs there and is trusted
+to drop the right nodes afterwards. `manifest.test.ts` changes from "no wildcard
+subdomain" to a rule that permits one only alongside exclusions, so the property
+it defends survives in a stronger form than a ban that a fifth board would have
+to argue with again. The `activeTab` path stays the fallback for tenants on a
+vanity domain, which no allowlist could reach.
+
+Two things are already built and tested, which is most of why this is additive:
+
+- **`atsReqId`** — `normalize/ats.ts` already returns `workday` and parses
+  `…/job/SF/Engineer_R-12345`, including the cases that are *not* requisitions
+  (a title with an underscore, a title ending in a year).
+- **URL canonicalization** — `normalize/url.test.ts` already holds two Workday
+  requisitions that must not collapse into each other.
+
+So the work is the adapter, its fixture, and its rung order. Workday renders
+client-side like Ashby, so the expectation is JSON-LD where the tenant enabled
+it, the embedded state blob where it did not, and no selector tier — for Ashby's
+reason, that hashed class names are not site knowledge, they are this week's
+build. **What the tiers actually return is a question for the fixture, not for
+this file**: phase 11's lesson was that an enum written by imagining the failures
+loses two of its three values. Capture a real posting first, then write the
+adapter against it.
+
+### What the first real Workday page changed
+
+A diagnostic pulled from a live tenant — `premera.wd5.myworkdayjobs.com`, phase
+11's gesture doing exactly the job it was built for — answered the question
+above before any adapter was written, and reordered the rest of this section.
+
+```
+adapter    generic@1        company    jsonld
+coverage   0.79             jobTitle   jsonld
+offered    yes              location   jsonld
+                            workMode / atsReqId / salary   not found
+```
+
+**Workday already works, with no adapter at all.** `generic@1` reads company,
+title and location off schema.org JSON-LD and the result clears
+`isWorthOffering`. That is phase 11's observation arriving a second time and
+harder: it is difficult to find a posting that yields nothing, because boards
+want to appear in Google Jobs. Decision 5's tier order is the reason, and this is
+the second phase to be made smaller by it.
+
+**`atsReqId not found` costs nothing.** It describes the extraction tiers, not
+the record. `deriveJoinKeys` falls back to `extractAtsReqId(url)`, whose Workday
+cases were already written and passing, so a saved record carries `R-12345`
+whether or not a tier read it. The diagnostic's row is honest about what it
+measures and easy to misread as a gap — worth knowing before it is treated as
+one.
+
+So the adapter is no longer what makes Workday work; it is what would add
+`workMode` and `salary` to a page that already gives up four fields of six. The
+manifest is what makes any of it automatic — the diagnostic above required a
+deliberate keystroke, because no content script matches the host — and it is
+therefore the high-value half and the one with a permissions question attached.
+
+Salary is the more interesting of the two missing fields: the tenant probed is a
+Washington employer, and Washington requires a pay range in the posting. If the
+range is on the page but not in `baseSalary`, the fixture will say where — and
+that is a question for the fixture, not for this file.
+
+The submission-confirmation path (decision 12) is **not** extended to Workday
+here. Greenhouse's detection works because its confirmation is a URL; whether
+Workday has an equivalent is unknown, and inventing one is how a heuristic gets
+in.
+
+### Done when
+
+Open a saved record, tab to a different posting, and the notice names the record
+it would overwrite and offers both answers; "Save as a new record" leaves the
+original exactly as it was; "Update this record" writes to it and to nothing
+else. Each regression test has been **run against the unfixed code and seen to
+fail** — phase 11's rule, which caught a vacuous test the one time it was
+skipped. And a real posting on a `*.myworkdayjobs.com` tenant fills the form,
+with the diagnostics report from phase 11 as the tool for reading the ones that
+do not.
+
+### What building it changed
+
+**The phase had its two halves in the wrong order**, and one diagnostic from a
+live tenant said so — recorded above, where it belongs with the plan it
+reversed. The adapter was assumed to be what made Workday work; `generic@1`
+already did, and the manifest was the half with all the value and all the risk
+in it.
+
+**The wildcard met a test written to stop it, and the test was right to.** Also
+above. What is worth adding here is that the fix was not to weaken the rule:
+`manifest.test.ts` went from banning a wildcard host to requiring that one be
+named in the exclusions, which is a *stronger* rule and one a fifth board will
+not have to argue with.
+
+**`exclude_matches` turned out to be half a guard.** It is evaluated at
+injection, and the ordinary route into a Workday application is a same-document
+navigation from the posting — the script is already running and nothing
+re-evaluates the manifest. That is the fifth recurring shape for the third time
+in one phase, and the third time the answer was to guard the destination:
+`capture` refuses before the document is parsed, and the manifest handles the
+cold load it can actually see.
+
+**Two real URLs contradicted two rules written without any.** `WORKDAY_REQ` had
+been built from invented URLs and matched none of the real ones; then the
+requisition it produced disagreed with the one in the page's own JSON-LD, which
+reversed a decision made two commits earlier about keeping the repost counter.
+Both were quiet failures — an empty column and a mismatched key, nothing that
+throws.
+
+### What using it changed
+
+The walkthrough passed on the fill notice, the flow exclusions and the three
+untouched boards. It also found the one defect in the phase that the entire
+suite was blind to, and the reason it was blind is the part worth keeping.
+
+**The work mode read `null` on every real posting.** The adapter passed the
+description through `cleanText`, which rejects anything over 300 characters —
+right for a field value, where a string that long means a selector matched a
+container, and wrong for a description, which is the haystack and not the value.
+
+**The fixture is what hid it.** It had been trimmed to the description's first
+line and a sentence about pay, which left it just under the cap, so `cleanText`
+returned a usable string and every test passed against a document whose
+defining property had been removed. The fixtures are checked in because invented
+markup can never notice a real board changing; this is the same rule's other
+edge, and it is now a sixth shape below.
+
+The repair was to keep the JSON-LD verbatim and to assert the *property* rather
+than the behaviour — one test fails if the description is not longer than
+`MAX_FIELD_LENGTH`, so a retrim cannot quietly restore what the bug needs. The
+anchoring test improved by the same move: the real description says "on-site"
+three times past the four-thousandth character, about the employer's offices
+rather than this job, where the invented one had a trap written to be caught by
+the code that had just been written.
+
+### What review changed
+
+Four findings, all confirmed by running the code. **Two of them were defects
+this phase created**, and both sat under comments asserting they could not
+happen.
+
+- **The work mode was inverted on every Workday posting that was not hybrid.**
+  The label capture ran forty characters past the label, so `inferWorkMode` saw
+  the sentence after it and answered about whichever word its
+  hybrid-over-remote-over-onsite precedence liked best: "On-Site — Remote work is
+  not available for this position" read as `remote`, and "Remote — This role is
+  not hybrid" read as `hybrid`. The comment above the pattern claimed the
+  anchoring prevented exactly this, and the window is whitespace-collapsed before
+  the match runs, so the `\n` bounding the character class could never appear in
+  it.
+- **The pending-queue guard lost the half it used to have.** The guard sweep
+  narrowed it from the request to what the form holds, which was right for the
+  case it was built for and opened the mirror image: holding B and clicking A's
+  row leaves A requested and refused, so `held` never names it, its prompt stays
+  up, and confirming writes `applied` behind a stale `Posting` that "Open it"
+  then saves `viewed` back over. Verified end to end. It was unreachable before
+  this phase — the request-keyed guard stood the prompt down there — so this is
+  a defect introduced by the fix for a defect of the same shape.
+- **A docblock asserting more than the code did**, for the fourth phase running:
+  `extract/index.ts` still said no adapter writes `atsReqId`, and `workday.ts`
+  quotes that very sentence as its licence for writing it.
+- **`WORKDAY_REQ`'s prefix was wide enough to accept a season.** `Fall-2026`
+  matched at five letters, and with the counter stripped one internship and the
+  next season's would have shared a join key.
+
+Two things are worth keeping out of this beyond the fixes.
+
+**Narrowing a guard is a change in both directions, and only one of them gets
+tested.** The sweep found a guard reading a proxy, replaced the proxy with the
+real state, and shipped a test for the case that had been broken. Nothing asked
+what the *old* answer had been covering. The check to add to the fifth shape:
+when a guard's input is replaced rather than extended, enumerate what the
+previous input caught that the new one does not — and if the answer is "a case
+that is now unreachable", say why in a comment, because it will not stay
+unreachable.
+
+**A fixture can pass for a reason unrelated to its claim even when its markup is
+perfect.** The trimming problem above was about markup that had lost a property;
+this one is about a *value* that happens to be forgiving. Premera's work mode is
+`Hybrid`, which wins `inferWorkMode`'s precedence no matter what prose bleeds in
+beside it, so the fixture asserted the right answer for the wrong reason and
+would have gone on doing so forever. Where a parser has precedence rules, a
+single real fixture cannot exercise them: the cases have to be written by hand,
+in the shapes the precedence distinguishes, or the most-preferred value will
+quietly stand in for all of them.
+
+### Deliberately not in phase 12
+
+- **Prose salary.** Premera states a range, as Washington requires, in the
+  middle of the description. `salary.ts` reads `baseSalary` and nothing else on
+  the argument that a missed salary costs a copy-paste while a wrong one is
+  authoritative and off by a factor of twelve, and that argument is not weaker
+  on Workday. The fixture keeps the real phrasing so that reopening this has
+  something to work against.
+- **Extending the flow refusal to Lever.** Its apply form is
+  `/<company>/<id>/apply` and the privacy argument carries; so does the cost,
+  which is that a refused read means the panel forgets the posting while the
+  user is applying to it. A decision to take for Lever, not to inherit from a
+  pattern written for Workday.
+- **Inferring update-or-new from a match.** Rejected above, not deferred.
+- **Workday submission detection.** No signal is known to exist; decision 12's
+  bar is a confirmation that is not a heuristic.
+- **iCIMS and SmartRecruiters.** One new board at a time, so that what the
+  Workday fixture teaches about per-tenant hosts is known before the next one
+  commits to a pattern.
+
 ## Recurring shapes
 
 Two shapes account for most of what review has found, across every phase that
@@ -1506,6 +1854,38 @@ dangerous, read the next sentence — if it describes a way the user can still g
 there, that is the missing case. And prefer guarding the *destination* over the
 routes: `applyFill` is where the id should have been let go, because it is the
 one place all the fills meet.
+
+Phase 12 hit this shape **three times in one phase**, which is what promoted it
+from an observation to something worth checking deliberately: the fill that kept
+the record's id, the pending-queue skip that read the panel's request instead of
+what the form held, and `exclude_matches` guarding the injection while the
+same-document navigation walked past it. All three were guards that were correct
+about the route they were written for.
+
+**A sixth, and the fixtures' own rule turned inside out: a real capture trimmed
+until it no longer represents the page.** The fixtures are checked in because
+markup this project invented could never notice a board changing its own — and
+the same argument says nothing about markup the project *trimmed*. Phase 12's
+Workday adapter read the description through `cleanText`, which rejects anything
+over 300 characters; every real posting therefore returned `null` and lost the
+work mode silently. The fixture had been cut to the description's first line and
+a sentence about pay, landing just under the cap, so the whole suite passed
+against a document whose defining property had been removed. The bug was found
+by loading a posting in Chrome, which is the only thing that was still looking at
+the real page.
+
+This one is nastier than a fixture that is merely stale, because a trimmed
+capture *is* real markup and reads as trustworthy — the header at the top of it
+even says what was cut. What it does not say is what the cut was load-bearing
+for, because whoever cut it did not know.
+
+The check: **when trimming a capture, ask what property of the original each cut
+removes, not just what content.** Length, ordering, and the presence of a second
+block that a greedy pattern would run past are all things a page has and a
+tidied excerpt does not. Where a property is load-bearing, assert it in a test
+so the retrim fails loudly — `adapters.test.ts` now requires the Workday
+description to be longer than `MAX_FIELD_LENGTH`, which is a strange-looking
+assertion that exists precisely because its absence was invisible.
 
 ## Changes from the original plan
 

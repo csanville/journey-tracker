@@ -1,4 +1,5 @@
 import { ashby } from './adapters/ashby'
+import { workday } from './adapters/workday'
 import { generic } from './adapters/generic'
 import { greenhouse } from './adapters/greenhouse'
 import { lever } from './adapters/lever'
@@ -32,7 +33,16 @@ export { mergeTiers, scoreConfidence } from './merge'
  * nothing the user will ever see again — the wrong-merge failure decision 7 is
  * arranged around, arriving through a new door. The field stays in
  * `ExtractedFields` for an adapter that finds a genuinely public requisition
- * number on the page; today none does.
+ * number on the page.
+ *
+ * **Workday is now that adapter, and it is the only one.** Its JSON-LD
+ * `identifier.value` is the requisition the URL is addressed by — checked
+ * against two real postings, where the two agree once the counter Workday
+ * appends to the slug is stripped. `ats.test.ts` asserts they still agree, which
+ * is the condition on this exception rather than a nicety: the moment a board's
+ * `identifier` says something the URL does not, this paragraph's original
+ * warning applies to it again. `greenhouse` and `ashby` still write nothing
+ * here, and the shared `jsonld` tier still reads no `identifier` at all.
  *
  * **Nothing here throws.** Every reader is written to return what it found and
  * shrug at what it did not, and `extract` catches anything that gets through
@@ -47,7 +57,7 @@ export { mergeTiers, scoreConfidence } from './merge'
  * Ordered, most specific first. `generic` matches everything and must stay
  * last; it is the fallback, not a competitor.
  */
-export const ADAPTERS: readonly Adapter[] = [greenhouse, lever, ashby, generic]
+export const ADAPTERS: readonly Adapter[] = [greenhouse, lever, ashby, workday, generic]
 
 export function selectAdapter(rawUrl: string): Adapter {
   let url: URL

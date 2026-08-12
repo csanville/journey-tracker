@@ -173,6 +173,101 @@ describe('a submission prompt and the form claiming the same record', () => {
     expect(el.textContent).not.toContain('Looks like you applied')
   })
 
+  /**
+   * The guard above reads what the form *holds*, not what was *asked for*, and
+   * this is the case that separates them.
+   *
+   * Clicking a second row while the first is open leaves the request naming the
+   * second record and the form still holding the first — it refuses, and asks.
+   * Keyed on the request, the queue decided the first record was no longer open
+   * and put its prompt back up. Confirming it writes `applied` and an
+   * `appliedAt` to a record whose stale `viewed` is sitting in a form one Save
+   * away from overwriting both.
+   *
+   * Found by the phase 12 guard sweep, which is the same shape as the fill bug
+   * that prompted the sweep: a guard tested against a proxy for the state it
+   * guards, and a route where the proxy and the state disagree.
+   */
+  it('keeps the prompt down while the form still holds that record', async () => {
+    const open = await upsertPosting(db, aPosting({ state: 'viewed' }))
+    await upsertPosting(
+      db,
+      aPosting({ company: 'Globex', jobTitle: 'Analyst', state: 'viewed' }),
+    )
+    const el = await render()
+
+    await announce(open.id)
+    const rows = () => [...el.querySelectorAll('.recent__open')]
+    await click(rows().find((r) => r.textContent?.includes('Initech'))!)
+    expect(el.textContent).not.toContain('Looks like you applied')
+
+    // The form is holding Initech and refuses to swap, so it goes on holding it.
+    await click(rows().find((r) => r.textContent?.includes('Globex'))!)
+    expect(el.textContent).toContain('Editing a saved posting')
+
+    // The question about the record the form is still holding must stay down.
+    expect(el.textContent).not.toContain('Looks like you applied')
+  })
+
+  /**
+   * The mirror image of the test above, and the case that narrowing the guard
+   * to `held` alone reopened.
+   *
+   * The form is holding one record when a confirmation lands for a *different*
+   * one. Clicking that other record's row — the obvious way to find out which
+   * job the prompt means — is refused, because the form is holding something.
+   * The request therefore names it and `held` never does, so a guard reading
+   * only `held` leaves the prompt up. Confirming it writes `applied`; "Open it"
+   * then loads the `Posting` captured *before* that write, and Save puts
+   * `viewed` and a null `appliedAt` straight back over it.
+   *
+   * Found by review. It was unreachable before this phase, because the old
+   * request-keyed guard stood the prompt down here — which is precisely why
+   * both claims have to be honoured rather than either one.
+   */
+  it('keeps the prompt down for a record the form has been asked to open', async () => {
+    const held = await upsertPosting(
+      db,
+      aPosting({ company: 'Globex', jobTitle: 'Analyst', state: 'viewed' }),
+    )
+    const asked = await upsertPosting(db, aPosting({ state: 'viewed' }))
+    const el = await render()
+
+    const rows = () => [...el.querySelectorAll('.recent__open')]
+    await click(rows().find((r) => r.textContent?.includes('Globex'))!)
+    await announce(asked.id)
+
+    // Refused: the form is holding Globex, so this raises the question rather
+    // than taking the record.
+    await click(rows().find((r) => r.textContent?.includes('Initech'))!)
+    expect(el.textContent).toContain('Open a different posting?')
+
+    expect(el.textContent).not.toContain('Looks like you applied')
+    // And the record is untouched, which is the thing the prompt would have
+    // changed behind a form that was about to save over it.
+    expect(await db.postings.get(asked.id)).toMatchObject({ state: 'viewed' })
+    expect(held.id).not.toBe(asked.id)
+  })
+
+  it('asks again once that request is settled', async () => {
+    // The other direction, so the fix above cannot be "suppress it forever".
+    // Refusing the request with "Keep what I have" settles it, and the question
+    // the user never answered comes back.
+    await upsertPosting(db, aPosting({ company: 'Globex', jobTitle: 'Analyst' }))
+    const asked = await upsertPosting(db, aPosting({ state: 'viewed' }))
+    const el = await render()
+
+    const rows = () => [...el.querySelectorAll('.recent__open')]
+    await click(rows().find((r) => r.textContent?.includes('Globex'))!)
+    await announce(asked.id)
+    await click(rows().find((r) => r.textContent?.includes('Initech'))!)
+    expect(el.textContent).not.toContain('Looks like you applied')
+
+    await click(button(el, 'Keep what I have'))
+
+    expect(el.textContent).toContain('Looks like you applied')
+  })
+
   it('leaves a prompt about some other record alone', async () => {
     const open = await upsertPosting(db, aPosting({ state: 'viewed' }))
     const other = await upsertPosting(

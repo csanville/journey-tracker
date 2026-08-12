@@ -68,6 +68,27 @@ const CASES: Array<[what: string, url: string, ats: AtsName, reqId: string]> = [
     'workday',
     'REQ12345',
   ],
+  // The first real Workday URL this project read, kept verbatim because every
+  // case above it was invented and every one of them missed the counter Workday
+  // actually appends to the slug. This returned `null` until it was looked at.
+  //
+  // The expected value is the counter *stripped*, because the same posting's
+  // JSON-LD calls the requisition `R28643` — see `WORKDAY_REQ` and the agreement
+  // test at the bottom of this file.
+  [
+    'a real Workday requisition, with the counter Workday appends to the slug',
+    'https://premera.wd5.myworkdayjobs.com/en-US/Premera/job/Mountlake-Terrace-WA/Software-Development-Engineer-III--React-and-React-Native_R28643-1',
+    'workday',
+    'R28643',
+  ],
+  // The other real posting, whose slug carries no counter at all — so the
+  // stripping above cannot be the only reason the pair below agree.
+  [
+    'a real Workday requisition with no counter on it',
+    'https://premera.wd5.myworkdayjobs.com/en-US/Premera/job/Mountlake-Terrace-WA/Software-Development-Engineer-III_R28659',
+    'workday',
+    'R28659',
+  ],
 ]
 
 /**
@@ -99,6 +120,27 @@ const NO_MATCH: Array<[what: string, url: string]> = [
   [
     'a Workday title ending in a year',
     'https://acme.wd1.myworkdayjobs.com/en-US/External/job/SF/Software-Engineer-Intern_Summer_2026',
+  ],
+  // The requisition is in the path but not in the *last* segment, and this
+  // reads the last segment only. Deliberately left as a miss: an apply URL is
+  // not a posting, and teaching this to walk back through the path to rescue
+  // one would make every step of an application flow identify as the job it
+  // belongs to — the opposite of what the flow exclusions are for.
+  [
+    'a real Workday posting reached through its apply flow',
+    'https://premera.wd5.myworkdayjobs.com/en-US/Premera/job/Mountlake-Terrace-WA/Software-Development-Engineer-III--React-and-React-Native_R28643-1/apply/autofillWithResume',
+  ],
+  // A season and a year is the shape the digit rule already refuses through
+  // `_Summer_2026`, arriving through the letter rule instead: `Fall` is four
+  // letters, so a five-letter prefix accepted it, and stripping the counter
+  // would then have merged one internship with the next season's.
+  [
+    'a Workday title ending in a season and a year',
+    'https://acme.wd1.myworkdayjobs.com/en-US/External/job/SF/Engineer-Intern_Fall-2026',
+  ],
+  [
+    'the same, with the counter Workday appends',
+    'https://acme.wd1.myworkdayjobs.com/en-US/External/job/SF/Engineer-Intern_Fall-2026-1',
   ],
   [
     'a Workday title ending in a bare number',
@@ -163,5 +205,38 @@ describe('extractAtsReqId', () => {
 
   it('returns null for a URL it does not recognise', () => {
     expect(extractAtsReqId('https://acme.com/careers')).toBeNull()
+  })
+})
+
+/**
+ * The two ways a Workday record can get a requisition, asserted to produce the
+ * same one.
+ *
+ * `deriveJoinKeys` prefers an adapter-supplied `atsReqId` and falls back to this
+ * file, so a posting saved while the Workday adapter is running and the same
+ * posting saved without it must not land on different keys — that is two records
+ * for one job, which is the wrong-merge failure decision 7 is arranged around,
+ * seen from the other side.
+ *
+ * The check is here rather than in the adapter's own tests because this is the
+ * half that would be edited without thinking about the other: the pattern lives
+ * in this file, and the reason it strips a suffix is in that one.
+ */
+describe('the requisition a Workday record ends up with', () => {
+  it('is the same whichever half of the code supplied it', async () => {
+    const { readFileSync } = await import('node:fs')
+    const { JSDOM } = await import('jsdom')
+    const { workday } = await import('../extract/adapters/workday')
+
+    const url =
+      'https://premera.wd5.myworkdayjobs.com/en-US/Premera/job/Mountlake-Terrace-WA/Software-Development-Engineer-III--React-and-React-Native_R28643-1'
+    const html = readFileSync('src/test/fixtures/workday-job.html', 'utf8')
+    const { document } = new JSDOM(html).window
+
+    const fromPage = workday.readers[0]!.read(document).atsReqId
+    const fromUrl = extractAtsReqId(url)
+
+    expect(fromPage).toBe('R28643')
+    expect(fromUrl).toBe(fromPage)
   })
 })

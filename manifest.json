@@ -24,7 +24,12 @@
         "https://job-boards.greenhouse.io/*",
         "https://boards.greenhouse.io/*",
         "https://jobs.lever.co/*",
-        "https://jobs.ashbyhq.com/*"
+        "https://jobs.ashbyhq.com/*",
+        "https://*.myworkdayjobs.com/*"
+      ],
+      "exclude_matches": [
+        "https://*.myworkdayjobs.com/*/apply",
+        "https://*.myworkdayjobs.com/*/apply/*"
       ],
       "js": ["src/content/content-script.ts"],
       "run_at": "document_idle"

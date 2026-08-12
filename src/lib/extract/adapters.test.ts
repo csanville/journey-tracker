@@ -5,8 +5,10 @@ import { extract, selectAdapter } from './index'
 import { ashbyReaders } from './adapters/ashby'
 import { greenhouseReaders } from './adapters/greenhouse'
 import { leverReaders } from './adapters/lever'
+import { workday } from './adapters/workday'
 import { readJsonLd } from './tiers/jsonld'
 import { readMeta } from './tiers/meta'
+import { cleanText } from './text'
 
 /**
  * The fixtures are real captures, trimmed — see the comment at the top of each.
@@ -23,6 +25,8 @@ import { readMeta } from './tiers/meta'
 const GREENHOUSE_URL = 'https://job-boards.greenhouse.io/discord/jobs/8433948002'
 const LEVER_URL = 'https://jobs.lever.co/leverdemo/004f960b-c8be-4e98-8d37-b3be47f99ea0'
 const ASHBY_URL = 'https://jobs.ashbyhq.com/ramp/d1183b00-6590-4fe4-a585-28d84e578fe3'
+const WORKDAY_URL =
+  'https://premera.wd5.myworkdayjobs.com/en-US/Premera/job/Mountlake-Terrace-WA/Software-Development-Engineer-III--React-and-React-Native_R28643-1'
 
 describe('selectAdapter', () => {
   it('routes each board to its own adapter', () => {
@@ -612,5 +616,168 @@ describe('robustness', () => {
   it('does not throw on an empty document', () => {
     expect(() => extract(parseHtml(''), GREENHOUSE_URL)).not.toThrow()
     expect(extract(parseHtml(''), GREENHOUSE_URL).confidence).toBe(0)
+  })
+})
+
+/** The JSON-LD description, which several tests below are about the length of. */
+function descriptionOf(doc: Document): string {
+  const block = doc.querySelector('script[type="application/ld+json"]')
+  return (JSON.parse(block!.textContent!) as { description: string }).description
+}
+
+describe('workday', () => {
+  const document = loadFixture('workday-job.html')
+
+  it('routes to its own adapter, on any tenant and any data centre', () => {
+    expect(selectAdapter(WORKDAY_URL).name).toBe('workday')
+    expect(
+      selectAdapter('https://acme.wd1.myworkdayjobs.com/en-US/External/job/SF/E_R1234')
+        .name,
+    ).toBe('workday')
+    // The suffix trick, for the same reason every other adapter has this test.
+    expect(selectAdapter('https://notmyworkdayjobs.com/x').name).toBe('generic')
+  })
+
+  it('reads company, title and location from schema.org, as generic already did', () => {
+    // The diagnostic that prompted this adapter reported `generic@1` at 0.79
+    // coverage on the live page, so these three were never the gap. Asserted
+    // anyway: an adapter that took the routing and then read *less* than the
+    // fallback it displaced would be a silent regression.
+    expect(readJsonLd(document)).toMatchObject({
+      company: 'Premera Blue Cross',
+      jobTitle: 'Software Development Engineer III, React and React Native',
+      location: 'WA Mountlake Terrace Orcas, United States of America',
+    })
+  })
+
+  it('reads the requisition from `identifier`, which the shared tier declines to', () => {
+    // `jsonld.ts` does not read `identifier` because boards generally put an
+    // internal record id there, and it reserves the exception for an adapter
+    // that finds a genuinely public requisition. This is that exception: the
+    // value matches the requisition the URL is addressed by.
+    expect(readJsonLd(document).atsReqId).toBeUndefined()
+    expect(workday.readers[0]!.read(document)).toMatchObject({ atsReqId: 'R28643' })
+  })
+
+  it('reads the work mode from the first line of the description', () => {
+    // `jobLocationType` is absent on both captured postings, so this prefix is
+    // the only statement of it on the page.
+    expect(readJsonLd(document).workMode).toBeNull()
+    expect(workday.readers[0]!.read(document)).toMatchObject({ workMode: 'hybrid' })
+  })
+
+  it('does not go looking for the mode further down the description', () => {
+    // Anchored to the start on purpose, and the real description is what makes
+    // that worth asserting: it says "on-site" three times past the
+    // four-thousandth character, about the employer's offices rather than about
+    // this job. An unanchored search relabels a hybrid role.
+    const described = descriptionOf(document)
+
+    expect(described.slice(4000).toLowerCase()).toContain('on-site')
+    expect(workday.readers[0]!.read(document).workMode).toBe('hybrid')
+  })
+
+  /**
+   * The bug the first version of this fixture hid, asserted from both ends.
+   *
+   * `cleanText` rejects anything over `MAX_FIELD_LENGTH` — correct for a field
+   * value, where a string that long means a selector matched a container — and
+   * the adapter ran the description through it. Every real posting therefore
+   * read `null` and lost the work mode silently, while a fixture whose
+   * description had been trimmed to a couple of hundred characters passed.
+   *
+   * So this asserts the property the fixture must keep, not only the behaviour:
+   * a retrim that shortens the description fails here rather than quietly
+   * restoring the conditions the bug needs.
+   */
+  it('reads the mode from a description far too long to be a field value', () => {
+    const described = descriptionOf(document)
+
+    expect(described.length).toBeGreaterThan(300)
+    expect(cleanText(described)).toBeNull()
+    expect(workday.readers[0]!.read(document).workMode).toBe('hybrid')
+  })
+
+  /**
+   * The inversion a review found, and the reason the fixture could not.
+   *
+   * The capture used to run forty characters past the label, so `inferWorkMode`
+   * saw the next sentence too and its hybrid-over-remote-over-onsite precedence
+   * answered about the wrong word. Premera's value is `Hybrid`, which wins that
+   * precedence regardless — so the fixture went on passing while every posting
+   * that stated itself as remote or on-site was being inverted.
+   */
+  it.each([
+    ['Workforce Classification: On-Site Remote work is not available here.', 'onsite'],
+    ['Workforce Classification: Remote This role is not hybrid at all.', 'remote'],
+    ['Workforce Classification: On-Site\nOur hybrid teams collaborate daily.', 'onsite'],
+    ['Workforce Classification: Hybrid Join Our Team: Do Meaningful Work.', 'hybrid'],
+  ])('reads %j as its own label, not the sentence after it', (description, expected) => {
+    const loose = parseHtml(
+      `<script type="application/ld+json">${JSON.stringify({
+        '@type': 'JobPosting',
+        title: 'Engineer',
+        description,
+      })}</script>`,
+    )
+
+    expect(workday.readers[0]!.read(loose).workMode).toBe(expected)
+  })
+
+  it('still finds nothing when the label is absent, rather than guessing', () => {
+    const loose = parseHtml(
+      `<script type="application/ld+json">${JSON.stringify({
+        '@type': 'JobPosting',
+        title: 'Engineer',
+        description:
+          'Join our team. We support remote collaboration across our fully on-site offices.',
+      })}</script>`,
+    )
+
+    // Proving the node was found and only the anchoring suppressed the answer.
+    // Without this the assertion below passes just as well on a document where
+    // no `JobPosting` was located at all, which is the vacuous version of it.
+    expect(readJsonLd(loose).jobTitle).toBe('Engineer')
+    expect(workday.readers[0]!.read(loose).workMode).toBeUndefined()
+  })
+
+  it('leaves salary alone, because the range on this page is prose', () => {
+    // Premera states a range — Washington requires one — as text in the middle
+    // of the description, and `salary.ts` parses `baseSalary` and nothing else
+    // on the argument that a wrong salary is worse than a missing one. This
+    // asserts the decision rather than the absence: the fixture keeps the real
+    // phrasing so that a change of heart has something to work against.
+    expect(extract(document, WORKDAY_URL).fields.salary).toBeNull()
+
+    const described = document.querySelector('script[type="application/ld+json"]')
+    expect(described?.textContent).toContain('Salary Range')
+  })
+
+  it('has no DOM tier, because the body is empty', () => {
+    // Not a stylistic choice. Workday renders client-side and serves a shell;
+    // there is nothing in the body for a selector to reach, so a DOM tier would
+    // be inventing site knowledge that no page would confirm.
+    expect(workday.readers.map((reader) => reader.tier)).toEqual([
+      'jsonld',
+      'jsonld',
+      'meta',
+    ])
+    expect(document.body.textContent?.trim()).toBe('')
+  })
+
+  it('produces the whole record the panel would fill from', () => {
+    const { fields, provenance, source, adapterVersion } = extract(document, WORKDAY_URL)
+
+    expect(source).toBe('workday')
+    expect(adapterVersion).toBe('workday@1')
+    expect(fields).toMatchObject({
+      company: 'Premera Blue Cross',
+      jobTitle: 'Software Development Engineer III, React and React Native',
+      workMode: 'hybrid',
+      atsReqId: 'R28643',
+      salary: null,
+    })
+    expect(provenance.atsReqId).toBe('jsonld')
+    expect(provenance.workMode).toBe('jsonld')
   })
 })

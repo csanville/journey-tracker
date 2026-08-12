@@ -37,8 +37,40 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
  * `findDuplicate` called them the same posting: the exact silent wrong merge
  * this file is arranged to prevent. A requisition that is genuinely all digits
  * is now missed instead, which is the direction that fails safely.
+ *
+ * The trailing group was added after the first real Workday URL was read, and
+ * every case above had been written without one: `R28643-1`, from a live Premera
+ * posting. Workday appends a counter to the URL slug, so the shape this file had
+ * anticipated — `R-12345`, the hyphen sitting between the letters and the digits
+ * — is one of two, and the pattern matched the invented one. Real Workday
+ * requisitions were returning `null`, which cost the join key silently:
+ * `findDuplicate` falls back to the canonical URL and the requisition column
+ * simply stayed empty.
+ *
+ * **The counter is stripped**, and the first version of this amendment kept it —
+ * on the reasoning that `R28643-1` and `R28643-2` are a posting and its repost,
+ * and that missing a merge is cheaper than making a wrong one. The page then
+ * said otherwise. The same posting's JSON-LD gives `identifier.value` as plain
+ * `R28643`: Workday's own name for the requisition does not include the suffix,
+ * so it belongs to the URL and not to the id. Keeping it would have put the
+ * adapter's key and the URL's key at odds for one posting — `deriveJoinKeys`
+ * prefers the adapter's — and two keys for one job is the wrong-merge failure
+ * arriving as its mirror image. `ats.test.ts` asserts the two agree.
+ *
+ * The prefix is **one to three letters**, narrowed from five by the review that
+ * noticed what stripping a counter costs. `Software-Engineer-Intern_Fall-2026-1`
+ * matched at five and reduced to `FALL-2026`, so a posting and the same
+ * internship a season later would have shared a join key — the wrong merge this
+ * pattern's digit rule already refuses `Summer_2026` for, walking back in
+ * through the letter rule. `Fall-2026` matched at five even before the counter
+ * was stripped, so the narrowing fixes more than it protects.
+ *
+ * Three is not a guess at Workday's format: it is every requisition prefix this
+ * file has ever seen, invented or real — `R`, `JR`, `REQ` — and every season
+ * name is four letters or more. A genuine four-letter prefix would now be
+ * missed, which costs a join key and not a record.
  */
-const WORKDAY_REQ = /^[A-Z]{1,5}-?\d{3,}$/i
+const WORKDAY_REQ = /^([A-Z]{1,3}-?\d{3,})(?:-\d+)?$/i
 
 function segments(url: URL): string[] {
   return url.pathname.split('/').filter(Boolean)
@@ -112,7 +144,9 @@ function workday(url: URL): string | null {
 
   // Workday writes requisitions in upper case; folding them makes the same
   // posting reached through a differently-cased link compare equal.
-  return WORKDAY_REQ.test(candidate) ? candidate.toUpperCase() : null
+  const matched = WORKDAY_REQ.exec(candidate)
+
+  return matched ? matched[1]!.toUpperCase() : null
 }
 
 type Matcher = { ats: AtsName; extract: (url: URL) => string | null }

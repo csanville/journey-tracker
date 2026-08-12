@@ -116,8 +116,22 @@ function locationOf(node: Unknowns): string | null {
   return formatted.length ? cleanText(formatted.join(' · ')) : null
 }
 
+/**
+ * The page's `JobPosting` node, for an adapter that needs a key this tier does
+ * not read.
+ *
+ * Exported rather than duplicated so that a board-specific reader and the
+ * general one below cannot disagree about *which* node is the posting — the
+ * walk, the `@type` handling and the graph flattening are all in `jsonLdNodes`,
+ * and a second implementation of any of them is a second set of bugs. The
+ * caller gets the node and decides what to do with the keys this one declines.
+ */
+export function jobPostingFrom(document: Document): Unknowns | null {
+  return jsonLdNodes(document).find((node) => typesOf(node).includes('JobPosting')) ?? null
+}
+
 export function readJsonLd(document: Document): Partial<ExtractedFields> {
-  const posting = jsonLdNodes(document).find((node) => typesOf(node).includes('JobPosting'))
+  const posting = jobPostingFrom(document)
   if (!posting) return {}
 
   const location = locationOf(posting)
