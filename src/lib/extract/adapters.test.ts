@@ -8,6 +8,7 @@ import { leverReaders } from './adapters/lever'
 import { workday } from './adapters/workday'
 import { readJsonLd } from './tiers/jsonld'
 import { readMeta } from './tiers/meta'
+import { cleanText } from './text'
 
 /**
  * The fixtures are real captures, trimmed — see the comment at the top of each.
@@ -618,6 +619,12 @@ describe('robustness', () => {
   })
 })
 
+/** The JSON-LD description, which several tests below are about the length of. */
+function descriptionOf(doc: Document): string {
+  const block = doc.querySelector('script[type="application/ld+json"]')
+  return (JSON.parse(block!.textContent!) as { description: string }).description
+}
+
 describe('workday', () => {
   const document = loadFixture('workday-job.html')
 
@@ -660,15 +667,44 @@ describe('workday', () => {
   })
 
   it('does not go looking for the mode further down the description', () => {
-    // Anchored to the start on purpose. Eight kilobytes of employer prose
-    // follows, and a loose search through it finds "remote" in a sentence about
-    // remote teams and relabels an onsite job.
+    // Anchored to the start on purpose, and the real description is what makes
+    // that worth asserting: it says "on-site" three times past the
+    // four-thousandth character, about the employer's offices rather than about
+    // this job. An unanchored search relabels a hybrid role.
+    const described = descriptionOf(document)
+
+    expect(described.slice(4000).toLowerCase()).toContain('on-site')
+    expect(workday.readers[0]!.read(document).workMode).toBe('hybrid')
+  })
+
+  /**
+   * The bug the first version of this fixture hid, asserted from both ends.
+   *
+   * `cleanText` rejects anything over `MAX_FIELD_LENGTH` — correct for a field
+   * value, where a string that long means a selector matched a container — and
+   * the adapter ran the description through it. Every real posting therefore
+   * read `null` and lost the work mode silently, while a fixture whose
+   * description had been trimmed to a couple of hundred characters passed.
+   *
+   * So this asserts the property the fixture must keep, not only the behaviour:
+   * a retrim that shortens the description fails here rather than quietly
+   * restoring the conditions the bug needs.
+   */
+  it('reads the mode from a description far too long to be a field value', () => {
+    const described = descriptionOf(document)
+
+    expect(described.length).toBeGreaterThan(300)
+    expect(cleanText(described)).toBeNull()
+    expect(workday.readers[0]!.read(document).workMode).toBe('hybrid')
+  })
+
+  it('still finds nothing when the label is absent, rather than guessing', () => {
     const loose = parseHtml(
       `<script type="application/ld+json">${JSON.stringify({
         '@type': 'JobPosting',
         title: 'Engineer',
         description:
-          'Join our team. We support remote collaboration across our fully onsite offices.',
+          'Join our team. We support remote collaboration across our fully on-site offices.',
       })}</script>`,
     )
 

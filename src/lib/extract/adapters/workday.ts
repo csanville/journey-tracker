@@ -54,7 +54,26 @@ import { cleanText } from '../text'
  * would eventually find the word "remote" in a sentence about remote *teams* and
  * relabel an onsite job. The label is a prefix or it is not read.
  */
-const CLASSIFICATION = /^\s*workforce classification:\s*([^\n.]{1,40})/i
+const CLASSIFICATION = /^workforce classification:\s*([^\n.]{1,40})/i
+
+/**
+ * How much of the description the label is looked for in.
+ *
+ * The label is the first thing in it, so this only has to be long enough to
+ * contain the label and short enough to be obviously not a search of the whole
+ * text. Both halves matter: the real description runs to eight kilobytes and
+ * says "on-site" three times past the four-thousandth character, in sentences
+ * about the employer's offices rather than about this job.
+ *
+ * **Not `cleanText`, which is what the first version of this used and why it
+ * silently found nothing on the live page.** That helper rejects anything over
+ * 300 characters — correctly, for a *field value*, where a string that long
+ * means a selector matched a container instead of a label. A description is not
+ * a field value; it is the haystack. Passing one through a guard designed to
+ * reject haystacks returned `null` for every real posting, while the trimmed
+ * fixture sat just under the cap and passed.
+ */
+const CLASSIFICATION_WINDOW = 200
 
 function readWorkdayJsonLd(document: Document): Partial<ExtractedFields> {
   const posting = jobPostingFrom(document)
@@ -69,10 +88,17 @@ function readWorkdayJsonLd(document: Document): Partial<ExtractedFields> {
       : cleanText(typeof identifier === 'string' ? identifier : null)
   if (value) fields.atsReqId = value
 
-  const described = cleanText(
-    typeof posting.description === 'string' ? posting.description : null,
-  )
-  const classified = described ? CLASSIFICATION.exec(described) : null
+  const described = typeof posting.description === 'string' ? posting.description : null
+  // Whitespace collapsed the way `cleanText` does it, including the non-breaking
+  // space boards emit constantly, but without its length rejection — see
+  // `CLASSIFICATION_WINDOW`.
+  const opening = described
+    ? described
+        .slice(0, CLASSIFICATION_WINDOW)
+        .replace(/[\s ]+/g, ' ')
+        .trim()
+    : null
+  const classified = opening ? CLASSIFICATION.exec(opening) : null
   // `inferWorkMode` rather than a lookup table: Workday lets the employer write
   // this label, so it is prose in a fixed position rather than a closed
   // vocabulary, and it has the sense to answer `null` for something it does not
