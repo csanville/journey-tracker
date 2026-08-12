@@ -1627,8 +1627,74 @@ skipped. And a real posting on a `*.myworkdayjobs.com` tenant fills the form,
 with the diagnostics report from phase 11 as the tool for reading the ones that
 do not.
 
+### What building it changed
+
+**The phase had its two halves in the wrong order**, and one diagnostic from a
+live tenant said so — recorded above, where it belongs with the plan it
+reversed. The adapter was assumed to be what made Workday work; `generic@1`
+already did, and the manifest was the half with all the value and all the risk
+in it.
+
+**The wildcard met a test written to stop it, and the test was right to.** Also
+above. What is worth adding here is that the fix was not to weaken the rule:
+`manifest.test.ts` went from banning a wildcard host to requiring that one be
+named in the exclusions, which is a *stronger* rule and one a fifth board will
+not have to argue with.
+
+**`exclude_matches` turned out to be half a guard.** It is evaluated at
+injection, and the ordinary route into a Workday application is a same-document
+navigation from the posting — the script is already running and nothing
+re-evaluates the manifest. That is the fifth recurring shape for the third time
+in one phase, and the third time the answer was to guard the destination:
+`capture` refuses before the document is parsed, and the manifest handles the
+cold load it can actually see.
+
+**Two real URLs contradicted two rules written without any.** `WORKDAY_REQ` had
+been built from invented URLs and matched none of the real ones; then the
+requisition it produced disagreed with the one in the page's own JSON-LD, which
+reversed a decision made two commits earlier about keeping the repost counter.
+Both were quiet failures — an empty column and a mismatched key, nothing that
+throws.
+
+### What using it changed
+
+The walkthrough passed on the fill notice, the flow exclusions and the three
+untouched boards. It also found the one defect in the phase that the entire
+suite was blind to, and the reason it was blind is the part worth keeping.
+
+**The work mode read `null` on every real posting.** The adapter passed the
+description through `cleanText`, which rejects anything over 300 characters —
+right for a field value, where a string that long means a selector matched a
+container, and wrong for a description, which is the haystack and not the value.
+
+**The fixture is what hid it.** It had been trimmed to the description's first
+line and a sentence about pay, which left it just under the cap, so `cleanText`
+returned a usable string and every test passed against a document whose
+defining property had been removed. The fixtures are checked in because invented
+markup can never notice a real board changing; this is the same rule's other
+edge, and it is now a sixth shape below.
+
+The repair was to keep the JSON-LD verbatim and to assert the *property* rather
+than the behaviour — one test fails if the description is not longer than
+`MAX_FIELD_LENGTH`, so a retrim cannot quietly restore what the bug needs. The
+anchoring test improved by the same move: the real description says "on-site"
+three times past the four-thousandth character, about the employer's offices
+rather than this job, where the invented one had a trap written to be caught by
+the code that had just been written.
+
 ### Deliberately not in phase 12
 
+- **Prose salary.** Premera states a range, as Washington requires, in the
+  middle of the description. `salary.ts` reads `baseSalary` and nothing else on
+  the argument that a missed salary costs a copy-paste while a wrong one is
+  authoritative and off by a factor of twelve, and that argument is not weaker
+  on Workday. The fixture keeps the real phrasing so that reopening this has
+  something to work against.
+- **Extending the flow refusal to Lever.** Its apply form is
+  `/<company>/<id>/apply` and the privacy argument carries; so does the cost,
+  which is that a refused read means the panel forgets the posting while the
+  user is applying to it. A decision to take for Lever, not to inherit from a
+  pattern written for Workday.
 - **Inferring update-or-new from a match.** Rejected above, not deferred.
 - **Workday submission detection.** No signal is known to exist; decision 12's
   bar is a confirmation that is not a heuristic.
@@ -1737,6 +1803,38 @@ dangerous, read the next sentence — if it describes a way the user can still g
 there, that is the missing case. And prefer guarding the *destination* over the
 routes: `applyFill` is where the id should have been let go, because it is the
 one place all the fills meet.
+
+Phase 12 hit this shape **three times in one phase**, which is what promoted it
+from an observation to something worth checking deliberately: the fill that kept
+the record's id, the pending-queue skip that read the panel's request instead of
+what the form held, and `exclude_matches` guarding the injection while the
+same-document navigation walked past it. All three were guards that were correct
+about the route they were written for.
+
+**A sixth, and the fixtures' own rule turned inside out: a real capture trimmed
+until it no longer represents the page.** The fixtures are checked in because
+markup this project invented could never notice a board changing its own — and
+the same argument says nothing about markup the project *trimmed*. Phase 12's
+Workday adapter read the description through `cleanText`, which rejects anything
+over 300 characters; every real posting therefore returned `null` and lost the
+work mode silently. The fixture had been cut to the description's first line and
+a sentence about pay, landing just under the cap, so the whole suite passed
+against a document whose defining property had been removed. The bug was found
+by loading a posting in Chrome, which is the only thing that was still looking at
+the real page.
+
+This one is nastier than a fixture that is merely stale, because a trimmed
+capture *is* real markup and reads as trustworthy — the header at the top of it
+even says what was cut. What it does not say is what the cut was load-bearing
+for, because whoever cut it did not know.
+
+The check: **when trimming a capture, ask what property of the original each cut
+removes, not just what content.** Length, ordering, and the presence of a second
+block that a greedy pattern would run past are all things a page has and a
+tidied excerpt does not. Where a property is load-bearing, assert it in a test
+so the retrim fails loudly — `adapters.test.ts` now requires the Workday
+description to be longer than `MAX_FIELD_LENGTH`, which is a strange-looking
+assertion that exists precisely because its absence was invisible.
 
 ## Changes from the original plan
 
