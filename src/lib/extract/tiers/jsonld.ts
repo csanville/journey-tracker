@@ -77,11 +77,11 @@ function jsonLdNodes(document: Document): Unknowns[] {
 }
 
 function organizationName(value: unknown): string | null {
-  if (typeof value === 'string') return cleanText(value)
+  if (typeof value === 'string') return usable(value)
 
   const org = asObject(value) ?? asObject(Array.isArray(value) ? value[0] : null)
 
-  return org ? cleanText(typeof org.name === 'string' ? org.name : null) : null
+  return org ? usable(typeof org.name === 'string' ? org.name : null) : null
 }
 
 /**
@@ -93,33 +93,53 @@ function organizationName(value: unknown): string | null {
  * `educationRequirements`. Only the address parts reach a stored field, and
  * there it turns a remote job's location into `Remote, UNAVAILABLE, US`.
  *
- * Rejected here rather than in the iCIMS adapter because this is the shared
- * reader that assembles the string, and because the generic adapter is what
- * reads the other iCIMS surface — the career-home template, which has the same
- * sentinel and no adapter of its own. A board with a genuine place called
- * UNAVAILABLE loses a location; the alternative is every blank field on the
- * vendor's postings reading as a place.
+ * Rejected in this tier rather than in the iCIMS adapter because this is the
+ * shared reader that produces the values, and because the sentinel is a claim
+ * about a *field* rather than about a board: a page that says its region is
+ * UNAVAILABLE is a page that said nothing about its region, whoever served it.
+ * A board with a genuine place called UNAVAILABLE loses a location; the
+ * alternative is every blank field on the vendor's postings reading as a value.
+ *
+ * **Applied to every field that reaches a record, which the first version of
+ * this was not.** It guarded only the parts of a `PostalAddress`, and review
+ * found the three exits it missed: `jobLocation` as a bare string, a `Place`
+ * with a `name` and no `address`, and — the one with teeth — `hiringOrganization`
+ * and `title`. A company reading `UNAVAILABLE` becomes `companyNormalized`, and
+ * `findDuplicate` scopes its requisition match by company, so two unrelated
+ * postings from two tenants would land in one bucket. That is the wrong merge
+ * decision 7 is arranged around, arriving through a field nobody was watching.
  */
 const NOT_A_VALUE = /^unavailable$/i
+
+/**
+ * `cleanText`, plus the refusal above.
+ *
+ * Every value this tier puts into a field goes through here rather than through
+ * `cleanText` directly, so that adding a field cannot quietly reopen the gap
+ * that adding the guard in one place already left once.
+ */
+function usable(value: string | null | undefined): string | null {
+  const text = cleanText(value)
+
+  return text && NOT_A_VALUE.test(text) ? null : text
+}
 
 /** `PostalAddress` rendered the way a person would write it. */
 function formatAddress(place: unknown): string | null {
   const node = asObject(place)
-  if (!node) return typeof place === 'string' ? cleanText(place) : null
+  if (!node) return typeof place === 'string' ? usable(place) : null
 
   const address = asObject(node.address)
-  if (!address) return cleanText(typeof node.name === 'string' ? node.name : null)
+  if (!address) return usable(typeof node.name === 'string' ? node.name : null)
 
   const parts = ['addressLocality', 'addressRegion', 'addressCountry']
     .map((key) => {
       const value = address[key]
       // `addressCountry` is sometimes a nested `Country` object rather than a
       // string, and `[object Object]` in a location field is worse than a gap.
-      const text = cleanText(
+      return usable(
         typeof value === 'string' ? value : (asObject(value)?.name as string | undefined),
       )
-
-      return text && NOT_A_VALUE.test(text) ? null : text
     })
     .filter((part): part is string => part !== null)
 
@@ -158,7 +178,7 @@ export function readJsonLd(document: Document): Partial<ExtractedFields> {
 
   return {
     company: organizationName(posting.hiringOrganization),
-    jobTitle: cleanText(typeof posting.title === 'string' ? posting.title : null),
+    jobTitle: usable(typeof posting.title === 'string' ? posting.title : null),
     location,
     // `applicantLocationRequirements` is not consulted, though it is tempting:
     // it says where an applicant may *live*, which a remote posting fills in and

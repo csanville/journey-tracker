@@ -65,6 +65,20 @@ interface Read {
  * than the top frame's. That only matters for the diagnostic, and it matters
  * there: a partial read from the frame that holds the posting describes the
  * page far better than a confident nothing from the shell around it.
+ *
+ * **The bar for "declined" is low, and review was right to name it.**
+ * `isWorthOffering` wants a company *or* a title, so a shell that leaks one of
+ * them — a portal-level `Organization` node, an `og:title` on the wrapper — wins
+ * the race and produces a record with half a posting while the frame below held
+ * all of it. The captured iCIMS shell has neither, so this bites nothing today.
+ *
+ * It is left alone deliberately. The fix would be to compare confidence across
+ * every candidate instead of stopping at the first, and that hands a frame the
+ * ability to outscore the page it is embedded in — an ad slot or a
+ * related-jobs widget with better metadata than its host. Between a shape that
+ * needs a shell to leak a field and a shape that needs any same-origin frame to
+ * be well marked up, the second is the one with more ways to happen, and the
+ * page the user is looking at should not lose to something inside it.
  */
 function readPage(url: string): Read {
   let best: Read | null = null
@@ -86,9 +100,17 @@ async function report(url: string): Promise<Attempt> {
   const { extraction, source } = readPage(url)
   if (!isWorthOffering(extraction)) return 'nothing'
 
-  const { trimmedSource, truncated } = buildSnapshot(source)
-
   try {
+    // Inside the try since phase 13, and the reason is the frame. Snapshotting
+    // clones and serializes a whole document, and the one this now runs on may
+    // belong to a frame that navigated out from under the read — `frames.ts`
+    // already wraps its own DOM access for that. A throw here used to escape
+    // into the ladder, which swallows it as a failed rung, leaving `parsed`
+    // false and the diagnostic claiming the page gave up nothing about a page
+    // that parsed perfectly. That is the exact conflation `Attempt`'s third
+    // value exists to prevent, so it belongs on the same side of the try.
+    const { trimmedSource, truncated } = buildSnapshot(source)
+
     await send('detection/report', {
       report: {
         detectionId: newId(),

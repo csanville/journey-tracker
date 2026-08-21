@@ -25,7 +25,10 @@ import { cleanText, firstText } from '../text'
  * `content/frames.ts`: the classic portal is a shell around a same-origin
  * iframe. Everything below reads whichever document the posting turned out to
  * be in, which is the frame's on the classic portal and the top one on
- * career-home.
+ * career-home — and both surfaces route here, because `matches` is the whole
+ * `icims.com` domain. The career-home template has no reader of its own in the
+ * tiers below; it is read by the shared ones, exactly as `generic` read it
+ * before this adapter existed.
  *
  * What this adds over `generic` is the requisition, and it is the reason the
  * adapter exists at all — `readJsonLd` and `readMeta` do the rest, exactly as

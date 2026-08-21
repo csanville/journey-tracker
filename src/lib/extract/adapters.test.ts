@@ -822,15 +822,35 @@ describe('icims', () => {
     expect(shell.querySelectorAll('script[type="application/ld+json"]')).toHaveLength(0)
   })
 
-  it('keeps the evidence that the frame is the live path, not a noscript fallback', () => {
-    // The page's own script rewrites the `src` with the viewport in it before
-    // loading it. That is both why the frame holds the posting and why a
-    // content script in the frame could not report a usable URL: `width=1506`
-    // survives `canonicalizeUrl`, which is a blocklist by design.
-    const frame = shell.querySelector('iframe')
+  /**
+   * What the capture can and cannot say, after review found this test claiming
+   * the second thing.
+   *
+   * It used to assert that the shell's `<iframe>` was the live one. It is not:
+   * it sits inside `<noscript>`, which a browser with scripting enabled parses
+   * as raw text, so `querySelectorAll('iframe')` never returns it. jsdom parses
+   * it as an element, which is the only reason the assertion held. The frame
+   * `frames.ts` reads is built by script into a span that is empty here.
+   *
+   * What the capture does show is the viewport written into an iCIMS frame URL,
+   * which is the fact the whole mechanism is built around — `width=1506`
+   * survives `canonicalizeUrl`, a blocklist by design, so a frame reporting its
+   * own `location.href` would save one posting per window size.
+   */
+  it('shows a frame URL with the viewport in it, and no live frame at all', () => {
+    const framed = shell.querySelector('iframe')?.getAttribute('src') ?? ''
 
-    expect(frame?.getAttribute('src')).toContain('width=1506')
-    expect(frame?.getAttribute('src')).toContain('in_iframe=1')
+    expect(framed).toContain('width=1506')
+    expect(framed).toContain('in_iframe=1')
+
+    // The two halves of "this file cannot exercise the mechanism": the element
+    // above is inside `<noscript>`, and the span the live frame is built into is
+    // empty. That this assertion can be written at all is the difference it is
+    // about — jsdom parses `<noscript>` children into the DOM, so the iframe is
+    // an element here, where in Chrome the same markup is a text node and
+    // `querySelectorAll('iframe')` returns nothing for it.
+    expect(shell.querySelector('iframe')?.closest('noscript')).not.toBeNull()
+    expect(shell.querySelector('#icims_iframe_span')?.children).toHaveLength(0)
   })
 
   it('reads company, title and location from schema.org, as generic already did', () => {
@@ -860,6 +880,52 @@ describe('icims', () => {
 
     expect(address?.addressRegion).toBe('UNAVAILABLE')
     expect(readJsonLd(document).location).toBe('Remote, US')
+  })
+
+  /**
+   * The three exits the first version of the sentinel guard missed.
+   *
+   * It was written into the `PostalAddress` parts and nowhere else, so a bare
+   * string location, a `Place` with only a name, and — the one that matters —
+   * the hiring organization all passed it through. `company` becomes
+   * `companyNormalized`, and `findDuplicate` scopes its requisition match by
+   * company, so two unrelated postings from two tenants that both left the
+   * field blank would share a bucket: the wrong merge decision 7 exists to
+   * prevent, through a field nobody was guarding.
+   */
+  it.each([
+    ['a bare string location', { jobLocation: 'UNAVAILABLE' }, 'location'],
+    [
+      'a place with only a name',
+      { jobLocation: { '@type': 'Place', name: 'UNAVAILABLE' } },
+      'location',
+    ],
+    ['the hiring organization', { hiringOrganization: { name: 'UNAVAILABLE' } }, 'company'],
+    ['the title', { title: 'UNAVAILABLE' }, 'jobTitle'],
+  ])('refuses the sentinel in %s', (_case, posting, field) => {
+    const document = parseHtml(
+      `<script type="application/ld+json">${JSON.stringify({
+        '@type': 'JobPosting',
+        ...posting,
+      })}</script>`,
+    )
+
+    expect(readJsonLd(document)[field as 'location']).toBeNull()
+  })
+
+  it('leaves a value that merely contains the word alone', () => {
+    // The refusal is the whole string, not a substring. "Unavailable Systems
+    // Ltd" is a company nobody would want silently dropped, and a location
+    // reading "Remote (parking unavailable)" is a location.
+    const document = parseHtml(
+      `<script type="application/ld+json">${JSON.stringify({
+        '@type': 'JobPosting',
+        title: 'Engineer',
+        hiringOrganization: { name: 'Unavailable Systems Ltd' },
+      })}</script>`,
+    )
+
+    expect(readJsonLd(document).company).toBe('Unavailable Systems Ltd')
   })
 
   /**

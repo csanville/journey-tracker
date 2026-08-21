@@ -1899,6 +1899,65 @@ say so itself, in the one artefact a walkthrough always produces. Not built here
 — it is a change to the diagnostic's allowlisted payload, which is phase 11's
 and deserves its own argument about what a stamp reveals.
 
+### What review changed
+
+Five findings. Two were defects, and both are the same shape as each other: a
+rule stated broadly in a comment and implemented in one place.
+
+- **The `UNAVAILABLE` refusal covered one of four exits.** It was written into
+  the `PostalAddress` parts and the docblock above it claimed the sentinel
+  generally, while a bare-string `jobLocation`, a `Place` carrying only a `name`,
+  and both `hiringOrganization` and `title` went straight through. The last is
+  the one with teeth: a company reading `UNAVAILABLE` becomes
+  `companyNormalized`, and `findDuplicate` scopes its requisition match *by
+  company*, so two unrelated postings from two tenants that both left the field
+  blank would share a bucket. Decision 7's wrong merge, through the one field
+  nobody was guarding. Every value the tier produces now goes through one
+  `usable()` rather than through `cleanText` directly, so adding a field cannot
+  reopen the gap that adding the guard in one place already left once.
+- **`buildSnapshot` sat outside the try.** It clones and serializes a whole
+  document, and the document is now sometimes a frame's — the thing `frames.ts`
+  wraps its own DOM access for. A throw there escaped into the ladder, which
+  swallows it as a failed rung, leaving `parsed` false and the diagnostic
+  claiming the page gave up nothing about a page that had parsed perfectly. That
+  is exactly the conflation `Attempt`'s third value was introduced to prevent,
+  so it belongs on the same side of the try as the send.
+
+The third is the one worth the most, because it is about evidence rather than
+behaviour.
+
+**The shell fixture's `<iframe>` is inside `<noscript>`, and a test was reading
+it as proof of the live path.** A browser with scripting enabled parses
+`<noscript>` children as raw text, so `querySelectorAll('iframe')` never returns
+that element; jsdom parses it into the DOM, which is the only reason the
+assertion held. The frame this phase reads is built by script into a `<span>`
+that is empty in the capture — so **the saved page cannot contain the mechanism's
+own subject**, and the thing that actually proved it was loading a posting in
+Chrome.
+
+That is the sixth recurring shape with the cut made by the file format rather
+than by a person. A trimmed capture loses a property somebody chose to remove; a
+capture of a script-built page loses one nobody chose and nobody can see missing,
+because the markup that remains is complete and real. The check that generalises:
+**ask what the page builds after it is served, and treat a capture as evidence
+only for the parts that arrived with it.** The fixture header and the test now
+say what the file shows and what it cannot.
+
+Two findings were left as they were, with the reasoning written into the code.
+`readPage`'s bar for "the page declined" is `isWorthOffering` — company *or*
+title — so a shell that leaks one of them beats a frame holding the whole
+posting; the fix would be to compare confidence across candidates, which hands
+any same-origin frame the ability to outscore the page it is embedded in, and
+between the two shapes the second has more ways to happen. And a comment in
+`jsonld.ts` justified the sentinel's placement by saying the career-home surface
+has no adapter, which is wrong — `icims.matches` is the whole domain — so the
+justification was rewritten rather than the placement.
+
+The four new sentinel tests were run against the unfixed guard and seen to fail.
+The iCIMS fixture also joined `snapshot.test.ts`'s round-trip loop, which review
+noticed it was missing from: it is the one board where the snapshotted document
+is not the one the extension landed in.
+
 ### Deliberately not in phase 13
 
 - **The career-home surface's own reader.** `careers.icims.com/careers-home/…`

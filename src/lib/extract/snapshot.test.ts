@@ -7,6 +7,8 @@ import { SNAPSHOT_CAP_BYTES, buildSnapshot } from './snapshot'
 const GREENHOUSE_URL = 'https://job-boards.greenhouse.io/discord/jobs/8433948002'
 const LEVER_URL = 'https://jobs.lever.co/leverdemo/004f960b-c8be-4e98-8d37-b3be47f99ea0'
 const ASHBY_URL = 'https://jobs.ashbyhq.com/ramp/d1183b00-6590-4fe4-a585-28d84e578fe3'
+const ICIMS_URL =
+  'https://careers-healthedge.icims.com/jobs/8287/software-engineer---performance-and-tools/job'
 
 describe('buildSnapshot', () => {
   it('produces a document the adapters can parse again', () => {
@@ -16,6 +18,12 @@ describe('buildSnapshot', () => {
     for (const [name, url] of [
       ['greenhouse-job.html', GREENHOUSE_URL],
       ['lever-job.html', LEVER_URL],
+      // iCIMS is the board where the snapshotted document changed: it is the
+      // frame's, not the one the extension landed in. Everything it reads —
+      // JSON-LD and a `dt`/`dd` pair — survives the trim, so it belongs in the
+      // loop rather than in an exception below it, and the requisition being
+      // preserved is what makes a replayed record still joinable.
+      ['icims-job.html', ICIMS_URL],
     ] as const) {
       const live = loadFixture(name)
       const { trimmedSource } = buildSnapshot(live)
