@@ -84,6 +84,24 @@ function organizationName(value: unknown): string | null {
   return org ? cleanText(typeof org.name === 'string' ? org.name : null) : null
 }
 
+/**
+ * An ATS writing "this field is not set" into the field.
+ *
+ * iCIMS emits the literal string `UNAVAILABLE` for every part of a posting its
+ * tenant left blank, and both captured iCIMS pages are full of it —
+ * `addressRegion`, `streetAddress`, `skills`, `workHours`, `industry`,
+ * `educationRequirements`. Only the address parts reach a stored field, and
+ * there it turns a remote job's location into `Remote, UNAVAILABLE, US`.
+ *
+ * Rejected here rather than in the iCIMS adapter because this is the shared
+ * reader that assembles the string, and because the generic adapter is what
+ * reads the other iCIMS surface — the career-home template, which has the same
+ * sentinel and no adapter of its own. A board with a genuine place called
+ * UNAVAILABLE loses a location; the alternative is every blank field on the
+ * vendor's postings reading as a place.
+ */
+const NOT_A_VALUE = /^unavailable$/i
+
 /** `PostalAddress` rendered the way a person would write it. */
 function formatAddress(place: unknown): string | null {
   const node = asObject(place)
@@ -97,9 +115,11 @@ function formatAddress(place: unknown): string | null {
       const value = address[key]
       // `addressCountry` is sometimes a nested `Country` object rather than a
       // string, and `[object Object]` in a location field is worse than a gap.
-      return cleanText(
+      const text = cleanText(
         typeof value === 'string' ? value : (asObject(value)?.name as string | undefined),
       )
+
+      return text && NOT_A_VALUE.test(text) ? null : text
     })
     .filter((part): part is string => part !== null)
 

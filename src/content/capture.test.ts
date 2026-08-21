@@ -221,3 +221,119 @@ describe('when the worker cannot be reached', () => {
     expect(kinds()).toEqual(['diagnostic/report'])
   })
 })
+
+/**
+ * The iCIMS shape: a shell with the posting one frame down.
+ *
+ * Real jsdom frames rather than a stubbed `contentDocument`, for the reason
+ * `frames.test.ts` gives — and here for a second one. What is being asserted is
+ * that the *reported URL* stays the page's while the *fields* come from
+ * somewhere else, and a fake frame would let both come from the same place
+ * without the test noticing.
+ */
+describe('a posting inside a same-origin frame', () => {
+  function frameWith(html: string): Document {
+    const frame = document.createElement('iframe')
+    document.body.append(frame)
+
+    const inner = frame.contentDocument
+    if (!inner) throw new Error('jsdom gave this frame no document')
+    inner.head.innerHTML = '<meta property="og:title" content="Staff Engineer" />'
+    inner.body.innerHTML = html
+
+    return inner
+  }
+
+  it('reads the frame when the page itself has nothing', async () => {
+    writePage('<p>iCIMS Careers Portal</p>')
+    frameWith('<h1>Staff Engineer</h1>')
+
+    capture(location.href, { reportEmpty: true })
+    await settle()
+
+    expect(kinds()).toEqual(['detection/report'])
+    expect(reportFrom(0).fields).toMatchObject({ jobTitle: 'Staff Engineer' })
+  })
+
+  /**
+   * The whole reason this is done from the top frame instead of with
+   * `all_frames`.
+   *
+   * iCIMS builds the frame's URL with the viewport in it —
+   * `?…&width=1506&height=500&in_iframe=1` — and `url.ts` is a blocklist, so
+   * those survive canonicalization. A frame reporting its own `location.href`
+   * would save one posting as a different record per window size, and none of
+   * them would match the URL the user sees or pastes.
+   */
+  it('reports the page’s URL and not the frame’s', async () => {
+    writePage('<p>iCIMS Careers Portal</p>')
+    frameWith('<h1>Staff Engineer</h1>')
+
+    capture(location.href, { reportEmpty: true })
+    await settle()
+
+    // The kind is asserted first and it is not a formality: without the frame
+    // read this whole file passes with `url` correct, because a *diagnostic*
+    // carries the page's URL too. Run against the unfixed code, the version of
+    // this test that checked only the URL passed while reporting that the page
+    // was unreadable.
+    expect(kinds()).toEqual(['detection/report'])
+    expect(reportFrom(0).fields).toMatchObject({ jobTitle: 'Staff Engineer' })
+    expect(reportFrom(0).url).toBe(location.href)
+    expect(String(reportFrom(0).url)).not.toContain('width=')
+  })
+
+  /**
+   * Decision 6 asks a snapshot to be able to reproduce the record attached to
+   * it. A snapshot of the shell could reproduce nothing at all.
+   */
+  it('snapshots the document the fields came out of', async () => {
+    writePage('<p>iCIMS Careers Portal</p>')
+    frameWith('<h1 data-marker="in-the-frame">Staff Engineer</h1>')
+
+    capture(location.href, { reportEmpty: true })
+    await settle()
+
+    const snapshot = reportFrom(0).snapshot as { trimmedSource: string }
+    expect(snapshot.trimmedSource).toContain('in-the-frame')
+    expect(snapshot.trimmedSource).not.toContain('iCIMS Careers Portal')
+  })
+
+  /**
+   * The guard on the whole mechanism. Every board before iCIMS puts the posting
+   * in the top document, and a frame that got to answer first could displace a
+   * good read with a worse one — an embedded video, a related-jobs widget.
+   */
+  it('leaves the page alone when the page has something to say', async () => {
+    writePage('<h1>the real posting</h1>')
+    givePageATitle('Principal Engineer')
+    frameWith('<h1>a widget</h1>')
+
+    capture(location.href, { reportEmpty: true })
+    await settle()
+
+    expect(reportFrom(0).fields).toMatchObject({ jobTitle: 'Principal Engineer' })
+  })
+
+  /**
+   * A diagnostic pulled on the iCIMS shell reported `coverage 0.00` and six
+   * fields `not found`, which was true of the document it read and false about
+   * the page. Where nothing is worth offering, the best read is the honest one
+   * to describe — the shell has strictly less to say than the frame does.
+   */
+  it('describes the frame in a diagnostic, not the shell around it', async () => {
+    writePage('<p>iCIMS Careers Portal</p>')
+    const inner = frameWith('<h1>a posting with no title tag</h1>')
+    // A location and nothing else: enough for the frame to have said something,
+    // not enough for `isWorthOffering`, which wants a company or a title.
+    inner.head.innerHTML =
+      '<meta name="twitter:label1" content="Location" />' +
+      '<meta name="twitter:data1" content="Remote, US" />'
+
+    capture(location.href, { reportEmpty: true })
+    await settle()
+
+    expect(kinds()).toEqual(['diagnostic/report'])
+    expect(reportFrom(0).confidence).toBeGreaterThan(0)
+  })
+})

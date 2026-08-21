@@ -1,4 +1,5 @@
 import { ashby } from './adapters/ashby'
+import { icims } from './adapters/icims'
 import { workday } from './adapters/workday'
 import { generic } from './adapters/generic'
 import { greenhouse } from './adapters/greenhouse'
@@ -35,13 +36,18 @@ export { mergeTiers, scoreConfidence } from './merge'
  * `ExtractedFields` for an adapter that finds a genuinely public requisition
  * number on the page.
  *
- * **Workday is now that adapter, and it is the only one.** Its JSON-LD
+ * **Two adapters now write it, on opposite evidence.** Workday's JSON-LD
  * `identifier.value` is the requisition the URL is addressed by — checked
  * against two real postings, where the two agree once the counter Workday
- * appends to the slug is stripped. `ats.test.ts` asserts they still agree, which
- * is the condition on this exception rather than a nicety: the moment a board's
- * `identifier` says something the URL does not, this paragraph's original
- * warning applies to it again. `greenhouse` and `ashby` still write nothing
+ * appends to the slug is stripped, and `ats.test.ts` asserts they still do.
+ * iCIMS states `ID 2026-8287` on a posting the URL addresses as `/jobs/8287/`,
+ * and they are two different ids for one job; the page's is taken because it is
+ * the one the candidate is shown and the one an email will repeat, which is what
+ * decision 7 wants the key for. So the condition is not "the page agrees with
+ * the URL" — that was Workday's evidence, not the rule. It is **the id a user
+ * will see again**, and where the URL carries a different one, `ats.ts` is left
+ * without a matcher for that board rather than given one that would fill the
+ * column with an internal row id. `greenhouse` and `ashby` still write nothing
  * here, and the shared `jsonld` tier still reads no `identifier` at all.
  *
  * **Nothing here throws.** Every reader is written to return what it found and
@@ -57,7 +63,14 @@ export { mergeTiers, scoreConfidence } from './merge'
  * Ordered, most specific first. `generic` matches everything and must stay
  * last; it is the fallback, not a competitor.
  */
-export const ADAPTERS: readonly Adapter[] = [greenhouse, lever, ashby, workday, generic]
+export const ADAPTERS: readonly Adapter[] = [
+  greenhouse,
+  lever,
+  ashby,
+  workday,
+  icims,
+  generic,
+]
 
 export function selectAdapter(rawUrl: string): Adapter {
   let url: URL

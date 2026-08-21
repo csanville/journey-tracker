@@ -1,14 +1,16 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest'
-import { loadFixture, parseHtml } from '../../test/dom'
+import { loadFixture, loadRawFixture, parseHtml } from '../../test/dom'
 import { extract, selectAdapter } from './index'
 import { ashbyReaders } from './adapters/ashby'
 import { greenhouseReaders } from './adapters/greenhouse'
 import { leverReaders } from './adapters/lever'
 import { workday } from './adapters/workday'
-import { readJsonLd } from './tiers/jsonld'
+import { icimsReaders } from './adapters/icims'
+import { jobPostingFrom, readJsonLd } from './tiers/jsonld'
 import { readMeta } from './tiers/meta'
 import { cleanText } from './text'
+import { extractAtsReqId } from '../normalize/ats'
 
 /**
  * The fixtures are real captures, trimmed — see the comment at the top of each.
@@ -25,6 +27,12 @@ import { cleanText } from './text'
 const GREENHOUSE_URL = 'https://job-boards.greenhouse.io/discord/jobs/8433948002'
 const LEVER_URL = 'https://jobs.lever.co/leverdemo/004f960b-c8be-4e98-8d37-b3be47f99ea0'
 const ASHBY_URL = 'https://jobs.ashbyhq.com/ramp/d1183b00-6590-4fe4-a585-28d84e578fe3'
+/**
+ * A real classic-portal posting. The path carries `8287` and the page states
+ * `2026-8287`, which is the disagreement the iCIMS tests below are about.
+ */
+const ICIMS_URL =
+  'https://careers-healthedge.icims.com/jobs/8287/software-engineer---performance-and-tools/job'
 const WORKDAY_URL =
   'https://premera.wd5.myworkdayjobs.com/en-US/Premera/job/Mountlake-Terrace-WA/Software-Development-Engineer-III--React-and-React-Native_R28643-1'
 
@@ -779,5 +787,194 @@ describe('workday', () => {
     })
     expect(provenance.atsReqId).toBe('jsonld')
     expect(provenance.workMode).toBe('jsonld')
+  })
+})
+
+describe('icims', () => {
+  const document = loadFixture('icims-job.html')
+  const shell = loadFixture('icims-shell.html')
+
+  it('routes to its own adapter, on any tenant and any surface', () => {
+    expect(selectAdapter(ICIMS_URL).name).toBe('icims')
+    expect(selectAdapter('https://careers.icims.com/careers-home/jobs/6571').name).toBe(
+      'icims',
+    )
+    // The suffix trick, for the same reason every other adapter has this test.
+    expect(selectAdapter('https://noticims.com/jobs/1/x/job').name).toBe('generic')
+    expect(selectAdapter('https://icims.com.evil.example/x').name).toBe('generic')
+  })
+
+  /**
+   * The page the extension actually lands on, asserted to be worthless.
+   *
+   * This is the fixture that justifies `frames.ts` existing. A real diagnostic
+   * pulled from this page reported `coverage 0.00` and six fields `not found`,
+   * and it was right about the document it read.
+   */
+  it('finds nothing at all in the shell, which is what the gesture lands in', () => {
+    const { fields, confidence } = extract(shell, ICIMS_URL)
+
+    expect(confidence).toBe(0)
+    expect(Object.values(fields).every((value) => value === null)).toBe(true)
+    // Not because the shell is empty — it is 29KB — but because none of it is
+    // the posting. The title belongs to the portal, not to the job.
+    expect(shell.title).toBe('iCIMS Careers Portal')
+    expect(shell.querySelectorAll('script[type="application/ld+json"]')).toHaveLength(0)
+  })
+
+  it('keeps the evidence that the frame is the live path, not a noscript fallback', () => {
+    // The page's own script rewrites the `src` with the viewport in it before
+    // loading it. That is both why the frame holds the posting and why a
+    // content script in the frame could not report a usable URL: `width=1506`
+    // survives `canonicalizeUrl`, which is a blocklist by design.
+    const frame = shell.querySelector('iframe')
+
+    expect(frame?.getAttribute('src')).toContain('width=1506')
+    expect(frame?.getAttribute('src')).toContain('in_iframe=1')
+  })
+
+  it('reads company, title and location from schema.org, as generic already did', () => {
+    // Measured at 0.86 under `generic@1` before this adapter existed. Asserted
+    // so that an adapter which took the routing and then read *less* than the
+    // fallback it displaced fails here.
+    expect(readJsonLd(document)).toMatchObject({
+      company: 'HealthEdge',
+      jobTitle: 'Software Engineer - Performance and Tools',
+      location: 'Remote, US',
+      workMode: 'remote',
+    })
+  })
+
+  /**
+   * The sentinel, asserted from both ends.
+   *
+   * iCIMS writes the literal string `UNAVAILABLE` into every field a tenant
+   * left blank. Before `jsonld.ts` learned to refuse it, this posting's
+   * location read `Remote, UNAVAILABLE, US` — a stored field naming a place
+   * that does not exist, on a page that stated its location perfectly.
+   */
+  it('refuses the string iCIMS writes where a tenant left a field blank', () => {
+    const posting = jobPostingFrom(document)
+    const address = ((posting?.jobLocation as { address?: Record<string, unknown> }[]) ??
+      [])[0]?.address
+
+    expect(address?.addressRegion).toBe('UNAVAILABLE')
+    expect(readJsonLd(document).location).toBe('Remote, US')
+  })
+
+  /**
+   * The requisition, and the disagreement that is the whole reason for it.
+   *
+   * The page says `2026-8287`; the URL says `8287`. Workday's licence to read a
+   * requisition off the page rested on the two *agreeing*, and this is the first
+   * board where they do not — so the condition is restated in `extract/index.ts`
+   * as the id the user will see again, which here is the page's.
+   */
+  it('reads the requisition the candidate is shown, not the one in the URL', () => {
+    expect(readJsonLd(document).atsReqId).toBeUndefined()
+    expect(extract(document, ICIMS_URL).fields.atsReqId).toBe('2026-8287')
+    expect(ICIMS_URL).toContain('/jobs/8287/')
+  })
+
+  /**
+   * The other half of that decision, and the one that would fail silently.
+   *
+   * `deriveJoinKeys` falls back to `extractAtsReqId` when an adapter found
+   * nothing. If `ats.ts` had learned the iCIMS URL shape, that fallback would
+   * fill the column with `8287` — an internal row id — on every page where this
+   * adapter came up empty. A missing key costs a merge; a wrong one merges two
+   * jobs.
+   */
+  it('is not backed by a URL matcher, deliberately', () => {
+    expect(extractAtsReqId(ICIMS_URL)).toBeNull()
+  })
+
+  it('takes the requisition from the label, not from a position in the list', () => {
+    // Tenants rename these fields, so the label is read; and the value carries
+    // the refusal, because a renamed label is not a guarantee about what is
+    // under it.
+    const labels = [...document.querySelectorAll('.iCIMS_JobHeaderField')].map((node) =>
+      node.textContent?.trim(),
+    )
+
+    expect(labels).toEqual(['ID', 'Category', 'Position Type'])
+  })
+
+  it.each([
+    ['Job ID', '2026-8287', '2026-8287'],
+    ['Requisition ID', 'R-4471', 'R-4471'],
+    ['ID', '8287', '8287'],
+    // A tenant that put prose under a heading this pattern likes. A sentence in
+    // the requisition column would join nothing to nothing.
+    ['ID', 'Not currently assigned', undefined],
+    // A label that is not about identity at all.
+    ['Category', '2026-8287', undefined],
+    // No digit anywhere: a category code, not a requisition.
+    ['Job ID', 'ENGINEERING', undefined],
+  ])('reads %j = %j as %j', (label, value, expected) => {
+    const loose = parseHtml(
+      `<div class="iCIMS_JobHeaderTag">
+         <dt class="iCIMS_JobHeaderField">${label}</dt>
+         <dd class="iCIMS_JobHeaderData"><span>${value}</span></dd>
+       </div>`,
+    )
+
+    expect(icimsReaders.dom(loose).atsReqId).toBe(expected)
+  })
+
+  /**
+   * The fixture property phase 12 lost a day to, asserted so a retrim cannot
+   * quietly restore the conditions a bug needs.
+   *
+   * Nothing on this board reads the description — there is no prose-salary or
+   * work-mode reader here — but the Workday fixture was trimmed to just under
+   * `MAX_FIELD_LENGTH` and hid a defect for an entire phase. This capture keeps
+   * the real thing.
+   */
+  it('keeps a description far too long to be a field value', () => {
+    const described = descriptionOf(document)
+
+    expect(described.length).toBeGreaterThan(300)
+    expect(cleanText(described)).toBeNull()
+  })
+
+  it('falls back to the DOM for a tenant that emits no JSON-LD', () => {
+    // Every tenant seen so far emits it, and the higher tier wins where it does
+    // — asserted below. This is what is left when one does not, and the
+    // alternative to it is a page that reads as nothing at all.
+    const stripped = parseHtml(
+      loadRawFixture('icims-job.html').replace(
+        /<script[^>]*application\/ld\+json[^>]*>[\s\S]*?<\/script>/,
+        '',
+      ),
+    )
+
+    expect(readJsonLd(stripped)).toEqual({})
+    expect(extract(stripped, ICIMS_URL).fields).toMatchObject({
+      jobTitle: 'Software Engineer - Performance and Tools',
+      location: 'US-Remote',
+      workMode: 'remote',
+      atsReqId: '2026-8287',
+    })
+  })
+
+  it('produces the whole record the panel would fill from', () => {
+    const { fields, provenance, source, adapterVersion } = extract(document, ICIMS_URL)
+
+    expect(source).toBe('icims')
+    expect(adapterVersion).toBe('icims@1')
+    expect(fields).toMatchObject({
+      company: 'HealthEdge',
+      jobTitle: 'Software Engineer - Performance and Tools',
+      location: 'Remote, US',
+      workMode: 'remote',
+      atsReqId: '2026-8287',
+      salary: null,
+    })
+    // The DOM tier answers only where JSON-LD declined, which on this board is
+    // the requisition and nothing else.
+    expect(provenance.jobTitle).toBe('jsonld')
+    expect(provenance.location).toBe('jsonld')
+    expect(provenance.atsReqId).toBe('dom')
   })
 })
