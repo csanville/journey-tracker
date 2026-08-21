@@ -211,6 +211,27 @@ without guessing a content hash. Every build path has to run it — a build that
 omits it fails at injection time with `Could not load file`, logged only in the
 worker console.
 
+**Amended — the first board the allowlist cannot express, and it stays in the
+long tail.** iCIMS is read by the capture gesture and named nowhere in the
+manifest. Not a judgement about the board: a Chrome host wildcard "must be the
+first or only character, and it must be followed by a period or forward slash",
+so `careers-*.icims.com` — the pattern that would have named the career portals
+and only them — is not legal. `*.icims.com` is, and it reaches the recruiter
+console, which iCIMS serves from the same hosts as the applicant portal under
+`/icims2/servlet/…`, and the internal employee boards at
+`internal-<tenant>.icims.com`, which no exclusion can name for the same wildcard
+reason. Constraining the pattern to `/jobs/*` keeps the script off the console
+and still puts the vendor's whole apex in the install prompt, because the warning
+reads hosts and ignores paths.
+
+That is the trade phase 12's Workday wildcard made in the other direction, and
+the difference is what the wildcard buys. Workday's bought every tenant of a
+board that is otherwise unreachable. This one would buy automatic detection on a
+board the gesture already reaches, at the price of a vendor-wide host — so the
+answer is the one this decision already gives for the long tail, and the work
+went into making the gesture *work* there instead. See phase 13: the posting is
+in an iframe, and neither the gesture nor a content script was looking in it.
+
 **Consequences.** Slightly more code — a permission-request flow and a runtime
 injection path in addition to declarative content scripts. Auto-detection
 (showing a badge, or live-filling the panel, before the user clicks) only works
@@ -641,6 +662,28 @@ reasoning holds only for a requisition the page states *as* a requisition — a
 public "Req #" the applicant would quote in an email. None of the fields above is
 that. So the rule is: an adapter writes `atsReqId` only when the page names a
 public requisition number, and until one does, none of them writes it.
+
+**Amended — the condition is the id the user will see again, not the id the URL
+carries.** Workday became the first adapter to write `atsReqId`, and phase 12
+justified it by *agreement*: `identifier.value` is the same string the URL is
+addressed by, and `ats.test.ts` pins that. iCIMS is the first board where the two
+disagree. Its page states `ID 2026-8287` on a posting the URL addresses as
+`/jobs/8287/`, and neither is a mistake — `8287` is the row, `2026-8287` is the
+requisition, and the second is what appears on the page, in the confirmation
+email, and in the rejection.
+
+So the rule above stands unchanged and the *test* of it does not: agreement with
+the URL was Workday's evidence, never the condition. The condition is a public
+requisition the applicant could quote, and where the URL carries a different
+number, the URL is the one that loses.
+
+Its consequence is the part worth writing down, because it is a silence.
+`ats.ts` gets **no iCIMS matcher**. A matcher would derive `8287` and hand
+`deriveJoinKeys` a fallback for every page the adapter came up empty on — a
+column filled with an internal row id rather than left blank. The asymmetry this
+whole decision is arranged around says a missing key costs a merge and a wrong
+key makes one, so the board with a page-stated requisition is exactly the board
+whose URL must stay unread.
 
 **Revisit when.** The external tracker settles into a real schema worth
 integrating with, or is retired. The keys remain useful for in-extension dedupe

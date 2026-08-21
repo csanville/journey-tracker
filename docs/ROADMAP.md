@@ -22,7 +22,8 @@ then merged.
 | — ✅ | `feat/ashby-adapter` | An Ashby adapter, on its own branch rather than as a phase — reading a fourth board is additive and needed no new mechanism | A posting on `jobs.ashbyhq.com` fills the form |
 | 11 ✅ | `feat/diagnostics` | A diagnostics report the user can send: a pulled parse of the current page, an allowlisted payload shown before it is copied, and the retirement of re-parse | On a page the extension cannot read, one gesture produces a report that names the board and what each tier returned, and carries no company, title or URL path |
 | 12 ✅ | `fix/fill-while-editing` | The fill that overwrites a record, closed by asking which record it means; a guard sweep; and Workday, behind a wildcard and two exclusions | Filling from a page while editing asks update-or-new and neither answer destroys a record; and a posting on `*.myworkdayjobs.com` fills the form unprompted, while its application flow is never read |
-| later | — | iCIMS, SmartRecruiters adapters | — |
+| 13 ✅ | `feat/icims-adapter` | iCIMS, the first board the manifest cannot name and the first whose posting is not in the document the extension lands in: a same-origin frame read, an adapter, and a requisition that disagrees with the URL | The capture gesture on a `careers-<tenant>.icims.com` posting fills the form, and the record carries the requisition the page states rather than the one in the URL |
+| later | — | SmartRecruiters adapter | — |
 
 ## Known bugs
 
@@ -1756,6 +1757,162 @@ quietly stand in for all of them.
 - **iCIMS and SmartRecruiters.** One new board at a time, so that what the
   Workday fixture teaches about per-tenant hosts is known before the next one
   commits to a pattern.
+
+## Phase 13 — the board the manifest cannot name
+
+Two findings, both from the first real page, and both the opposite of what the
+plan assumed. The plan was a fifth adapter on the Ashby pattern: additive, no new
+mechanism, a match pattern and a fixture. Neither half survived contact.
+
+### The manifest cannot name this board, and that is decided rather than deferred
+
+`careers-*.icims.com` is not a legal match pattern. Chrome's host wildcard "must
+be the first or only character, and it must be followed by a period or forward
+slash", so the pattern that would have named the career portals and only them
+does not exist. What exists is `*.icims.com`, which reaches two things a board is
+not: the recruiter console, which iCIMS serves from the *same hosts* as the
+applicant portal under `/icims2/servlet/…`, and `internal-<tenant>.icims.com`,
+the logged-in employee boards — and an infix wildcard cannot exclude those
+either.
+
+A path constraint, `*.icims.com/jobs/*`, keeps the script off the console and
+changes nothing about the install prompt, which reads hosts and ignores paths.
+So the prompt would say "all icims.com sites" to buy automatic detection on a
+board the capture gesture already reaches.
+
+It is not reached. iCIMS is the long tail decision 2 describes, and the phase
+spent its effort making the gesture work there instead. `manifest.test.ts`
+asserts the absence, with the reasoning, so that the obvious edit — a fifth board
+gets a fifth pattern — fails rather than passes.
+
+### The posting is not in the document anything was reading
+
+The classic portal is a shell. `<title>iCIMS Careers Portal</title>`, no JSON-LD,
+no OpenGraph, one line of body text, and an `<iframe>` holding the entire
+posting. A diagnostic pulled from a live tenant reported `coverage 0.00` and six
+fields `not found`; the same page's frame reads at 0.86 under `generic@1` alone.
+Both halves of that were measured before a line was written, which is the phase
+12 lesson applied on purpose.
+
+**The fix is not `all_frames`, and the reason is the URL.** A content script in
+the frame would report its own `location.href`, which is how decision 2 keeps the
+`tabs` permission out of the manifest — and iCIMS builds that URL with the
+viewport in it:
+
+    …/job?mobile=false&width=1506&height=500&…&in_iframe=1
+
+`url.ts` is a blocklist by deliberate design, so `width` survives
+canonicalization. The same posting read at two window sizes canonicalizes to two
+URLs and saves as two records, and neither matches the one the user sees or
+pastes. Two frames reporting would also race the worker's one-summary-per-tab
+cache.
+
+The frame is same-origin with its parent, so `frames.ts` reads the child document
+from the top frame: no permission, no manifest change, the reported URL still the
+address bar's, and the existing boards untouched because the top document
+answers first and the loop ends there. A cross-origin frame hands back `null` and
+is skipped, which is what a Greenhouse embed on a company's careers domain does —
+still the gesture's job, still out of reach.
+
+### The requisition disagrees with the URL, and the page wins
+
+`ID 2026-8287` on a posting the URL addresses as `/jobs/8287/`. Workday's licence
+to read a requisition off the page rested on the two agreeing; this is the first
+board where they do not, and decision 7's amendment restates the condition as the
+id the applicant will see again. The consequence is a silence worth naming:
+**`ats.ts` gets no iCIMS matcher**, because one would fill the column with the
+row id on every page the adapter missed.
+
+### Done when
+
+The capture gesture on a real `careers-<tenant>.icims.com` posting fills the
+form; the record carries `2026-8287`; and the four existing boards still read
+exactly as they did, which the suite asserts by having the top document answer
+first.
+
+### What building it changed
+
+**The fixture is two files, because the mechanism has two documents.**
+`icims-shell.html` exists to be worthless — it is asserted to yield zero, which
+is what makes `frames.ts` necessary rather than clever — and `icims-job.html` is
+the frame. The shell also holds the evidence that the frame is the live path
+rather than the `noscript` fallback its id claims: its `src` carries the
+`width=1506` of the window it was captured in, written there by the page's own
+script.
+
+**The flow refusal needed a second copy, and it guards nothing yet.** `capture`
+refuses an application flow before it touches the document, and the URL it reads
+is the *top* one — so frame reading is a second route to the same destination: a
+page addressed as a posting, holding a frame addressed as an application. No
+board is known to be built that way, and Workday, the only board `flows.ts` has
+patterns for, navigates into its flow in the same document, so the existing
+refusal fires first. It is written anyway, on phase 12's conclusion that the
+destination is the place to guard, and the comment says it is unreachable and
+why — which is the note that review asked for the last time a guard was narrowed
+against a case that had stopped being reachable.
+
+**The refusal's own test passed with the refusal deleted.** Setting `frame.src`
+in a test is the obvious way to give a frame an address, and jsdom acts on the
+assignment: it replaces the frame's document with an empty one and discards the
+markup the test had just written. The frame was then skipped for having an empty
+body, so the assertion held whether or not the guard existed. Caught only by
+running it against the unguarded code — phase 11's rule earning its place for the
+second time, and the same shape as phase 12's fixture that asserted the right
+answer for the wrong reason, this time in the setup rather than the capture.
+
+**`UNAVAILABLE` is a place, as far as a parser is concerned.** iCIMS writes that
+literal string into every field a tenant left blank, and `addressRegion` is one
+of them, so the location of this posting read `Remote, UNAVAILABLE, US` — on a
+page that states its location perfectly. Refused in `jsonld.ts` rather than in
+the adapter, because that is where the string is assembled and because the
+vendor's other surface has no adapter of its own.
+
+### What using it changed
+
+The walkthrough passed on the first try: a real `careers-healthedge.icims.com`
+posting fills the form from inside its frame, and the Req ID field reads
+`2026-8287` rather than the `8287` in the URL, which is the decision this phase
+turns on rendered as a field.
+
+**The only defect the walkthrough found was not in the extension.** The first
+three attempts reported nothing at all, and the diagnostic said why in a line
+that was read past twice: `adapter generic@1`, on a `.icims.com` host. That is
+impossible under this phase's code, because the adapter is selected from the URL
+before a document is touched — an iCIMS page reading as `generic@1` is not a
+parse failure, it is proof that the code being run is older than the code being
+written.
+
+It was. Chrome loads the extension from a Windows directory built by
+`tools/build-win.sh`, because Chrome runs on the host while this repo lives in
+WSL; `npm run build` writes to `dist/`, which Chrome never reads. The build under
+test was phase 12's, dated ten days earlier, and `dist/` having a fresh timestamp
+is what made it convincing.
+
+Two things worth keeping from it. The first is that **the diagnostic already
+contained the answer** — it names the adapter, and the adapter is a fact about
+the URL rather than about the page, so it is the one field in the report that
+cannot be explained by the page being unreadable. The second is that nothing in
+the report distinguishes one build from another: it prints `extension 0.0.1`
+from the manifest, which is static across every phase and has never once been
+the version anybody wanted. A build stamp there would have made a stale build
+say so itself, in the one artefact a walkthrough always produces. Not built here
+— it is a change to the diagnostic's allowlisted payload, which is phase 11's
+and deserves its own argument about what a stamp reveals.
+
+### Deliberately not in phase 13
+
+- **The career-home surface's own reader.** `careers.icims.com/careers-home/…`
+  already reads at 0.79 under the shared tiers. Its `window.jobDescriptionConfig`
+  holds a work mode the JSON-LD omits — the captured posting is "United States
+  (Remote)" while `jobLocation` is a street address in Holmdel — which is a real
+  gap and a second template's worth of selectors to close it. One surface at a
+  time.
+- **A `*.icims.com` match pattern.** Rejected above, not deferred.
+- **Prose salary.** Unchanged from phase 12, and the career-home capture adds an
+  argument for it: its `baseSalary` is a `MonetaryAmount` of `0/0/0 USD YEAR`,
+  which `toAmount` already refuses for being `<= 0`. A board emitting structured
+  nonsense is not a reason to start reading prose.
+- **SmartRecruiters.** Next, and unblocked — its postings are on one host.
 
 ## Recurring shapes
 
