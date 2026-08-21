@@ -111,6 +111,31 @@ describe('the content script allowlist', () => {
     expect(patterns.some((pattern) => matches(pattern, WORKDAY_POSTING))).toBe(true)
   })
 
+  /**
+   * iCIMS, asserted by its absence.
+   *
+   * The obvious edit — a fifth board gets a fifth match pattern — is not
+   * available here, and the reason is worth an executable note rather than a
+   * comment nobody reads. Chrome's host wildcard "must be the first or only
+   * character, and it must be followed by a period or forward slash", so
+   * `careers-*.icims.com`, which would have named the career portals and only
+   * them, is not a legal pattern. The one legal pattern is `*.icims.com`, and on
+   * iCIMS that reaches more than a board: the recruiter console is served from
+   * the same hosts as the applicant portal under `/icims2/servlet/…`, and the
+   * internal employee boards are `internal-<tenant>.icims.com`, which no
+   * exclusion can name for the same wildcard reason.
+   *
+   * A path-constrained `*.icims.com/jobs/*` would keep the script off the
+   * console, and it would still put the vendor's whole apex in the install
+   * prompt — the warning reads hosts and ignores paths — to reach a board the
+   * capture gesture already reaches. So iCIMS is the long tail decision 2
+   * describes, and `frames.ts` is what makes the gesture work on it.
+   */
+  it('names no iCIMS host, and the adapter does not imply one', () => {
+    expect(patterns.some((pattern) => pattern.includes('icims'))).toBe(false)
+    expect(excluded.some((pattern) => pattern.includes('icims'))).toBe(false)
+  })
+
   it('asks for no host permissions at all', () => {
     // `content_scripts.matches` grants injection. `host_permissions` grants
     // fetch, cookies and webRequest against those hosts, and this extension

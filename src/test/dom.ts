@@ -20,5 +20,18 @@ export function parseHtml(html: string): Document {
  * project root, so this is both simpler and the one that works.
  */
 export function loadFixture(name: string): Document {
-  return parseHtml(readFileSync(resolve('src/test/fixtures', name), 'utf8'))
+  return parseHtml(loadRawFixture(name))
+}
+
+/**
+ * The same file as text, for a test that has to take something *out* of a
+ * capture before parsing it.
+ *
+ * Editing markup as a string is worse than editing a DOM in every way but the
+ * one that matters here: removing a whole tier — every JSON-LD block, say — and
+ * then parsing what is left is a document a real tenant could serve, where a
+ * DOM with the nodes detached is a document this project imagined.
+ */
+export function loadRawFixture(name: string): string {
+  return readFileSync(resolve('src/test/fixtures', name), 'utf8')
 }

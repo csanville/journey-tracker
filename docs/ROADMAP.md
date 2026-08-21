@@ -22,66 +22,18 @@ then merged.
 | — ✅ | `feat/ashby-adapter` | An Ashby adapter, on its own branch rather than as a phase — reading a fourth board is additive and needed no new mechanism | A posting on `jobs.ashbyhq.com` fills the form |
 | 11 ✅ | `feat/diagnostics` | A diagnostics report the user can send: a pulled parse of the current page, an allowlisted payload shown before it is copied, and the retirement of re-parse | On a page the extension cannot read, one gesture produces a report that names the board and what each tier returned, and carries no company, title or URL path |
 | 12 ✅ | `fix/fill-while-editing` | The fill that overwrites a record, closed by asking which record it means; a guard sweep; and Workday, behind a wildcard and two exclusions | Filling from a page while editing asks update-or-new and neither answer destroys a record; and a posting on `*.myworkdayjobs.com` fills the form unprompted, while its application flow is never read |
-| later | — | iCIMS, SmartRecruiters adapters | — |
+| 13 ✅ | `feat/icims-adapter` | iCIMS, the first board the manifest cannot name and the first whose posting is not in the document the extension lands in: a same-origin frame read, an adapter, and a requisition that disagrees with the URL | The capture gesture on a `careers-<tenant>.icims.com` posting fills the form, and the record carries the requisition the page states rather than the one in the URL |
+| later | — | SmartRecruiters adapter | — |
 
 ## Known bugs
 
 Open defects found by use and not yet fixed. Entries leave here by being fixed,
 never by being explained.
 
-### Filling from a page while editing a record overwrites that record
-
-**Data loss. Found in the phase 11 walkthrough; present since phase 9, not
-introduced by it — `PostingForm.tsx` is untouched on `feat/diagnostics`.**
-
-Open a saved record for editing, then navigate to a Greenhouse or Ashby posting.
-The panel offers "Fill from this page". Accept it: the form fills with the new
-posting, and still holds the record being edited. Save, and the **new job's
-details are written over the old record**, which is now a record of a job the
-user never applied to, under an id they cannot reach any other way. The original
-is gone.
-
-The mechanism is three lines apart in one file. `openForEdit` sets `draftId` to
-the stored record's id. `reset` is the only place that ever puts it back —
-`setDraftId(newId())` and `setEdited(null)`, and its comment says so: "Every exit
-from editing runs through here … so there is one place where the id stops being
-the stored record's." `applyFill` is a fourth exit and does not run through it:
-it replaces `draft` and sets `filled`, and touches neither `draftId` nor
-`edited`. `save` then writes to `draftId`.
-
-Two things make it worse than a wrong id:
-
-- **The record is stamped as if it were captured.** `save` prefers `filled` over
-  `edited` for provenance, so the overwritten record carries the new page's
-  `source` and `adapterVersion`. It does not look like a mistake afterwards; it
-  looks like a posting that was read off a board.
-- **The duplicate check is skipped.** `if (!force && !edited)` — `edited` is
-  still set, so the one thing that might have raised "you already saved this
-  one" is disabled by the same stale state that causes the bug.
-
-**What makes this worth writing down at length is that the guard exists, and is
-correct, and is bypassed.** `swapAction` in `fill.ts` already refuses the
-*automatic* swap while a record is held, and its comment describes this exact
-outcome: "The form would silently repopulate … *while still holding the stored
-record's id*, and the next save would write that other job over the record being
-edited. Not a lost draft: a destroyed record." Having named it, it returns
-`announce` rather than `nothing` so the banner survives — "Offer, never take."
-
-The offer, when taken, takes. Phase 9 closed the automatic door, documented
-precisely why the door was dangerous, and left the manual one open beside it.
-That is a fifth shape for the list below, and the sharpest instance of any of
-them: **a guard placed on one path to a hazard, where the other path is the one
-the design deliberately kept open.** The check is to ask, for every guard, which
-callers reach the guarded state *without* passing through it — and phase 9's own
-comment is what makes the answer obvious in hindsight, because it named the
-hazard and then described the surviving route to it in the next sentence.
-
-Not fixed here because phase 11 is about to be reviewed and this is not its code.
-The fix is small — `applyFill` has to let go of the record, which is `reset`'s
-job — but the *behaviour* it should choose is not obvious and needs deciding:
-filling from a page while editing might reasonably mean "update this record from
-this page" rather than "start a new one", and those want different ids. That is a
-phase-sized question, not a patch.
+None open. The one entry this section has held — a fill from a page while
+editing that overwrote the record being edited — was fixed in phase 12, which
+opens with the mechanism it had. What it taught outlives it as the fifth entry
+under **Recurring shapes**.
 
 ## Phase 1 — schema and storage
 
@@ -1320,9 +1272,9 @@ values arrive can be got wrong; a parameter that cannot carry them cannot.**
 ### What using it changed
 
 The walkthrough found no defect in the phase, and one elsewhere that matters
-more than anything the phase shipped: the `applyFill` data-loss bug under
-**Known bugs** at the top of this file. It is phase 9's, not this phase's, and it
-was reachable the whole time — tabbing to a board while editing a record is not
+more than anything the phase shipped: the `applyFill` data-loss bug that phase 12
+opens with. It is phase 9's, not this phase's, and it was reachable the whole
+time — tabbing to a board while editing a record is not
 an exotic sequence.
 
 The observation worth keeping is *why* it surfaced now. Phase 11's walkthrough
@@ -1408,20 +1360,73 @@ regression test until it has failed against that defect.**
 
 ## Phase 12 — the fill that means two things, and a fourth board
 
-Two pieces of work that share a branch point and nothing else. The first is the
-data-loss bug under **Known bugs**, which has been reachable since phase 9. The
-second is the next adapter, which is additive and needs no new mechanism — the
-same shape as the Ashby branch, which is why that one was not a phase either.
+Two pieces of work that share a branch point and nothing else. The first is a
+data-loss bug reachable since phase 9 and found by phase 11's walkthrough,
+described below because the register it was filed under only holds defects that
+are still open. The second is the next adapter, which is additive and needs no
+new mechanism — the same shape as the Ashby branch, which is why that one was
+not a phase either.
 
 The bug goes first, and alone if the phase has to be cut. It destroys records.
 
+### The bug, as it stood
+
+**Data loss. Found in the phase 11 walkthrough; present since phase 9, not
+introduced by it — `PostingForm.tsx` was untouched on `feat/diagnostics`.**
+
+Open a saved record for editing, then navigate to a Greenhouse or Ashby posting.
+The panel offers "Fill from this page". Accept it: the form fills with the new
+posting, and still holds the record being edited. Save, and the **new job's
+details are written over the old record**, which is now a record of a job the
+user never applied to, under an id they cannot reach any other way. The original
+is gone.
+
+The mechanism was three lines apart in one file. `openForEdit` sets `draftId` to
+the stored record's id. `reset` was the only place that ever put it back —
+`setDraftId(newId())` and `setEdited(null)`, and its comment says so: "Every exit
+from editing runs through here … so there is one place where the id stops being
+the stored record's." `applyFill` was a fourth exit and did not run through it:
+it replaced `draft` and set `filled`, and touched neither `draftId` nor
+`edited`. `save` then wrote to `draftId`.
+
+Two things made it worse than a wrong id:
+
+- **The record was stamped as if it were captured.** `save` prefers `filled` over
+  `edited` for provenance, so the overwritten record carried the new page's
+  `source` and `adapterVersion`. It did not look like a mistake afterwards; it
+  looked like a posting that was read off a board.
+- **The duplicate check was skipped.** `if (!force && !edited)` — `edited` was
+  still set, so the one thing that might have raised "you already saved this
+  one" was disabled by the same stale state that caused the bug.
+
+**What makes this worth writing down at length is that the guard existed, and was
+correct, and was bypassed.** `swapAction` in `fill.ts` already refuses the
+*automatic* swap while a record is held, and its comment describes this exact
+outcome: "The form would silently repopulate … *while still holding the stored
+record's id*, and the next save would write that other job over the record being
+edited. Not a lost draft: a destroyed record." Having named it, it returns
+`announce` rather than `nothing` so the banner survives — "Offer, never take."
+
+The offer, when taken, took. Phase 9 closed the automatic door, documented
+precisely why the door was dangerous, and left the manual one open beside it.
+That is the fifth shape in **Recurring shapes**, and the sharpest instance of any
+of them: **a guard placed on one path to a hazard, where the other path is the
+one the design deliberately kept open.**
+
+It was left unfixed through phase 11 because that phase was about to be reviewed
+and this is not its code. The fix is small — `applyFill` has to let go of the
+record, which is `reset`'s job — but the *behaviour* it should choose was not
+obvious and needed deciding: filling from a page while editing might reasonably
+mean "update this record from this page" rather than "start a new one", and those
+want different ids. That is a phase-sized question, not a patch, and it is the
+next section.
+
 ### What the fill should do, which is the part that needed deciding
 
-The bug entry above stops short of a fix on purpose: `applyFill` has to let go of
-the record, but *letting go* is only one of two defensible answers, and the file
-says so — "filling from a page while editing might reasonably mean 'update this
-record from this page' rather than 'start a new one', and those want different
-ids."
+The description above stops short of a fix on purpose: `applyFill` has to let go
+of the record, but *letting go* is only one of two defensible answers — filling
+from a page while editing might reasonably mean "update this record from this
+page" rather than "start a new one", and those want different ids.
 
 **Both readings are real, so the panel asks rather than picks.** While a record
 is open for editing, `DetectedNotice` offers two actions instead of one:
@@ -1753,6 +1758,221 @@ quietly stand in for all of them.
   Workday fixture teaches about per-tenant hosts is known before the next one
   commits to a pattern.
 
+## Phase 13 — the board the manifest cannot name
+
+Two findings, both from the first real page, and both the opposite of what the
+plan assumed. The plan was a fifth adapter on the Ashby pattern: additive, no new
+mechanism, a match pattern and a fixture. Neither half survived contact.
+
+### The manifest cannot name this board, and that is decided rather than deferred
+
+`careers-*.icims.com` is not a legal match pattern. Chrome's host wildcard "must
+be the first or only character, and it must be followed by a period or forward
+slash", so the pattern that would have named the career portals and only them
+does not exist. What exists is `*.icims.com`, which reaches two things a board is
+not: the recruiter console, which iCIMS serves from the *same hosts* as the
+applicant portal under `/icims2/servlet/…`, and `internal-<tenant>.icims.com`,
+the logged-in employee boards — and an infix wildcard cannot exclude those
+either.
+
+A path constraint, `*.icims.com/jobs/*`, keeps the script off the console and
+changes nothing about the install prompt, which reads hosts and ignores paths.
+So the prompt would say "all icims.com sites" to buy automatic detection on a
+board the capture gesture already reaches.
+
+It is not reached. iCIMS is the long tail decision 2 describes, and the phase
+spent its effort making the gesture work there instead. `manifest.test.ts`
+asserts the absence, with the reasoning, so that the obvious edit — a fifth board
+gets a fifth pattern — fails rather than passes.
+
+### The posting is not in the document anything was reading
+
+The classic portal is a shell. `<title>iCIMS Careers Portal</title>`, no JSON-LD,
+no OpenGraph, one line of body text, and an `<iframe>` holding the entire
+posting. A diagnostic pulled from a live tenant reported `coverage 0.00` and six
+fields `not found`; the same page's frame reads at 0.86 under `generic@1` alone.
+Both halves of that were measured before a line was written, which is the phase
+12 lesson applied on purpose.
+
+**The fix is not `all_frames`, and the reason is the URL.** A content script in
+the frame would report its own `location.href`, which is how decision 2 keeps the
+`tabs` permission out of the manifest — and iCIMS builds that URL with the
+viewport in it:
+
+    …/job?mobile=false&width=1506&height=500&…&in_iframe=1
+
+`url.ts` is a blocklist by deliberate design, so `width` survives
+canonicalization. The same posting read at two window sizes canonicalizes to two
+URLs and saves as two records, and neither matches the one the user sees or
+pastes. Two frames reporting would also race the worker's one-summary-per-tab
+cache.
+
+The frame is same-origin with its parent, so `frames.ts` reads the child document
+from the top frame: no permission, no manifest change, the reported URL still the
+address bar's, and the existing boards untouched because the top document
+answers first and the loop ends there. A cross-origin frame hands back `null` and
+is skipped, which is what a Greenhouse embed on a company's careers domain does —
+still the gesture's job, still out of reach.
+
+### The requisition disagrees with the URL, and the page wins
+
+`ID 2026-8287` on a posting the URL addresses as `/jobs/8287/`. Workday's licence
+to read a requisition off the page rested on the two agreeing; this is the first
+board where they do not, and decision 7's amendment restates the condition as the
+id the applicant will see again. The consequence is a silence worth naming:
+**`ats.ts` gets no iCIMS matcher**, because one would fill the column with the
+row id on every page the adapter missed.
+
+### Done when
+
+The capture gesture on a real `careers-<tenant>.icims.com` posting fills the
+form; the record carries `2026-8287`; and the four existing boards still read
+exactly as they did, which the suite asserts by having the top document answer
+first.
+
+### What building it changed
+
+**The fixture is two files, because the mechanism has two documents.**
+`icims-shell.html` exists to be worthless — it is asserted to yield zero, which
+is what makes `frames.ts` necessary rather than clever — and `icims-job.html` is
+the frame. The shell also holds the evidence that the frame is the live path
+rather than the `noscript` fallback its id claims: its `src` carries the
+`width=1506` of the window it was captured in, written there by the page's own
+script.
+
+**The flow refusal needed a second copy, and it guards nothing yet.** `capture`
+refuses an application flow before it touches the document, and the URL it reads
+is the *top* one — so frame reading is a second route to the same destination: a
+page addressed as a posting, holding a frame addressed as an application. No
+board is known to be built that way, and Workday, the only board `flows.ts` has
+patterns for, navigates into its flow in the same document, so the existing
+refusal fires first. It is written anyway, on phase 12's conclusion that the
+destination is the place to guard, and the comment says it is unreachable and
+why — which is the note that review asked for the last time a guard was narrowed
+against a case that had stopped being reachable.
+
+**The refusal's own test passed with the refusal deleted.** Setting `frame.src`
+in a test is the obvious way to give a frame an address, and jsdom acts on the
+assignment: it replaces the frame's document with an empty one and discards the
+markup the test had just written. The frame was then skipped for having an empty
+body, so the assertion held whether or not the guard existed. Caught only by
+running it against the unguarded code — phase 11's rule earning its place for the
+second time, and the same shape as phase 12's fixture that asserted the right
+answer for the wrong reason, this time in the setup rather than the capture.
+
+**`UNAVAILABLE` is a place, as far as a parser is concerned.** iCIMS writes that
+literal string into every field a tenant left blank, and `addressRegion` is one
+of them, so the location of this posting read `Remote, UNAVAILABLE, US` — on a
+page that states its location perfectly. Refused in `jsonld.ts` rather than in
+the adapter, because that is where the string is assembled and because the
+vendor's other surface has no adapter of its own.
+
+### What using it changed
+
+The walkthrough passed on the first try: a real `careers-healthedge.icims.com`
+posting fills the form from inside its frame, and the Req ID field reads
+`2026-8287` rather than the `8287` in the URL, which is the decision this phase
+turns on rendered as a field.
+
+**The only defect the walkthrough found was not in the extension.** The first
+three attempts reported nothing at all, and the diagnostic said why in a line
+that was read past twice: `adapter generic@1`, on a `.icims.com` host. That is
+impossible under this phase's code, because the adapter is selected from the URL
+before a document is touched — an iCIMS page reading as `generic@1` is not a
+parse failure, it is proof that the code being run is older than the code being
+written.
+
+It was. Chrome loads the extension from a Windows directory built by
+`tools/build-win.sh`, because Chrome runs on the host while this repo lives in
+WSL; `npm run build` writes to `dist/`, which Chrome never reads. The build under
+test was phase 12's, dated ten days earlier, and `dist/` having a fresh timestamp
+is what made it convincing.
+
+Two things worth keeping from it. The first is that **the diagnostic already
+contained the answer** — it names the adapter, and the adapter is a fact about
+the URL rather than about the page, so it is the one field in the report that
+cannot be explained by the page being unreadable. The second is that nothing in
+the report distinguishes one build from another: it prints `extension 0.0.1`
+from the manifest, which is static across every phase and has never once been
+the version anybody wanted. A build stamp there would have made a stale build
+say so itself, in the one artefact a walkthrough always produces. Not built here
+— it is a change to the diagnostic's allowlisted payload, which is phase 11's
+and deserves its own argument about what a stamp reveals.
+
+### What review changed
+
+Five findings. Two were defects, and both are the same shape as each other: a
+rule stated broadly in a comment and implemented in one place.
+
+- **The `UNAVAILABLE` refusal covered one of four exits.** It was written into
+  the `PostalAddress` parts and the docblock above it claimed the sentinel
+  generally, while a bare-string `jobLocation`, a `Place` carrying only a `name`,
+  and both `hiringOrganization` and `title` went straight through. The last is
+  the one with teeth: a company reading `UNAVAILABLE` becomes
+  `companyNormalized`, and `findDuplicate` scopes its requisition match *by
+  company*, so two unrelated postings from two tenants that both left the field
+  blank would share a bucket. Decision 7's wrong merge, through the one field
+  nobody was guarding. Every value the tier produces now goes through one
+  `usable()` rather than through `cleanText` directly, so adding a field cannot
+  reopen the gap that adding the guard in one place already left once.
+- **`buildSnapshot` sat outside the try.** It clones and serializes a whole
+  document, and the document is now sometimes a frame's — the thing `frames.ts`
+  wraps its own DOM access for. A throw there escaped into the ladder, which
+  swallows it as a failed rung, leaving `parsed` false and the diagnostic
+  claiming the page gave up nothing about a page that had parsed perfectly. That
+  is exactly the conflation `Attempt`'s third value was introduced to prevent,
+  so it belongs on the same side of the try as the send.
+
+The third is the one worth the most, because it is about evidence rather than
+behaviour.
+
+**The shell fixture's `<iframe>` is inside `<noscript>`, and a test was reading
+it as proof of the live path.** A browser with scripting enabled parses
+`<noscript>` children as raw text, so `querySelectorAll('iframe')` never returns
+that element; jsdom parses it into the DOM, which is the only reason the
+assertion held. The frame this phase reads is built by script into a `<span>`
+that is empty in the capture — so **the saved page cannot contain the mechanism's
+own subject**, and the thing that actually proved it was loading a posting in
+Chrome.
+
+That is the sixth recurring shape with the cut made by the file format rather
+than by a person. A trimmed capture loses a property somebody chose to remove; a
+capture of a script-built page loses one nobody chose and nobody can see missing,
+because the markup that remains is complete and real. The check that generalises:
+**ask what the page builds after it is served, and treat a capture as evidence
+only for the parts that arrived with it.** The fixture header and the test now
+say what the file shows and what it cannot.
+
+Two findings were left as they were, with the reasoning written into the code.
+`readPage`'s bar for "the page declined" is `isWorthOffering` — company *or*
+title — so a shell that leaks one of them beats a frame holding the whole
+posting; the fix would be to compare confidence across candidates, which hands
+any same-origin frame the ability to outscore the page it is embedded in, and
+between the two shapes the second has more ways to happen. And a comment in
+`jsonld.ts` justified the sentinel's placement by saying the career-home surface
+has no adapter, which is wrong — `icims.matches` is the whole domain — so the
+justification was rewritten rather than the placement.
+
+The four new sentinel tests were run against the unfixed guard and seen to fail.
+The iCIMS fixture also joined `snapshot.test.ts`'s round-trip loop, which review
+noticed it was missing from: it is the one board where the snapshotted document
+is not the one the extension landed in.
+
+### Deliberately not in phase 13
+
+- **The career-home surface's own reader.** `careers.icims.com/careers-home/…`
+  already reads at 0.79 under the shared tiers. Its `window.jobDescriptionConfig`
+  holds a work mode the JSON-LD omits — the captured posting is "United States
+  (Remote)" while `jobLocation` is a street address in Holmdel — which is a real
+  gap and a second template's worth of selectors to close it. One surface at a
+  time.
+- **A `*.icims.com` match pattern.** Rejected above, not deferred.
+- **Prose salary.** Unchanged from phase 12, and the career-home capture adds an
+  argument for it: its `baseSalary` is a `MonetaryAmount` of `0/0/0 USD YEAR`,
+  which `toAmount` already refuses for being `<= 0`. A board emitting structured
+  nonsense is not a reason to start reading prose.
+- **SmartRecruiters.** Next, and unblocked — its postings are on one host.
+
 ## Recurring shapes
 
 Two shapes account for most of what review has found, across every phase that
@@ -1840,8 +2060,8 @@ form that is holding a stored record, and its comment states the consequence
 exactly — "the next save would write that other job over the record being
 edited. Not a lost draft: a destroyed record." Having named it, the same function
 returns `announce` rather than `nothing` so the banner survives, under "Offer,
-never take." The offer, when taken, takes: the manual fill runs `applyFill`,
-which never clears the record's id. See **Known bugs**.
+never take." The offer, when taken, takes: the manual fill ran `applyFill`,
+which never cleared the record's id. See **phase 12**, which opens with it.
 
 This is the hardest of the five to see, because everything about it looks
 right. The hazard is identified, the reasoning is written down, the guard is

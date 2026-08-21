@@ -1,8 +1,10 @@
 import { send } from '../lib/client'
 import { extract, isWorthOffering } from '../lib/extract'
+import type { Extraction } from '../lib/extract'
 import { isApplicationFlow } from '../lib/flows'
 import { buildSnapshot } from '../lib/extract/snapshot'
 import { newId } from '../lib/ids'
+import { readableDocuments } from './frames'
 import { runLadder } from './ladder'
 
 /**
@@ -34,13 +36,81 @@ let generation = 0
  */
 type Attempt = 'offered' | 'nothing' | 'undelivered'
 
+/**
+ * The read, and which document it came out of.
+ *
+ * The two are returned together because everything downstream has to agree
+ * about the second one. A snapshot built from the top frame while the fields
+ * came from a child would be a stored source that cannot reproduce the record
+ * attached to it, which is the one thing decision 6 asks a snapshot to do; a
+ * diagnostic reporting the top frame's empty parse on a page that read fine one
+ * frame down would be a confident wrong answer to the question phase 11 exists
+ * to answer honestly.
+ */
+interface Read {
+  extraction: Extraction
+  source: Document
+}
+
+/**
+ * Reads the page, looking past the top frame only when it has nothing to say.
+ *
+ * The order is the guard. `readableDocuments` puts the document the user is
+ * looking at first and this takes the first read worth offering, so on the four
+ * boards that came before iCIMS the loop ends on its first pass and no frame is
+ * ever parsed. A frame gets a turn only where the top frame has already
+ * declined, which is exactly the iCIMS shell and not much else.
+ *
+ * When nothing is worth offering, the *best-scoring* read is returned rather
+ * than the top frame's. That only matters for the diagnostic, and it matters
+ * there: a partial read from the frame that holds the posting describes the
+ * page far better than a confident nothing from the shell around it.
+ *
+ * **The bar for "declined" is low, and review was right to name it.**
+ * `isWorthOffering` wants a company *or* a title, so a shell that leaks one of
+ * them — a portal-level `Organization` node, an `og:title` on the wrapper — wins
+ * the race and produces a record with half a posting while the frame below held
+ * all of it. The captured iCIMS shell has neither, so this bites nothing today.
+ *
+ * It is left alone deliberately. The fix would be to compare confidence across
+ * every candidate instead of stopping at the first, and that hands a frame the
+ * ability to outscore the page it is embedded in — an ad slot or a
+ * related-jobs widget with better metadata than its host. Between a shape that
+ * needs a shell to leak a field and a shape that needs any same-origin frame to
+ * be well marked up, the second is the one with more ways to happen, and the
+ * page the user is looking at should not lose to something inside it.
+ */
+function readPage(url: string): Read {
+  let best: Read | null = null
+
+  for (const source of readableDocuments(document)) {
+    const extraction = extract(source, url)
+    if (isWorthOffering(extraction)) return { extraction, source }
+
+    if (!best || extraction.confidence > best.extraction.confidence) {
+      best = { extraction, source }
+    }
+  }
+
+  // `readableDocuments` always returns the root, so the loop always ran.
+  return best as Read
+}
+
 async function report(url: string): Promise<Attempt> {
-  const extraction = extract(document, url)
+  const { extraction, source } = readPage(url)
   if (!isWorthOffering(extraction)) return 'nothing'
 
-  const { trimmedSource, truncated } = buildSnapshot(document)
-
   try {
+    // Inside the try since phase 13, and the reason is the frame. Snapshotting
+    // clones and serializes a whole document, and the one this now runs on may
+    // belong to a frame that navigated out from under the read — `frames.ts`
+    // already wraps its own DOM access for that. A throw here used to escape
+    // into the ladder, which swallows it as a failed rung, leaving `parsed`
+    // false and the diagnostic claiming the page gave up nothing about a page
+    // that parsed perfectly. That is the exact conflation `Attempt`'s third
+    // value exists to prevent, so it belongs on the same side of the try.
+    const { trimmedSource, truncated } = buildSnapshot(source)
+
     await send('detection/report', {
       report: {
         detectionId: newId(),
@@ -74,9 +144,13 @@ async function report(url: string): Promise<Attempt> {
  * arriving, so re-reading describes the page as it finally is rather than as it
  * was on the rung that happened to fail. No snapshot goes with it: this is the
  * input to something the user may send onward.
+ *
+ * Re-running means `readPage`, not `extract`, so the frame choice is made again
+ * on the same terms. A frame that arrived late is the ordinary reason a rung
+ * failed and the diagnostic should not still be describing the shell around it.
  */
 async function reportEmptyParse(url: string): Promise<void> {
-  const { fields: _fields, ...rest } = extract(document, url)
+  const { fields: _fields, ...rest } = readPage(url).extraction
 
   await send('diagnostic/report', { report: { url, ...rest } })
 }
