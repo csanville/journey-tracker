@@ -29,59 +29,10 @@ then merged.
 Open defects found by use and not yet fixed. Entries leave here by being fixed,
 never by being explained.
 
-### Filling from a page while editing a record overwrites that record
-
-**Data loss. Found in the phase 11 walkthrough; present since phase 9, not
-introduced by it — `PostingForm.tsx` is untouched on `feat/diagnostics`.**
-
-Open a saved record for editing, then navigate to a Greenhouse or Ashby posting.
-The panel offers "Fill from this page". Accept it: the form fills with the new
-posting, and still holds the record being edited. Save, and the **new job's
-details are written over the old record**, which is now a record of a job the
-user never applied to, under an id they cannot reach any other way. The original
-is gone.
-
-The mechanism is three lines apart in one file. `openForEdit` sets `draftId` to
-the stored record's id. `reset` is the only place that ever puts it back —
-`setDraftId(newId())` and `setEdited(null)`, and its comment says so: "Every exit
-from editing runs through here … so there is one place where the id stops being
-the stored record's." `applyFill` is a fourth exit and does not run through it:
-it replaces `draft` and sets `filled`, and touches neither `draftId` nor
-`edited`. `save` then writes to `draftId`.
-
-Two things make it worse than a wrong id:
-
-- **The record is stamped as if it were captured.** `save` prefers `filled` over
-  `edited` for provenance, so the overwritten record carries the new page's
-  `source` and `adapterVersion`. It does not look like a mistake afterwards; it
-  looks like a posting that was read off a board.
-- **The duplicate check is skipped.** `if (!force && !edited)` — `edited` is
-  still set, so the one thing that might have raised "you already saved this
-  one" is disabled by the same stale state that causes the bug.
-
-**What makes this worth writing down at length is that the guard exists, and is
-correct, and is bypassed.** `swapAction` in `fill.ts` already refuses the
-*automatic* swap while a record is held, and its comment describes this exact
-outcome: "The form would silently repopulate … *while still holding the stored
-record's id*, and the next save would write that other job over the record being
-edited. Not a lost draft: a destroyed record." Having named it, it returns
-`announce` rather than `nothing` so the banner survives — "Offer, never take."
-
-The offer, when taken, takes. Phase 9 closed the automatic door, documented
-precisely why the door was dangerous, and left the manual one open beside it.
-That is a fifth shape for the list below, and the sharpest instance of any of
-them: **a guard placed on one path to a hazard, where the other path is the one
-the design deliberately kept open.** The check is to ask, for every guard, which
-callers reach the guarded state *without* passing through it — and phase 9's own
-comment is what makes the answer obvious in hindsight, because it named the
-hazard and then described the surviving route to it in the next sentence.
-
-Not fixed here because phase 11 is about to be reviewed and this is not its code.
-The fix is small — `applyFill` has to let go of the record, which is `reset`'s
-job — but the *behaviour* it should choose is not obvious and needs deciding:
-filling from a page while editing might reasonably mean "update this record from
-this page" rather than "start a new one", and those want different ids. That is a
-phase-sized question, not a patch.
+None open. The one entry this section has held — a fill from a page while
+editing that overwrote the record being edited — was fixed in phase 12, which
+opens with the mechanism it had. What it taught outlives it as the fifth entry
+under **Recurring shapes**.
 
 ## Phase 1 — schema and storage
 
@@ -1320,9 +1271,9 @@ values arrive can be got wrong; a parameter that cannot carry them cannot.**
 ### What using it changed
 
 The walkthrough found no defect in the phase, and one elsewhere that matters
-more than anything the phase shipped: the `applyFill` data-loss bug under
-**Known bugs** at the top of this file. It is phase 9's, not this phase's, and it
-was reachable the whole time — tabbing to a board while editing a record is not
+more than anything the phase shipped: the `applyFill` data-loss bug that phase 12
+opens with. It is phase 9's, not this phase's, and it was reachable the whole
+time — tabbing to a board while editing a record is not
 an exotic sequence.
 
 The observation worth keeping is *why* it surfaced now. Phase 11's walkthrough
@@ -1408,20 +1359,73 @@ regression test until it has failed against that defect.**
 
 ## Phase 12 — the fill that means two things, and a fourth board
 
-Two pieces of work that share a branch point and nothing else. The first is the
-data-loss bug under **Known bugs**, which has been reachable since phase 9. The
-second is the next adapter, which is additive and needs no new mechanism — the
-same shape as the Ashby branch, which is why that one was not a phase either.
+Two pieces of work that share a branch point and nothing else. The first is a
+data-loss bug reachable since phase 9 and found by phase 11's walkthrough,
+described below because the register it was filed under only holds defects that
+are still open. The second is the next adapter, which is additive and needs no
+new mechanism — the same shape as the Ashby branch, which is why that one was
+not a phase either.
 
 The bug goes first, and alone if the phase has to be cut. It destroys records.
 
+### The bug, as it stood
+
+**Data loss. Found in the phase 11 walkthrough; present since phase 9, not
+introduced by it — `PostingForm.tsx` was untouched on `feat/diagnostics`.**
+
+Open a saved record for editing, then navigate to a Greenhouse or Ashby posting.
+The panel offers "Fill from this page". Accept it: the form fills with the new
+posting, and still holds the record being edited. Save, and the **new job's
+details are written over the old record**, which is now a record of a job the
+user never applied to, under an id they cannot reach any other way. The original
+is gone.
+
+The mechanism was three lines apart in one file. `openForEdit` sets `draftId` to
+the stored record's id. `reset` was the only place that ever put it back —
+`setDraftId(newId())` and `setEdited(null)`, and its comment says so: "Every exit
+from editing runs through here … so there is one place where the id stops being
+the stored record's." `applyFill` was a fourth exit and did not run through it:
+it replaced `draft` and set `filled`, and touched neither `draftId` nor
+`edited`. `save` then wrote to `draftId`.
+
+Two things made it worse than a wrong id:
+
+- **The record was stamped as if it were captured.** `save` prefers `filled` over
+  `edited` for provenance, so the overwritten record carried the new page's
+  `source` and `adapterVersion`. It did not look like a mistake afterwards; it
+  looked like a posting that was read off a board.
+- **The duplicate check was skipped.** `if (!force && !edited)` — `edited` was
+  still set, so the one thing that might have raised "you already saved this
+  one" was disabled by the same stale state that caused the bug.
+
+**What makes this worth writing down at length is that the guard existed, and was
+correct, and was bypassed.** `swapAction` in `fill.ts` already refuses the
+*automatic* swap while a record is held, and its comment describes this exact
+outcome: "The form would silently repopulate … *while still holding the stored
+record's id*, and the next save would write that other job over the record being
+edited. Not a lost draft: a destroyed record." Having named it, it returns
+`announce` rather than `nothing` so the banner survives — "Offer, never take."
+
+The offer, when taken, took. Phase 9 closed the automatic door, documented
+precisely why the door was dangerous, and left the manual one open beside it.
+That is the fifth shape in **Recurring shapes**, and the sharpest instance of any
+of them: **a guard placed on one path to a hazard, where the other path is the
+one the design deliberately kept open.**
+
+It was left unfixed through phase 11 because that phase was about to be reviewed
+and this is not its code. The fix is small — `applyFill` has to let go of the
+record, which is `reset`'s job — but the *behaviour* it should choose was not
+obvious and needed deciding: filling from a page while editing might reasonably
+mean "update this record from this page" rather than "start a new one", and those
+want different ids. That is a phase-sized question, not a patch, and it is the
+next section.
+
 ### What the fill should do, which is the part that needed deciding
 
-The bug entry above stops short of a fix on purpose: `applyFill` has to let go of
-the record, but *letting go* is only one of two defensible answers, and the file
-says so — "filling from a page while editing might reasonably mean 'update this
-record from this page' rather than 'start a new one', and those want different
-ids."
+The description above stops short of a fix on purpose: `applyFill` has to let go
+of the record, but *letting go* is only one of two defensible answers — filling
+from a page while editing might reasonably mean "update this record from this
+page" rather than "start a new one", and those want different ids.
 
 **Both readings are real, so the panel asks rather than picks.** While a record
 is open for editing, `DetectedNotice` offers two actions instead of one:
@@ -1840,8 +1844,8 @@ form that is holding a stored record, and its comment states the consequence
 exactly — "the next save would write that other job over the record being
 edited. Not a lost draft: a destroyed record." Having named it, the same function
 returns `announce` rather than `nothing` so the banner survives, under "Offer,
-never take." The offer, when taken, takes: the manual fill runs `applyFill`,
-which never clears the record's id. See **Known bugs**.
+never take." The offer, when taken, takes: the manual fill ran `applyFill`,
+which never cleared the record's id. See **phase 12**, which opens with it.
 
 This is the hardest of the five to see, because everything about it looks
 right. The hazard is identified, the reasoning is written down, the guard is
